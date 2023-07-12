@@ -1,12 +1,12 @@
 #include "file_descriptor.hh"
 
-#include "exception.hh"
-
 #include <algorithm>
+#include <errno.h>
 #include <fcntl.h>
 #include <iostream>
 #include <stdexcept>
 #include <sys/uio.h>
+#include <system_error>
 #include <unistd.h>
 
 using namespace std;
@@ -52,7 +52,7 @@ FileDescriptor::FileDescriptor( const int fd )
 
 //! Private constructor used by duplicate()
 FileDescriptor::FileDescriptor( shared_ptr<FDWrapper> other_shared_ptr )
-  : _internal_fd( move( other_shared_ptr ) )
+  : _internal_fd( std::move( other_shared_ptr ) )
 {
 }
 
@@ -60,18 +60,18 @@ FileDescriptor::FileDescriptor( shared_ptr<FDWrapper> other_shared_ptr )
 FileDescriptor FileDescriptor::duplicate() const { return FileDescriptor( _internal_fd ); }
 
 //! \param[out] str is the string to be read
-size_t FileDescriptor::read( simple_string_span buffer )
+size_t FileDescriptor::read( string& buffer )
 {
   if ( buffer.empty() ) {
     throw runtime_error( "FileDescriptor::read: no space to read" );
   }
 
-  const ssize_t bytes_read = ::read( fd_num(), buffer.mutable_data(), buffer.size() );
+  const ssize_t bytes_read = ::read( fd_num(), buffer.data(), buffer.size() );
   if ( bytes_read < 0 ) {
     if ( _internal_fd->_non_blocking and ( errno == EAGAIN or errno == EINPROGRESS ) ) {
       return 0;
     } else {
-      throw unix_error( "read" );
+      throw std::system_error( errno, std::generic_category(), "read" );
     }
   }
 
@@ -149,5 +149,5 @@ int FileDescriptor::FDWrapper::CheckSystemCall( const string_view s_attempt, con
     return 0;
   }
 
-  throw unix_error( s_attempt );
+  throw system_error( errno, generic_category(), s_attempt.data() );
 }

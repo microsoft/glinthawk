@@ -3,21 +3,18 @@ cmake_minimum_required ( VERSION 3.10.0 )
 project ( Glinthawk )
 
 include ( etc/cflags.cmake )
-include ( etc/clang_format.cmake )
-include ( etc/clang_tidy.cmake )
 
 include_directories ( src )
 
 file ( GLOB SOURCE
-  src/util/*
-  src/net/*
+  src/util/*.cc
 )
 
-add_library ( starter STATIC ${SOURCE} )
+add_library ( libglinthawk STATIC ${SOURCE} )
 
 set ( ALL_LIBS
-  starter
+  libglinthawk
 )
 
-add_executable ( prog src/frontend/prog.cc )
-target_link_libraries ( prog ${ALL_LIBS} )
+add_executable ( glinthawk src/frontend/glinthawk.cc )
+target_link_libraries ( glinthawk ${ALL_LIBS} )

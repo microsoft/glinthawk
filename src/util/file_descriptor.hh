@@ -3,9 +3,8 @@
 #include <cstddef>
 #include <limits>
 #include <memory>
+#include <string_view>
 #include <vector>
-
-#include "simple_string_span.hh"
 
 //! A reference-counted handle to a file descriptor
 class FileDescriptor
@@ -69,7 +68,7 @@ public:
 
   //! Read into `buffer`
   //! \returns number of bytes read
-  size_t read( simple_string_span buffer );
+  size_t read( std::string& buffer );
 
   //! Attempt to write a buffer
   //! \returns number of bytes written
