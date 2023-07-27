@@ -59,6 +59,7 @@ string Timer::summary() const
     accounted += _records.at( i ).total_ns;
 
     out << "\x1B[2m [max=" << pp_ns( _records.at( i ).max_ns );
+    out << ", avg=" << pp_ns( _records.at( i ).total_ns / _records.at( i ).count );
     out << ", count=" << _records.at( i ).count << "]\x1B[0m";
     out << "\n";
   }
