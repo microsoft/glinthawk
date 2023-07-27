@@ -68,6 +68,38 @@ void matmul( float* xout, const float* x, const float* w, const int n, const int
   }
 }
 
+int sample( const float* probabilities, const int n )
+{
+  // sample index from probabilities, they must sum to 1
+  float r = (float)rand() / (float)RAND_MAX;
+  float cdf = 0.0f;
+
+  for ( int i = 0; i < n; i++ ) {
+    cdf += probabilities[i];
+    if ( r < cdf ) {
+      return i;
+    }
+  }
+
+  return n - 1; // in case of rounding errors
+}
+
+int argmax( const float* v, const int n )
+{
+  // return argmax of v in elements 0..n
+  int max_i = 0;
+  float max_p = v[0];
+
+  for ( int i = 1; i < n; i++ ) {
+    if ( v[i] > max_p ) {
+      max_i = i;
+      max_p = v[i];
+    }
+  }
+
+  return max_i;
+}
+
 }
 
 }

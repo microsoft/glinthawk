@@ -85,6 +85,8 @@ private:
   void init_vocabulary( const std::filesystem::path& vocabulary_path );
   void init_state();
 
+  void transformer( const int token, const int pos );
+
 public:
   Llama2( const std::filesystem::path& tokenizer_path, const std::filesystem::path& weights_path );
 };

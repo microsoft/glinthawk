@@ -1,11 +1,13 @@
 #include "llama2.hh"
 
+#include <cmath>
 #include <cstdlib>
 #include <fstream>
 #include <iostream>
 
 #include <glog/logging.h>
 
+#include "nn/ops.hh"
 #include "util/timer.hh"
 
 using namespace std;
@@ -141,4 +143,144 @@ void Llama2::init_state()
 
   state_.key_cache = make_unique_aligned<float, 64>( config_.n_layers * config_.seq_len * config_.dim );
   state_.value_cache = make_unique_aligned<float, 64>( config_.n_layers * config_.seq_len * config_.dim );
+}
+
+void Llama2::transformer( const int token, const int pos )
+{
+  // a few convenience variables
+  float* x = state_.x.get();
+  const int dim = config_.dim;
+  const int hidden_dim = config_.hidden_dim;
+  const int head_size = dim / config_.n_heads;
+
+  // copy the token embedding into x
+  const float* content_row = &( weights_.token_embedding_table[token * dim] );
+  memcpy( x, content_row, dim * sizeof( *x ) );
+
+  // Question(sadjad): wtf is this?
+  // pluck out the "pos" row of freq_cis_real and freq_cis_imag
+  float* freq_cis_real_row = weights_.freq_cis_real + pos * head_size / 2;
+  float* freq_cis_imag_row = weights_.freq_cis_imag + pos * head_size / 2;
+
+  for ( int layer_num = 0; layer_num < config_.n_layers; layer_num++ ) {
+    // attention rmsnorm
+    ops::rmsnorm( state_.xb.get(), x, weights_.rms_att_weight + layer_num * dim, dim );
+
+    const off64_t weights_offset = layer_num * dim * dim;
+
+    // qkv matmuls for this position
+    ops::matmul( state_.q.get(), state_.xb.get(), weights_.wq + weights_offset, dim, dim );
+    ops::matmul( state_.k.get(), state_.xb.get(), weights_.wk + weights_offset, dim, dim );
+    ops::matmul( state_.v.get(), state_.xb.get(), weights_.wv + weights_offset, dim, dim );
+
+    // apply RoPE rotation to the q and k vectors for each head
+    for ( int head_num = 0; head_num < config_.n_heads; head_num++ ) {
+      // get the q and k vectors for this head
+      float* q = state_.q.get() + head_num * head_size;
+      float* k = state_.k.get() + head_num * head_size;
+
+      // rotate q and k by the freq_cis_real and freq_cis_imag
+      for ( int i = 0; i < head_size; i += 2 ) {
+        float q0 = q[i];
+        float q1 = q[i + 1];
+        float k0 = k[i];
+        float k1 = k[i + 1];
+        float fcr = freq_cis_real_row[i / 2];
+        float fci = freq_cis_imag_row[i / 2];
+        q[i] = q0 * fcr - q1 * fci;
+        q[i + 1] = q0 * fci + q1 * fcr;
+        k[i] = k0 * fcr - k1 * fci;
+        k[i + 1] = k0 * fci + k1 * fcr;
+      }
+    }
+
+    // save key,value at this time step (pos) to our kv cache
+    const off64_t loff = layer_num * config_.seq_len * dim; // kv cache layer offset for convenience
+    float* key_cache_row = state_.key_cache.get() + loff + pos * dim;
+    float* value_cache_row = state_.value_cache.get() + loff + pos * dim;
+    memcpy( key_cache_row, state_.k.get(), dim * sizeof( *key_cache_row ) );
+    memcpy( value_cache_row, state_.v.get(), dim * sizeof( *value_cache_row ) );
+
+    // multihead attention. iterate over all heads
+    for ( int head_num = 0; head_num < config_.n_heads; head_num++ ) {
+      // get the query vector for this head
+      const float* q = state_.q.get() + head_num * head_size;
+
+      // attention scores for this head
+      float* att = state_.att.get() + head_num * config_.seq_len;
+
+      // iterate over all timesteps, including the current one
+      for ( int t = 0; t <= pos; t++ ) {
+        // get the key vector for this head and at this timestep
+        const float* k = state_.key_cache.get() + loff + t * dim + head_num * head_size;
+
+        // calculate the attention score as the dot product of q and k
+        float score = 0.0f;
+        for ( int i = 0; i < head_size; i++ ) {
+          score += q[i] * k[i];
+        }
+        score /= sqrtf( head_size );
+
+        // save the score to the attention buffer
+        att[t] = score;
+      }
+
+      // softmax the scores to get attention weights, from 0..pos inclusively
+      ops::softmax( att, pos + 1 );
+
+      // weighted sum of the values, store back into xb
+      float* xb = state_.xb.get() + head_num * head_size;
+      memset( xb, 0, head_size * sizeof( float ) );
+
+      for ( int t = 0; t <= pos; t++ ) {
+        // get the value vector for this head and at this timestep
+        const float* v = state_.value_cache.get() + loff + t * dim + head_num * head_size;
+
+        // get the attention weight for this timestep
+        const float a = att[t];
+
+        // accumulate the weighted value into xb
+        for ( int i = 0; i < head_size; i++ ) {
+          xb[i] += a * v[i];
+        }
+      }
+    }
+    // end of multihead attention
+
+    // final matmul to get the output of the attention
+    ops::matmul( state_.xb2.get(), state_.xb.get(), weights_.wo + layer_num * dim * dim, dim, dim );
+
+    // residual connection back into x
+    ops::accum( x, state_.xb2.get(), dim );
+
+    // ffn rmsnorm
+    ops::rmsnorm( state_.xb.get(), x, weights_.rms_ffn_weight + layer_num * dim, dim );
+
+    // Now for FFN in PyTorch we have: self.w2(F.silu(self.w1(x)) * self.w3(x))
+    // first calculate self.w1(x) and self.w3(x)
+    ops::matmul( state_.hb.get(), state_.xb.get(), weights_.w1 + layer_num * dim * hidden_dim, dim, hidden_dim );
+    ops::matmul( state_.hb2.get(), state_.xb.get(), weights_.w3 + layer_num * dim * hidden_dim, dim, hidden_dim );
+
+    // F.silu; silu(x)=x*σ(x),where σ(x) is the logistic sigmoid
+    for ( int i = 0; i < hidden_dim; i++ ) {
+      state_.hb[i] = state_.hb[i] * ( 1.0f / ( 1.0f + expf( -state_.hb[i] ) ) );
+    }
+
+    // elementwise multiply with w3(x)
+    for ( int i = 0; i < hidden_dim; i++ ) {
+      state_.hb[i] = state_.hb[i] * state_.hb2[i];
+    }
+
+    // final matmul to get the output of the ffn
+    ops::matmul( state_.xb.get(), state_.hb.get(), weights_.w2 + layer_num * dim * hidden_dim, hidden_dim, dim );
+
+    // residual connection
+    ops::accum( x, state_.xb.get(), dim );
+  }
+
+  // final rmsnorm
+  ops::rmsnorm( x, x, weights_.rms_final_weight, dim );
+
+  // classifier into logits
+  ops::matmul( state_.logits.get(), x, weights_.wcls, config_.dim, config_.vocab_size );
 }
