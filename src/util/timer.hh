@@ -39,14 +39,16 @@ public:
   {
     MemoryAllocation,
     DiskIO,
+    TokenGeneration,
     COUNT,
   };
 
   constexpr static size_t num_categories = static_cast<size_t>( Category::COUNT );
 
   constexpr static std::array<const char*, num_categories> _category_names { {
-    "MemoryAllocation",
-    "DiskIO",
+    "Memory Allocation",
+    "I/O",
+    "Token Generation",
   } };
 
 private:

@@ -71,7 +71,7 @@ void matmul( float* xout, const float* x, const float* w, const int n, const int
 int sample( const float* probabilities, const int n )
 {
   // sample index from probabilities, they must sum to 1
-  float r = (float)rand() / (float)RAND_MAX;
+  float r = static_cast<float>( rand() ) / RAND_MAX;
   float cdf = 0.0f;
 
   for ( int i = 0; i < n; i++ ) {

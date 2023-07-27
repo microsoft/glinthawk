@@ -85,6 +85,8 @@ void Llama2::init_weights( const filesystem::path& weights_path )
   const bool shared_weights = config_.vocab_size > 0;
   config_.vocab_size = abs( config_.vocab_size );
 
+  max_steps_ = config_.seq_len;
+
   // initialize TransformerWeights
   float* ptr = weights_buffer_.get();
 
@@ -283,4 +285,39 @@ void Llama2::transformer( const int token, const int pos )
 
   // classifier into logits
   ops::matmul( state_.logits.get(), x, weights_.wcls, config_.dim, config_.vocab_size );
+}
+
+string Llama2::next_token()
+{
+  if ( current_pos_ >= max_steps_ ) {
+    return string {};
+  }
+
+  int next_token;
+
+  // forward the transformer to get logits for the next token
+  transformer( current_token_, current_pos_ );
+
+  // sample the next token
+  if ( temperature_ == 0.0f ) {
+    // greedy argmax sampling
+    next_token = ops::argmax( state_.logits.get(), config_.vocab_size );
+  } else {
+    // apply the temperature to the logits
+    for ( int q = 0; q < config_.vocab_size; q++ ) {
+      state_.logits[q] /= temperature_;
+    }
+
+    // apply softmax to the logits to get the probabilities for next token
+    ops::softmax( state_.logits.get(), config_.vocab_size );
+
+    // we now want to sample from this distribution to get the next token
+    next_token = ops::sample( state_.logits.get(), config_.vocab_size );
+  }
+
+  // advance forward
+  current_token_ = next_token;
+  current_pos_++;
+
+  return vocabulary_[current_token_];
 }

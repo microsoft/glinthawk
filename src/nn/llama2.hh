@@ -81,6 +81,11 @@ private:
   TransformerWeights weights_ {};
   RunState state_ {};
 
+  float temperature_ { 0.0f };
+  int max_steps_ { 128 };
+  int current_token_ { 1 }; // BOS
+  int current_pos_ { 0 };   // current position in the sequence
+
   void init_weights( const std::filesystem::path& weights_path );
   void init_vocabulary( const std::filesystem::path& vocabulary_path );
   void init_state();
@@ -89,6 +94,8 @@ private:
 
 public:
   Llama2( const std::filesystem::path& tokenizer_path, const std::filesystem::path& weights_path );
+
+  std::string next_token();
 };
 
 }

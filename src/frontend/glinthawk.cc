@@ -1,3 +1,4 @@
+#include <csignal>
 #include <filesystem>
 #include <iostream>
 
@@ -8,6 +9,12 @@
 
 using namespace std;
 using namespace glinthawk;
+
+static void signal_handler( int )
+{
+  cerr << endl << global_timer().summary() << endl;
+  exit( EXIT_FAILURE );
+}
 
 void usage( const char* argv0 ) { cout << "Usage: " << argv0 << " <tokenizer_path> <weights_path>" << endl; }
 
@@ -22,6 +29,8 @@ int main( int argc, char* argv[] )
     return EXIT_FAILURE;
   }
 
+  signal( SIGINT, signal_handler );
+
   FLAGS_logtostderr = true;
   FLAGS_colorlogtostderr = true;
   google::InitGoogleLogging( argv[0] );
@@ -30,6 +39,15 @@ int main( int argc, char* argv[] )
     const filesystem::path tokenizer_path { argv[1] };
     const filesystem::path weights_path { argv[2] };
     Llama2 llama { tokenizer_path, weights_path };
+
+    cout << endl;
+    for ( string token = "<s>\n"; not token.empty(); ) {
+      cout << token << flush;
+
+      GlobalScopeTimer<Timer::Category::TokenGeneration> _;
+      token = llama.next_token();
+    }
+    cout << endl;
 
     cerr << endl << global_timer().summary() << endl;
   } catch ( const exception& e ) {
