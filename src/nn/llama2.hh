@@ -25,25 +25,31 @@ private:
 
   struct TransformerWeights
   {
+    struct LayerWeights
+    {
+      // weights for rmsnorms
+      float* rms_att_weight; // (dim) rmsnorm weights
+      float* rms_ffn_weight; // (dim)
+
+      // weights for matmuls
+      float* wq; // (dim, dim)
+      float* wk; // (dim, dim)
+      float* wv; // (dim, dim)
+      float* wo; // (dim, dim)
+
+      // weights for ffn
+      float* w1; // (hidden_dim, dim)
+      float* w2; // (dim, hidden_dim)
+      float* w3; // (hidden_dim, dim)
+    };
+
     std::unique_ptr<float[]> buffer_ {};
 
     // token embedding table
     float* token_embedding_table; // (vocab_size, dim)
 
-    // weights for rmsnorms
-    float* rms_att_weight; // (layer, dim) rmsnorm weights
-    float* rms_ffn_weight; // (layer, dim)
-
-    // weights for matmuls
-    float* wq; // (layer, dim, dim)
-    float* wk; // (layer, dim, dim)
-    float* wv; // (layer, dim, dim)
-    float* wo; // (layer, dim, dim)
-
-    // weights for ffn
-    float* w1; // (layer, hidden_dim, dim)
-    float* w2; // (layer, dim, hidden_dim)
-    float* w3; // (layer, hidden_dim, dim)
+    // transformer layers
+    std::unique_ptr<LayerWeights[]> layers {}; // (n_layers,)
 
     // final rmsnorm
     float* rms_final_weight; // (dim,)
@@ -72,9 +78,13 @@ private:
     float* att;    // buffer for scores/attention values (n_heads, seq_len)
     float* logits; // output logits
 
-    // kv cache
-    float* key_cache;   // (layer, seq_len, dim)
-    float* value_cache; // (layer, seq_len, dim)
+    struct LayerKVCache
+    {
+      float* k; // (seq_len, dim)
+      float* v; // (seq_len, dim)
+    };
+
+    std::unique_ptr<LayerKVCache[]> kv_caches; // (n_layers,)
   };
 
 private:

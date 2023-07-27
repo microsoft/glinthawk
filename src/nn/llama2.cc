@@ -90,19 +90,30 @@ void Llama2::init_weights( const filesystem::path& weights_path )
   // initialize TransformerWeights
   float* ptr = weights_.buffer_.get();
 
+  weights_.layers = make_unique<TransformerWeights::LayerWeights[]>( config_.n_layers );
   weights_.token_embedding_table = ( ptr += sizeof( Config ) / sizeof( float ) );
-  weights_.rms_att_weight = ( ptr += config_.vocab_size * config_.dim );
 
-  weights_.wq = ( ptr += config_.n_layers * config_.dim );
-  weights_.wk = ( ptr += config_.n_layers * config_.dim * config_.dim );
-  weights_.wv = ( ptr += config_.n_layers * config_.dim * config_.dim );
-  weights_.wo = ( ptr += config_.n_layers * config_.dim * config_.dim );
+  auto rms_att_weight = ( ptr += config_.vocab_size * config_.dim );
+  auto wq = ( ptr += config_.n_layers * config_.dim );
+  auto wk = ( ptr += config_.n_layers * config_.dim * config_.dim );
+  auto wv = ( ptr += config_.n_layers * config_.dim * config_.dim );
+  auto wo = ( ptr += config_.n_layers * config_.dim * config_.dim );
+  auto rms_ffn_weight = ( ptr += config_.n_layers * config_.dim * config_.dim );
+  auto w1 = ( ptr += config_.n_layers * config_.dim );
+  auto w2 = ( ptr += config_.n_layers * config_.dim * config_.hidden_dim );
+  auto w3 = ( ptr += config_.n_layers * config_.hidden_dim * config_.dim );
 
-  weights_.rms_ffn_weight = ( ptr += config_.n_layers * config_.dim * config_.dim );
-
-  weights_.w1 = ( ptr += config_.n_layers * config_.dim );
-  weights_.w2 = ( ptr += config_.n_layers * config_.dim * config_.hidden_dim );
-  weights_.w3 = ( ptr += config_.n_layers * config_.hidden_dim * config_.dim );
+  for ( int i = 0; i < config_.n_layers; i++ ) {
+    weights_.layers[i].rms_att_weight = rms_att_weight + i * config_.dim;
+    weights_.layers[i].wq = wq + i * config_.dim * config_.dim;
+    weights_.layers[i].wk = wk + i * config_.dim * config_.dim;
+    weights_.layers[i].wv = wv + i * config_.dim * config_.dim;
+    weights_.layers[i].wo = wo + i * config_.dim * config_.dim;
+    weights_.layers[i].rms_ffn_weight = rms_ffn_weight + i * config_.dim;
+    weights_.layers[i].w1 = w1 + i * config_.dim * config_.hidden_dim;
+    weights_.layers[i].w2 = w2 + i * config_.hidden_dim * config_.dim;
+    weights_.layers[i].w3 = w3 + i * config_.hidden_dim * config_.dim;
+  }
 
   weights_.rms_final_weight = ( ptr += config_.n_layers * config_.dim * config_.hidden_dim );
   weights_.freq_cis_real = ( ptr += config_.dim );
@@ -151,8 +162,15 @@ void Llama2::init_state()
   state_.hb2 = ( ptr += config_.hidden_dim );
   state_.att = ( ptr += config_.hidden_dim );
   state_.logits = ( ptr += config_.n_heads * config_.seq_len );
-  state_.key_cache = ( ptr += config_.vocab_size );
-  state_.value_cache = ( ptr += config_.n_layers * config_.seq_len * config_.dim );
+
+  auto kv_cache_start = ( ptr += config_.vocab_size );
+  state_.kv_caches = make_unique<RunState::LayerKVCache[]>( config_.n_layers );
+
+  for ( int i = 0; i < config_.n_layers; i++ ) {
+    state_.kv_caches[i].k = kv_cache_start + i * config_.seq_len * config_.dim;
+    state_.kv_caches[i].v
+      = kv_cache_start + config_.n_layers * config_.seq_len * config_.dim + i * config_.seq_len * config_.dim;
+  }
 }
 
 void Llama2::transformer( const int token, const int pos )
@@ -173,15 +191,15 @@ void Llama2::transformer( const int token, const int pos )
   float* freq_cis_imag_row = weights_.freq_cis_imag + pos * head_size / 2;
 
   for ( int layer_num = 0; layer_num < config_.n_layers; layer_num++ ) {
-    // attention rmsnorm
-    ops::rmsnorm( state_.xb, x, weights_.rms_att_weight + layer_num * dim, dim );
+    const auto& layer_weights = weights_.layers[layer_num];
 
-    const off64_t weights_offset = layer_num * dim * dim;
+    // attention rmsnorm
+    ops::rmsnorm( state_.xb, x, layer_weights.rms_att_weight, dim );
 
     // qkv matmuls for this position
-    ops::matmul( state_.q, state_.xb, weights_.wq + weights_offset, dim, dim );
-    ops::matmul( state_.k, state_.xb, weights_.wk + weights_offset, dim, dim );
-    ops::matmul( state_.v, state_.xb, weights_.wv + weights_offset, dim, dim );
+    ops::matmul( state_.q, state_.xb, layer_weights.wq, dim, dim );
+    ops::matmul( state_.k, state_.xb, layer_weights.wk, dim, dim );
+    ops::matmul( state_.v, state_.xb, layer_weights.wv, dim, dim );
 
     // apply RoPE rotation to the q and k vectors for each head
     for ( int head_num = 0; head_num < config_.n_heads; head_num++ ) {
@@ -205,9 +223,8 @@ void Llama2::transformer( const int token, const int pos )
     }
 
     // save key,value at this time step (pos) to our kv cache
-    const off64_t loff = layer_num * config_.seq_len * dim; // kv cache layer offset for convenience
-    float* key_cache_row = state_.key_cache + loff + pos * dim;
-    float* value_cache_row = state_.value_cache + loff + pos * dim;
+    float* key_cache_row = state_.kv_caches[layer_num].k + pos * dim;
+    float* value_cache_row = state_.kv_caches[layer_num].v + pos * dim;
     memcpy( key_cache_row, state_.k, dim * sizeof( *key_cache_row ) );
     memcpy( value_cache_row, state_.v, dim * sizeof( *value_cache_row ) );
 
@@ -224,7 +241,7 @@ void Llama2::transformer( const int token, const int pos )
       // iterate over all timesteps, including the current one
       for ( int t = 0; t <= pos; t++ ) {
         // get the key vector for this head and at this timestep
-        const float* k = state_.key_cache + loff + t * dim + head_num * head_size;
+        const float* k = state_.kv_caches[layer_num].k + t * dim + head_num * head_size;
 
         // calculate the attention score as the dot product of q and k
         float score = 0.0f;
@@ -246,7 +263,7 @@ void Llama2::transformer( const int token, const int pos )
 
       for ( int t = 0; t <= pos; t++ ) {
         // get the value vector for this head and at this timestep
-        const float* v = state_.value_cache + loff + t * dim + head_num * head_size;
+        const float* v = state_.kv_caches[layer_num].v + t * dim + head_num * head_size;
 
         // get the attention weight for this timestep
         const float a = att[t];
@@ -260,18 +277,18 @@ void Llama2::transformer( const int token, const int pos )
     // end of multihead attention
 
     // final matmul to get the output of the attention
-    ops::matmul( state_.xb2, state_.xb, weights_.wo + layer_num * dim * dim, dim, dim );
+    ops::matmul( state_.xb2, state_.xb, layer_weights.wo, dim, dim );
 
     // residual connection back into x
     ops::accum( x, state_.xb2, dim );
 
     // ffn rmsnorm
-    ops::rmsnorm( state_.xb, x, weights_.rms_ffn_weight + layer_num * dim, dim );
+    ops::rmsnorm( state_.xb, x, layer_weights.rms_ffn_weight, dim );
 
     // Now for FFN in PyTorch we have: self.w2(F.silu(self.w1(x)) * self.w3(x))
     // first calculate self.w1(x) and self.w3(x)
-    ops::matmul( state_.hb, state_.xb, weights_.w1 + layer_num * dim * hidden_dim, dim, hidden_dim );
-    ops::matmul( state_.hb2, state_.xb, weights_.w3 + layer_num * dim * hidden_dim, dim, hidden_dim );
+    ops::matmul( state_.hb, state_.xb, layer_weights.w1, dim, hidden_dim );
+    ops::matmul( state_.hb2, state_.xb, layer_weights.w3, dim, hidden_dim );
 
     // F.silu; silu(x)=x*σ(x),where σ(x) is the logistic sigmoid
     for ( int i = 0; i < hidden_dim; i++ ) {
@@ -284,7 +301,7 @@ void Llama2::transformer( const int token, const int pos )
     }
 
     // final matmul to get the output of the ffn
-    ops::matmul( state_.xb, state_.hb, weights_.w2 + layer_num * dim * hidden_dim, hidden_dim, dim );
+    ops::matmul( state_.xb, state_.hb, layer_weights.w2, hidden_dim, dim );
 
     // residual connection
     ops::accum( x, state_.xb, dim );
