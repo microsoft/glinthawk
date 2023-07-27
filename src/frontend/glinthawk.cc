@@ -3,7 +3,7 @@
 
 #include <glog/logging.h>
 
-#include "llama/llama2.hh"
+#include "nn/llama2.hh"
 #include "util/timer.hh"
 
 using namespace std;
@@ -26,13 +26,12 @@ int main( int argc, char* argv[] )
   FLAGS_colorlogtostderr = true;
   google::InitGoogleLogging( argv[0] );
 
-
   try {
     const filesystem::path tokenizer_path { argv[1] };
     const filesystem::path weights_path { argv[2] };
     Llama2 llama { tokenizer_path, weights_path };
 
-    cerr << global_timer().summary() << endl;
+    cerr << endl << global_timer().summary() << endl;
   } catch ( const exception& e ) {
     cerr << "Error: " << e.what() << endl;
     return EXIT_FAILURE;

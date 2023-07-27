@@ -31,7 +31,6 @@ add_library ( libglinthawk STATIC ${SOURCE} )
 set ( ALL_LIBS
   libglinthawk
   glog::glog
-  ${TORCH_LIBRARIES}
 )
 
 add_executable ( glinthawk src/frontend/glinthawk.cc )
