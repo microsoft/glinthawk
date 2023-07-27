@@ -34,7 +34,7 @@ Llama2::Llama2( const std::filesystem::path& tokenizer_path, const filesystem::p
 }
 
 template<class T, size_t alignment>
-unique_ptr<T[]> allocate_memory_aligned( size_t size )
+unique_ptr<T[]> make_unique_aligned( size_t size )
 {
   GlobalScopeTimer<Timer::Category::MemoryAllocation> _;
   void* ptr = aligned_alloc( alignment, size * sizeof( T ) );
@@ -62,7 +62,7 @@ void Llama2::init_weights( const filesystem::path& weights_path )
   LOG( INFO ) << "Weights file size: " << weights_file_size << " bytes";
 
   // allocate the buffer
-  weights_buffer_ = allocate_memory_aligned<float, 64>( weights_file_size / sizeof( float ) );
+  weights_buffer_ = make_unique_aligned<float, 64>( weights_file_size / sizeof( float ) );
 
   // read the weights
   {
@@ -128,17 +128,17 @@ void Llama2::init_vocabulary( const std::filesystem::path& vocabulary_path )
 void Llama2::init_state()
 {
   // allocate the state
-  state_.x = allocate_memory_aligned<float, 64>( config_.dim );
-  state_.xb = allocate_memory_aligned<float, 64>( config_.dim );
-  state_.xb2 = allocate_memory_aligned<float, 64>( config_.dim );
-  state_.hb = allocate_memory_aligned<float, 64>( config_.hidden_dim );
-  state_.hb2 = allocate_memory_aligned<float, 64>( config_.hidden_dim );
-  state_.q = allocate_memory_aligned<float, 64>( config_.dim );
-  state_.k = allocate_memory_aligned<float, 64>( config_.dim );
-  state_.v = allocate_memory_aligned<float, 64>( config_.dim );
-  state_.att = allocate_memory_aligned<float, 64>( config_.n_heads * config_.seq_len );
-  state_.logits = allocate_memory_aligned<float, 64>( config_.vocab_size );
+  state_.x = make_unique_aligned<float, 64>( config_.dim );
+  state_.xb = make_unique_aligned<float, 64>( config_.dim );
+  state_.xb2 = make_unique_aligned<float, 64>( config_.dim );
+  state_.hb = make_unique_aligned<float, 64>( config_.hidden_dim );
+  state_.hb2 = make_unique_aligned<float, 64>( config_.hidden_dim );
+  state_.q = make_unique_aligned<float, 64>( config_.dim );
+  state_.k = make_unique_aligned<float, 64>( config_.dim );
+  state_.v = make_unique_aligned<float, 64>( config_.dim );
+  state_.att = make_unique_aligned<float, 64>( config_.n_heads * config_.seq_len );
+  state_.logits = make_unique_aligned<float, 64>( config_.vocab_size );
 
-  state_.key_cache = allocate_memory_aligned<float, 64>( config_.n_layers * config_.seq_len * config_.dim );
-  state_.value_cache = allocate_memory_aligned<float, 64>( config_.n_layers * config_.seq_len * config_.dim );
+  state_.key_cache = make_unique_aligned<float, 64>( config_.n_layers * config_.seq_len * config_.dim );
+  state_.value_cache = make_unique_aligned<float, 64>( config_.n_layers * config_.seq_len * config_.dim );
 }
