@@ -6,14 +6,14 @@ namespace glinthawk {
 
 namespace ops {
 
-void accum( float* a, float* b, int size )
+void accum( float* a, const float* b, const int size )
 {
   for ( int i = 0; i < size; i++ ) {
     a[i] += b[i];
   }
 }
 
-void rmsnorm( float* output, float* x, float* weight, int size )
+void rmsnorm( float* output, const float* x, const float* weight, const int size )
 {
   // calculate sum of squares
   float ss = 0.0f;
@@ -31,7 +31,7 @@ void rmsnorm( float* output, float* x, float* weight, int size )
   }
 }
 
-void softmax( float* x, int size )
+void softmax( float* x, const int size )
 {
   // find max value (for numerical stability)
   float max_val = x[0];
@@ -55,7 +55,7 @@ void softmax( float* x, int size )
 }
 
 // W(d,n) @ x(n,) -> xout(d,)
-void matmul( float* xout, float* x, float* w, int n, int d )
+void matmul( float* xout, const float* x, const float* w, const int n, const int d )
 {
   int i;
 
