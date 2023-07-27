@@ -9,7 +9,7 @@
 using namespace std;
 using namespace glinthawk;
 
-void usage( const char* argv0 ) { cout << "Usage: " << argv0 << " <weights_path>" << endl; }
+void usage( const char* argv0 ) { cout << "Usage: " << argv0 << " <tokenizer_path> <weights_path>" << endl; }
 
 int main( int argc, char* argv[] )
 {
@@ -17,7 +17,7 @@ int main( int argc, char* argv[] )
     abort();
   }
 
-  if ( argc != 2 ) {
+  if ( argc != 3 ) {
     usage( argv[0] );
     return EXIT_FAILURE;
   }
@@ -28,8 +28,10 @@ int main( int argc, char* argv[] )
 
 
   try {
-    const filesystem::path weights_path { argv[1] };
-    Llama2 llama { weights_path };
+    const filesystem::path tokenizer_path { argv[1] };
+    const filesystem::path weights_path { argv[2] };
+    Llama2 llama { tokenizer_path, weights_path };
+
     cerr << global_timer().summary() << endl;
   } catch ( const exception& e ) {
     cerr << "Error: " << e.what() << endl;

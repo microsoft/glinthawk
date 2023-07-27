@@ -2,6 +2,8 @@
 
 #include <filesystem>
 #include <memory>
+#include <string>
+#include <vector>
 
 namespace glinthawk {
 
@@ -17,6 +19,8 @@ private:
     int n_kv_heads; // number of key/value heads (can be < query heads because of multiquery)
     int vocab_size; // vocabulary size, usually 256 (byte-level)
     int seq_len;    // max sequence length
+
+    std::string to_string() const;
   };
 
   struct TransformerWeights
@@ -71,16 +75,18 @@ private:
 
 private:
   std::unique_ptr<float[]> weights_buffer_ {};
+  std::vector<std::string> vocabulary_ {};
 
   Config config_ {};
   TransformerWeights weights_ {};
   RunState state_ {};
 
   void init_weights( const std::filesystem::path& weights_path );
+  void init_vocabulary( const std::filesystem::path& vocabulary_path );
   void init_state();
 
 public:
-  Llama2( const std::filesystem::path& weights_path );
+  Llama2( const std::filesystem::path& tokenizer_path, const std::filesystem::path& weights_path );
 };
 
 }
