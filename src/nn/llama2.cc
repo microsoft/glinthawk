@@ -204,7 +204,9 @@ void Llama2::transformer( const int token, const int pos )
     memcpy( value_cache_row, state_.v.get(), dim * sizeof( *value_cache_row ) );
 
     // multihead attention. iterate over all heads
-    for ( int head_num = 0; head_num < config_.n_heads; head_num++ ) {
+    int head_num;
+#pragma omp parallel for private( head_num )
+    for ( head_num = 0; head_num < config_.n_heads; head_num++ ) {
       // get the query vector for this head
       const float* q = state_.q.get() + head_num * head_size;
 
