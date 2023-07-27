@@ -18,6 +18,7 @@ list ( APPEND CMAKE_PREFIX_PATH "${libtorch_SOURCE_DIR}" )
 
 find_package ( Glog REQUIRED )
 find_package ( Torch REQUIRED )
+find_package ( OpenMP REQUIRED )
 
 include_directories ( src )
 
@@ -31,6 +32,7 @@ add_library ( libglinthawk STATIC ${SOURCE} )
 set ( ALL_LIBS
   libglinthawk
   glog::glog
+  OpenMP::OpenMP_CXX
 )
 
 add_executable ( glinthawk src/frontend/glinthawk.cc )
