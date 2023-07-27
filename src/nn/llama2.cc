@@ -131,26 +131,34 @@ void Llama2::init_vocabulary( const std::filesystem::path& vocabulary_path )
 
 void Llama2::init_state()
 {
-  // allocate the state
-  state_.x = make_unique_aligned<float, 64>( config_.dim );
-  state_.xb = make_unique_aligned<float, 64>( config_.dim );
-  state_.xb2 = make_unique_aligned<float, 64>( config_.dim );
-  state_.hb = make_unique_aligned<float, 64>( config_.hidden_dim );
-  state_.hb2 = make_unique_aligned<float, 64>( config_.hidden_dim );
-  state_.q = make_unique_aligned<float, 64>( config_.dim );
-  state_.k = make_unique_aligned<float, 64>( config_.dim );
-  state_.v = make_unique_aligned<float, 64>( config_.dim );
-  state_.att = make_unique_aligned<float, 64>( config_.n_heads * config_.seq_len );
-  state_.logits = make_unique_aligned<float, 64>( config_.vocab_size );
+  const size_t state_size
+    = sizeof( float ) * config_.dim * 6                                         // x, xb, xb2, q, k, v
+      + sizeof( float ) * config_.hidden_dim * 2                                // hb, hb2
+      + sizeof( float ) * config_.n_heads * config_.seq_len                     // att
+      + sizeof( float ) * config_.vocab_size                                    // logits
+      + sizeof( float ) * config_.n_layers * config_.seq_len * config_.dim * 2; // key_cache, value_cache;
 
-  state_.key_cache = make_unique_aligned<float, 64>( config_.n_layers * config_.seq_len * config_.dim );
-  state_.value_cache = make_unique_aligned<float, 64>( config_.n_layers * config_.seq_len * config_.dim );
+  state_buffer_ = make_unique_aligned<float, 64>( state_size );
+  auto ptr = state_buffer_.get();
+
+  state_.x = ptr;
+  state_.xb = ( ptr += config_.dim );
+  state_.xb2 = ( ptr += config_.dim );
+  state_.q = ( ptr += config_.dim );
+  state_.k = ( ptr += config_.dim );
+  state_.v = ( ptr += config_.dim );
+  state_.hb = ( ptr += config_.dim );
+  state_.hb2 = ( ptr += config_.hidden_dim );
+  state_.att = ( ptr += config_.hidden_dim );
+  state_.logits = ( ptr += config_.n_heads * config_.seq_len );
+  state_.key_cache = ( ptr += config_.vocab_size );
+  state_.value_cache = ( ptr += config_.n_layers * config_.seq_len * config_.dim );
 }
 
 void Llama2::transformer( const int token, const int pos )
 {
   // a few convenience variables
-  float* x = state_.x.get();
+  float* x = state_.x;
   const int dim = config_.dim;
   const int hidden_dim = config_.hidden_dim;
   const int head_size = dim / config_.n_heads;
@@ -166,20 +174,20 @@ void Llama2::transformer( const int token, const int pos )
 
   for ( int layer_num = 0; layer_num < config_.n_layers; layer_num++ ) {
     // attention rmsnorm
-    ops::rmsnorm( state_.xb.get(), x, weights_.rms_att_weight + layer_num * dim, dim );
+    ops::rmsnorm( state_.xb, x, weights_.rms_att_weight + layer_num * dim, dim );
 
     const off64_t weights_offset = layer_num * dim * dim;
 
     // qkv matmuls for this position
-    ops::matmul( state_.q.get(), state_.xb.get(), weights_.wq + weights_offset, dim, dim );
-    ops::matmul( state_.k.get(), state_.xb.get(), weights_.wk + weights_offset, dim, dim );
-    ops::matmul( state_.v.get(), state_.xb.get(), weights_.wv + weights_offset, dim, dim );
+    ops::matmul( state_.q, state_.xb, weights_.wq + weights_offset, dim, dim );
+    ops::matmul( state_.k, state_.xb, weights_.wk + weights_offset, dim, dim );
+    ops::matmul( state_.v, state_.xb, weights_.wv + weights_offset, dim, dim );
 
     // apply RoPE rotation to the q and k vectors for each head
     for ( int head_num = 0; head_num < config_.n_heads; head_num++ ) {
       // get the q and k vectors for this head
-      float* q = state_.q.get() + head_num * head_size;
-      float* k = state_.k.get() + head_num * head_size;
+      float* q = state_.q + head_num * head_size;
+      float* k = state_.k + head_num * head_size;
 
       // rotate q and k by the freq_cis_real and freq_cis_imag
       for ( int i = 0; i < head_size; i += 2 ) {
@@ -198,25 +206,25 @@ void Llama2::transformer( const int token, const int pos )
 
     // save key,value at this time step (pos) to our kv cache
     const off64_t loff = layer_num * config_.seq_len * dim; // kv cache layer offset for convenience
-    float* key_cache_row = state_.key_cache.get() + loff + pos * dim;
-    float* value_cache_row = state_.value_cache.get() + loff + pos * dim;
-    memcpy( key_cache_row, state_.k.get(), dim * sizeof( *key_cache_row ) );
-    memcpy( value_cache_row, state_.v.get(), dim * sizeof( *value_cache_row ) );
+    float* key_cache_row = state_.key_cache + loff + pos * dim;
+    float* value_cache_row = state_.value_cache + loff + pos * dim;
+    memcpy( key_cache_row, state_.k, dim * sizeof( *key_cache_row ) );
+    memcpy( value_cache_row, state_.v, dim * sizeof( *value_cache_row ) );
 
     // multihead attention. iterate over all heads
     int head_num;
 #pragma omp parallel for private( head_num )
     for ( head_num = 0; head_num < config_.n_heads; head_num++ ) {
       // get the query vector for this head
-      const float* q = state_.q.get() + head_num * head_size;
+      const float* q = state_.q + head_num * head_size;
 
       // attention scores for this head
-      float* att = state_.att.get() + head_num * config_.seq_len;
+      float* att = state_.att + head_num * config_.seq_len;
 
       // iterate over all timesteps, including the current one
       for ( int t = 0; t <= pos; t++ ) {
         // get the key vector for this head and at this timestep
-        const float* k = state_.key_cache.get() + loff + t * dim + head_num * head_size;
+        const float* k = state_.key_cache + loff + t * dim + head_num * head_size;
 
         // calculate the attention score as the dot product of q and k
         float score = 0.0f;
@@ -233,12 +241,12 @@ void Llama2::transformer( const int token, const int pos )
       ops::softmax( att, pos + 1 );
 
       // weighted sum of the values, store back into xb
-      float* xb = state_.xb.get() + head_num * head_size;
+      float* xb = state_.xb + head_num * head_size;
       memset( xb, 0, head_size * sizeof( float ) );
 
       for ( int t = 0; t <= pos; t++ ) {
         // get the value vector for this head and at this timestep
-        const float* v = state_.value_cache.get() + loff + t * dim + head_num * head_size;
+        const float* v = state_.value_cache + loff + t * dim + head_num * head_size;
 
         // get the attention weight for this timestep
         const float a = att[t];
@@ -252,18 +260,18 @@ void Llama2::transformer( const int token, const int pos )
     // end of multihead attention
 
     // final matmul to get the output of the attention
-    ops::matmul( state_.xb2.get(), state_.xb.get(), weights_.wo + layer_num * dim * dim, dim, dim );
+    ops::matmul( state_.xb2, state_.xb, weights_.wo + layer_num * dim * dim, dim, dim );
 
     // residual connection back into x
-    ops::accum( x, state_.xb2.get(), dim );
+    ops::accum( x, state_.xb2, dim );
 
     // ffn rmsnorm
-    ops::rmsnorm( state_.xb.get(), x, weights_.rms_ffn_weight + layer_num * dim, dim );
+    ops::rmsnorm( state_.xb, x, weights_.rms_ffn_weight + layer_num * dim, dim );
 
     // Now for FFN in PyTorch we have: self.w2(F.silu(self.w1(x)) * self.w3(x))
     // first calculate self.w1(x) and self.w3(x)
-    ops::matmul( state_.hb.get(), state_.xb.get(), weights_.w1 + layer_num * dim * hidden_dim, dim, hidden_dim );
-    ops::matmul( state_.hb2.get(), state_.xb.get(), weights_.w3 + layer_num * dim * hidden_dim, dim, hidden_dim );
+    ops::matmul( state_.hb, state_.xb, weights_.w1 + layer_num * dim * hidden_dim, dim, hidden_dim );
+    ops::matmul( state_.hb2, state_.xb, weights_.w3 + layer_num * dim * hidden_dim, dim, hidden_dim );
 
     // F.silu; silu(x)=x*σ(x),where σ(x) is the logistic sigmoid
     for ( int i = 0; i < hidden_dim; i++ ) {
@@ -276,17 +284,17 @@ void Llama2::transformer( const int token, const int pos )
     }
 
     // final matmul to get the output of the ffn
-    ops::matmul( state_.xb.get(), state_.hb.get(), weights_.w2 + layer_num * dim * hidden_dim, hidden_dim, dim );
+    ops::matmul( state_.xb, state_.hb, weights_.w2 + layer_num * dim * hidden_dim, hidden_dim, dim );
 
     // residual connection
-    ops::accum( x, state_.xb.get(), dim );
+    ops::accum( x, state_.xb, dim );
   }
 
   // final rmsnorm
   ops::rmsnorm( x, x, weights_.rms_final_weight, dim );
 
   // classifier into logits
-  ops::matmul( state_.logits.get(), x, weights_.wcls, config_.dim, config_.vocab_size );
+  ops::matmul( state_.logits, x, weights_.wcls, config_.dim, config_.vocab_size );
 }
 
 string Llama2::next_token()
@@ -303,7 +311,7 @@ string Llama2::next_token()
   // sample the next token
   if ( temperature_ == 0.0f ) {
     // greedy argmax sampling
-    next_token = ops::argmax( state_.logits.get(), config_.vocab_size );
+    next_token = ops::argmax( state_.logits, config_.vocab_size );
   } else {
     // apply the temperature to the logits
     for ( int q = 0; q < config_.vocab_size; q++ ) {
@@ -311,10 +319,10 @@ string Llama2::next_token()
     }
 
     // apply softmax to the logits to get the probabilities for next token
-    ops::softmax( state_.logits.get(), config_.vocab_size );
+    ops::softmax( state_.logits, config_.vocab_size );
 
     // we now want to sample from this distribution to get the next token
-    next_token = ops::sample( state_.logits.get(), config_.vocab_size );
+    next_token = ops::sample( state_.logits, config_.vocab_size );
   }
 
   // advance forward
