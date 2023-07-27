@@ -25,6 +25,8 @@ private:
 
   struct TransformerWeights
   {
+    std::unique_ptr<float[]> buffer_ {};
+
     // token embedding table
     float* token_embedding_table; // (vocab_size, dim)
 
@@ -56,6 +58,8 @@ private:
 
   struct RunState
   {
+    std::unique_ptr<float[]> buffer_ {};
+
     // current wave of activations
     float* x;      // activation at current time stamp (dim,)
     float* xb;     // same, but inside a residual branch (dim,)
@@ -74,8 +78,6 @@ private:
   };
 
 private:
-  std::unique_ptr<float[]> weights_buffer_ {};
-  std::unique_ptr<float[]> state_buffer_ {};
   std::vector<std::string> vocabulary_ {};
 
   Config config_ {};
@@ -95,6 +97,12 @@ private:
 
 public:
   Llama2( const std::filesystem::path& tokenizer_path, const std::filesystem::path& weights_path );
+
+  Llama2( const Llama2& ) = delete;
+  Llama2& operator=( const Llama2& ) = delete;
+
+  Llama2( Llama2&& ) = default;
+  Llama2& operator=( Llama2&& ) = default;
 
   std::string next_token();
 };

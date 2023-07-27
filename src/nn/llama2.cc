@@ -64,13 +64,13 @@ void Llama2::init_weights( const filesystem::path& weights_path )
   LOG( INFO ) << "Weights file size: " << weights_file_size << " bytes";
 
   // allocate the buffer
-  weights_buffer_ = make_unique_aligned<float, 64>( weights_file_size / sizeof( float ) );
+  weights_.buffer_ = make_unique_aligned<float, 64>( weights_file_size / sizeof( float ) );
 
   // read the weights
   {
     GlobalScopeTimer<Timer::Category::DiskIO> _;
 
-    if ( weights_file.read( reinterpret_cast<char*>( weights_buffer_.get() ), weights_file_size ) ) {
+    if ( weights_file.read( reinterpret_cast<char*>( weights_.buffer_.get() ), weights_file_size ) ) {
       LOG( INFO ) << "Read weights file successfully.";
     } else {
       throw runtime_error( "Failed to read the weights file." );
@@ -78,7 +78,7 @@ void Llama2::init_weights( const filesystem::path& weights_path )
   }
 
   // load the configuration
-  memcpy( &config_, weights_buffer_.get(), sizeof( Config ) );
+  memcpy( &config_, weights_.buffer_.get(), sizeof( Config ) );
   LOG( INFO ) << "Configuration: \n" << config_.to_string();
 
   // XXX fucking ugly hack
@@ -88,7 +88,7 @@ void Llama2::init_weights( const filesystem::path& weights_path )
   max_steps_ = config_.seq_len;
 
   // initialize TransformerWeights
-  float* ptr = weights_buffer_.get();
+  float* ptr = weights_.buffer_.get();
 
   weights_.token_embedding_table = ( ptr += sizeof( Config ) / sizeof( float ) );
   weights_.rms_att_weight = ( ptr += config_.vocab_size * config_.dim );
@@ -138,8 +138,8 @@ void Llama2::init_state()
       + sizeof( float ) * config_.vocab_size                                    // logits
       + sizeof( float ) * config_.n_layers * config_.seq_len * config_.dim * 2; // key_cache, value_cache;
 
-  state_buffer_ = make_unique_aligned<float, 64>( state_size );
-  auto ptr = state_buffer_.get();
+  state_.buffer_ = make_unique_aligned<float, 64>( state_size );
+  auto ptr = state_.buffer_.get();
 
   state_.x = ptr;
   state_.xb = ( ptr += config_.dim );
