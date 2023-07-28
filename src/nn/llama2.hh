@@ -6,6 +6,8 @@
 #include <unordered_map>
 #include <vector>
 
+#include "util/ring_buffer.hh"
+
 namespace glinthawk {
 
 class Llama2
@@ -70,7 +72,7 @@ private:
 
   struct RunState
   {
-    std::unique_ptr<float[]> buffer_ {};
+    std::unique_ptr<float[]> buffer_;
 
     // current wave of activations
     float* x {};      // activation at current time stamp (dim,)
@@ -84,13 +86,23 @@ private:
     float* att {};    // buffer for scores/attention values (n_heads, seq_len)
     float* logits {}; // output logits
 
-    struct LayerKVCache
+    struct KVCache
     {
-      float* k {}; // (seq_len, dim)
-      float* v {}; // (seq_len, dim)
+      RingBuffer buffer_;
+      const int seq_len_;
+      const int dim_;
+      const int n_layers_;
+      const int head_size_;
+
+      float* key( const int layer, const int step, const int head = 0 );
+      float* value( const int layer, const int step, const int head = 0 );
+
+      void pop();
+
+      KVCache( const Config& config );
     };
 
-    std::unique_ptr<LayerKVCache[]> kv_caches {}; // (n_layers,)
+    KVCache kv_cache;
 
     RunState( const Config& config );
     RunState( const RunState& ) = delete;
@@ -121,7 +133,7 @@ private:
   int current_token_ { 1 }; // BOS
   int current_pos_ { 0 };   // current position in the sequence
 
-  void transformer( const int token, const int pos );
+  void transformer( const int token );
 
 public:
   Llama2( const std::filesystem::path& tokenizer_path, const std::filesystem::path& weights_path );

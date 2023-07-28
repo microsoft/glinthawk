@@ -171,15 +171,13 @@ Llama2::TransformerWeights::TransformerWeights( const Config& config, const file
 }
 
 Llama2::RunState::RunState( const Config& config )
+  : buffer_( make_unique_aligned<float, 64>( sizeof( float ) * config.dim * 6          /* x, xb, xb2, q, k, v */
+                                             + sizeof( float ) * config.hidden_dim * 2 /* hb, hb2 */
+                                             + sizeof( float ) * config.n_heads * config.seq_len /* att */
+                                             + sizeof( float ) * config.vocab_size               /* logits */
+                                             ) )
+  , kv_cache( config )
 {
-  const size_t state_size
-    = sizeof( float ) * config.dim * 6                                       // x, xb, xb2, q, k, v
-      + sizeof( float ) * config.hidden_dim * 2                              // hb, hb2
-      + sizeof( float ) * config.n_heads * config.seq_len                    // att
-      + sizeof( float ) * config.vocab_size                                  // logits
-      + sizeof( float ) * config.n_layers * config.seq_len * config.dim * 2; // key_cache, value_cache;
-
-  buffer_ = make_unique_aligned<float, 64>( state_size );
   auto ptr = buffer_.get();
 
   x = ptr;
@@ -192,17 +190,37 @@ Llama2::RunState::RunState( const Config& config )
   hb2 = ( ptr += config.hidden_dim );
   att = ( ptr += config.hidden_dim );
   logits = ( ptr += config.n_heads * config.seq_len );
-
-  auto kv_cache_start = ( ptr += config.vocab_size );
-  kv_caches = make_unique<RunState::LayerKVCache[]>( config.n_layers );
-
-  for ( int i = 0; i < config.n_layers; i++ ) {
-    kv_caches[i].k = kv_cache_start + i * config.seq_len * config.dim;
-    kv_caches[i].v = kv_cache_start + config.n_layers * config.seq_len * config.dim + i * config.seq_len * config.dim;
-  }
 }
 
-void Llama2::transformer( const int token, const int pos )
+Llama2::RunState::KVCache::KVCache( const Config& config )
+  : buffer_( sizeof( float ) * config.seq_len * config.n_layers * config.dim * 2 )
+  , seq_len_( config.seq_len )
+  , dim_( config.dim )
+  , n_layers_( config.n_layers )
+  , head_size_( config.dim / config.n_heads )
+{
+  buffer_.push( buffer_.capacity() );
+}
+
+float* Llama2::RunState::KVCache::key( int layer, const int step, const int head )
+{
+  return reinterpret_cast<float*>( buffer_.readable_region().mutable_data() ) + step * ( n_layers_ * dim_ * 2 )
+         + layer * ( dim_ * 2 ) + head * head_size_;
+}
+
+float* Llama2::RunState::KVCache::value( int layer, const int step, const int head )
+{
+  return reinterpret_cast<float*>( buffer_.readable_region().mutable_data() ) + step * ( n_layers_ * dim_ * 2 )
+         + layer * ( dim_ * 2 ) + dim_ + head * head_size_;
+}
+
+void Llama2::RunState::KVCache::pop()
+{
+  buffer_.pop( n_layers_ * dim_ * 2 );
+  buffer_.push( n_layers_ * dim_ * 2 );
+}
+
+void Llama2::transformer( const int token )
 {
   // a few convenience variables
   float* x = state_.x;
@@ -216,8 +234,8 @@ void Llama2::transformer( const int token, const int pos )
 
   // Question(sadjad): wtf is this?
   // pluck out the "pos" row of freq_cis_real and freq_cis_imag
-  float* freq_cis_real_row = weights_.freq_cis_real + pos * head_size / 2;
-  float* freq_cis_imag_row = weights_.freq_cis_imag + pos * head_size / 2;
+  float* freq_cis_real_row = weights_.freq_cis_real + current_pos_ * head_size / 2;
+  float* freq_cis_imag_row = weights_.freq_cis_imag + current_pos_ * head_size / 2;
 
   for ( int layer_num = 0; layer_num < config_.n_layers; layer_num++ ) {
     const auto& layer_weights = weights_.layers[layer_num];
@@ -252,10 +270,8 @@ void Llama2::transformer( const int token, const int pos )
     }
 
     // save key,value at this time step (pos) to our kv cache
-    float* key_cache_row = state_.kv_caches[layer_num].k + pos * dim;
-    float* value_cache_row = state_.kv_caches[layer_num].v + pos * dim;
-    memcpy( key_cache_row, state_.k, dim * sizeof( *key_cache_row ) );
-    memcpy( value_cache_row, state_.v, dim * sizeof( *value_cache_row ) );
+    memcpy( state_.kv_cache.key( layer_num, current_pos_ ), state_.k, dim * sizeof( float ) );
+    memcpy( state_.kv_cache.value( layer_num, current_pos_ ), state_.v, dim * sizeof( float ) );
 
     // multihead attention. iterate over all heads
     int head_num;
@@ -268,9 +284,9 @@ void Llama2::transformer( const int token, const int pos )
       float* att = state_.att + head_num * config_.seq_len;
 
       // iterate over all timesteps, including the current one
-      for ( int t = 0; t <= pos; t++ ) {
+      for ( int t = 0; t <= current_pos_; t++ ) {
         // get the key vector for this head and at this timestep
-        const float* k = state_.kv_caches[layer_num].k + t * dim + head_num * head_size;
+        const float* k = state_.kv_cache.key( layer_num, t, head_num );
 
         // calculate the attention score as the dot product of q and k
         float score = 0.0f;
@@ -284,15 +300,15 @@ void Llama2::transformer( const int token, const int pos )
       }
 
       // softmax the scores to get attention weights, from 0..pos inclusively
-      ops::softmax( att, pos + 1 );
+      ops::softmax( att, current_pos_ + 1 );
 
       // weighted sum of the values, store back into xb
       float* xb = state_.xb + head_num * head_size;
       memset( xb, 0, head_size * sizeof( float ) );
 
-      for ( int t = 0; t <= pos; t++ ) {
+      for ( int t = 0; t <= current_pos_; t++ ) {
         // get the value vector for this head and at this timestep
-        const float* v = state_.kv_caches[layer_num].v + t * dim + head_num * head_size;
+        const float* v = state_.kv_cache.value( layer_num, t, head_num );
 
         // get the attention weight for this timestep
         const float a = att[t];
@@ -352,7 +368,7 @@ string Llama2::next_token()
   int next_token;
 
   // forward the transformer to get logits for the next token
-  transformer( current_token_, current_pos_ );
+  transformer( current_token_ );
 
   // sample the next token
   if ( temperature_ == 0.0f ) {

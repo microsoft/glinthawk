@@ -85,6 +85,13 @@ std::string_view RingBuffer::readable_region() const
   return { virtual_address_space_.addr() + next_index_to_read, bytes_stored_ };
 }
 
+simple_string_span RingBuffer::readable_region()
+{
+  const size_t next_index_to_read = ( next_index_to_write_ + capacity() - bytes_stored_ ) % capacity();
+
+  return { virtual_address_space_.addr() + next_index_to_read, bytes_stored_ };
+}
+
 void RingBuffer::pop( const size_t num_bytes )
 {
   if ( num_bytes > readable_region().length() ) {
