@@ -94,8 +94,8 @@ private:
       const int n_layers_;
       const int head_size_;
 
-      float* key( const int layer, const int step, const int head = 0 );
-      float* value( const int layer, const int step, const int head = 0 );
+      inline float* key( const int layer, const int step, const int head = 0 );
+      inline float* value( const int layer, const int step, const int head = 0 );
 
       void pop();
 

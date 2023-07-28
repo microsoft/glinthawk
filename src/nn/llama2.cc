@@ -222,7 +222,7 @@ void Llama2::transformer( const int token )
   const int head_size = dim / config_.n_heads;
 
   // copy the token embedding into x
-  const float* content_row = &( weights_.token_embedding_table[token * dim] );
+  const float* content_row = weights_.token_embedding_table + token * dim;
   memcpy( x, content_row, dim * sizeof( *x ) );
 
   // pluck out the "pos" row of freq_cis_real and freq_cis_imag
