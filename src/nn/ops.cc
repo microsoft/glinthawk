@@ -2,6 +2,10 @@
 
 #include <cmath>
 
+#if defined( __AVX__ )
+#include <immintrin.h>
+#endif
+
 #if defined( __SSE3__ )
 #include <pmmintrin.h>
 #endif
@@ -94,7 +98,23 @@ void matmul( float* xout, const float* x, const float* w, const int n, const int
 {
   int i;
 #pragma omp parallel for private( i )
-#if defined( __SSE3__ )
+#if 0 & defined( __AVX__ )
+  for ( i = 0; i < d; i++ ) {
+    __m256 val = _mm256_setzero_ps();
+    for ( int j = 0; j < n; j += 8 ) {
+      __m256 xvec = _mm256_load_ps( x + j );
+      __m256 wvec = _mm256_load_ps( w + i * n + j );
+      val = _mm256_add_ps( val, _mm256_mul_ps( xvec, wvec ) );
+    }
+    __m128 val_low = _mm256_castps256_ps128( val );
+    __m128 val_high = _mm256_extractf128_ps( val, 1 );
+    val_low = _mm_add_ps( val_low, val_high );
+
+    val_low = _mm_hadd_ps( val_low, val_low );
+    val_low = _mm_hadd_ps( val_low, val_low );
+    _mm_store_ss( &xout[i], val_low );
+  }
+#elif defined( __SSE3__ )
   for ( i = 0; i < d; i++ ) {
     __m128 val = _mm_setzero_ps();
     for ( int j = 0; j < n; j += 4 ) {
