@@ -13,26 +13,81 @@
 using namespace std;
 using namespace glinthawk;
 
+Llama2::Config::Config( const filesystem::path& weights_path )
+{
+  ifstream fin { weights_path, ios::binary };
+  CHECK( fin ) << "Failed to open weights file: " << weights_path;
+
+  fin.read( reinterpret_cast<char*>( this ), sizeof( *this ) );
+
+  vocab_size = abs( vocab_size );
+
+  CHECK_GT( dim, 0 ) << "Transformer dimension must be positive.";
+  CHECK_GT( hidden_dim, 0 ) << "FFN hidden dimension must be positive.";
+  CHECK_GT( n_layers, 0 ) << "Number of layers must be positive.";
+  CHECK_GT( n_heads, 0 ) << "Number of query heads must be positive.";
+  CHECK_GT( n_kv_heads, 0 ) << "Number of key/value heads must be positive.";
+  CHECK_GT( vocab_size, 0 ) << "Vocabulary size must be positive.";
+  CHECK_GT( seq_len, 0 ) << "Sequence length must be positive.";
+
+  LOG( INFO ) << "Loaded config: " << to_string();
+}
+
 string Llama2::Config::to_string() const
 {
   ostringstream oss;
-  oss << "{\n";
-  oss << "  dim: " << dim << ',' << endl;
-  oss << "  hidden_dim: " << hidden_dim << ',' << endl;
-  oss << "  n_layers: " << n_layers << ',' << endl;
-  oss << "  n_heads: " << n_heads << ',' << endl;
-  oss << "  n_kv_heads: " << n_kv_heads << ',' << endl;
-  oss << "  vocab_size: " << vocab_size << ',' << endl;
-  oss << "  seq_len: " << seq_len << endl;
-  oss << "}";
+  oss << "{ ";
+  oss << "dim: " << dim << ", ";
+  oss << "hidden_dim: " << hidden_dim << ", ";
+  oss << "n_layers: " << n_layers << ", ";
+  oss << "n_heads: " << n_heads << ", ";
+  oss << "n_kv_heads: " << n_kv_heads << ", ";
+  oss << "vocab_size: " << vocab_size << ", ";
+  oss << "seq_len: " << seq_len;
+  oss << " }";
   return oss.str();
 }
 
-Llama2::Llama2( const std::filesystem::path& tokenizer_path, const filesystem::path& weights_path )
+Llama2::Vocabulary::Vocabulary( const Config& config, const std::filesystem::path& vocabulary_path )
 {
-  init_weights( weights_path ); // also initializes config_
-  init_vocabulary( tokenizer_path );
-  init_state();
+  ifstream fin { vocabulary_path, ios::binary };
+  int len = 0;
+
+  for ( int i = 0; i < config.vocab_size; i++ ) {
+    CHECK( fin.read( reinterpret_cast<char*>( &len ), sizeof( int ) ) ) << "Failed to read vocabulary entry length.";
+    CHECK_GT( len, 0 ) << "Vocabulary entry length must be positive.";
+
+    string val;
+    val.resize( len );
+    CHECK( fin.read( val.data(), val.length() ) ) << "Failed to read vocabulary entry.";
+
+    token_to_word_.push_back( val );
+    word_to_token_.emplace( val, i );
+  }
+
+  LOG( INFO ) << "Loaded vocabulary of size " << config.vocab_size << " from " << vocabulary_path;
+}
+
+string Llama2::Vocabulary::get_word( int token ) const
+{
+  CHECK_GE( token, 0 ) << "Token index must be non-negative.";
+  CHECK_LT( token, token_to_word_.size() ) << "Token index out of bounds.";
+  return token_to_word_[token];
+}
+
+int Llama2::Vocabulary::get_token( const string& word ) const
+{
+  auto it = word_to_token_.find( word );
+  CHECK( it != word_to_token_.end() ) << "Unknown word: " << word;
+  return it->second;
+}
+
+Llama2::Llama2( const std::filesystem::path& tokenizer_path, const filesystem::path& weights_path )
+  : config_( weights_path )
+  , weights_( config_, weights_path )
+  , vocabulary_( config_, tokenizer_path )
+  , state_( config_ )
+{
 }
 
 template<class T, size_t alignment>
@@ -48,128 +103,102 @@ unique_ptr<T[]> make_unique_aligned( size_t size )
   return unique_ptr<T[]>( static_cast<T*>( ptr ) );
 }
 
-void Llama2::init_weights( const filesystem::path& weights_path )
+Llama2::TransformerWeights::TransformerWeights( const Config& config, const filesystem::path& weights_path )
 {
   ifstream weights_file { weights_path, ios::binary };
 
-  if ( not weights_file.good() ) {
-    throw runtime_error( "Could not open weights file: " + weights_path.string() );
-  }
+  CHECK( weights_file ) << "Failed to open weights file: " << weights_path;
 
   // get weights_file size
   weights_file.seekg( 0, ios::end );
-  const auto weights_file_size = weights_file.tellg();
+  auto weights_file_size = weights_file.tellg();
   weights_file.seekg( 0, ios::beg );
+
+  // TODO not great, but want to keep compatibility with the .bin files; should be removed in the future
+  CHECK_GT( weights_file_size, sizeof( Config ) ) << "Weights file is empty.";
+  weights_file.seekg( sizeof( Config ), ios::beg );
+  weights_file_size -= sizeof( Config );
 
   LOG( INFO ) << "Weights file size: " << weights_file_size << " bytes";
 
   // allocate the buffer
-  weights_.buffer_ = make_unique_aligned<float, 64>( weights_file_size / sizeof( float ) );
+  buffer_ = make_unique_aligned<float, 64>( weights_file_size / sizeof( float ) );
 
   // read the weights
   {
     GlobalScopeTimer<Timer::Category::DiskIO> _;
-
-    if ( weights_file.read( reinterpret_cast<char*>( weights_.buffer_.get() ), weights_file_size ) ) {
-      LOG( INFO ) << "Read weights file successfully.";
-    } else {
-      throw runtime_error( "Failed to read the weights file." );
-    }
+    CHECK( weights_file.read( reinterpret_cast<char*>( buffer_.get() ), weights_file_size ) )
+      << "Failed to read weights file.";
   }
-
-  // load the configuration
-  memcpy( &config_, weights_.buffer_.get(), sizeof( Config ) );
-  LOG( INFO ) << "Configuration: \n" << config_.to_string();
-
-  // XXX fucking ugly hack
-  const bool shared_weights = config_.vocab_size > 0;
-  config_.vocab_size = abs( config_.vocab_size );
-
-  max_steps_ = config_.seq_len;
 
   // initialize TransformerWeights
-  float* ptr = weights_.buffer_.get();
+  float* ptr = buffer_.get();
 
-  weights_.layers = make_unique<TransformerWeights::LayerWeights[]>( config_.n_layers );
-  weights_.token_embedding_table = ( ptr += sizeof( Config ) / sizeof( float ) );
+  layers = make_unique<TransformerWeights::LayerWeights[]>( config.n_layers );
+  token_embedding_table = ptr;
 
-  auto rms_att_weight = ( ptr += config_.vocab_size * config_.dim );
-  auto wq = ( ptr += config_.n_layers * config_.dim );
-  auto wk = ( ptr += config_.n_layers * config_.dim * config_.dim );
-  auto wv = ( ptr += config_.n_layers * config_.dim * config_.dim );
-  auto wo = ( ptr += config_.n_layers * config_.dim * config_.dim );
-  auto rms_ffn_weight = ( ptr += config_.n_layers * config_.dim * config_.dim );
-  auto w1 = ( ptr += config_.n_layers * config_.dim );
-  auto w2 = ( ptr += config_.n_layers * config_.dim * config_.hidden_dim );
-  auto w3 = ( ptr += config_.n_layers * config_.hidden_dim * config_.dim );
+  auto rms_att_weight = ( ptr += config.vocab_size * config.dim );
+  auto wq = ( ptr += config.n_layers * config.dim );
+  auto wk = ( ptr += config.n_layers * config.dim * config.dim );
+  auto wv = ( ptr += config.n_layers * config.dim * config.dim );
+  auto wo = ( ptr += config.n_layers * config.dim * config.dim );
+  auto rms_ffn_weight = ( ptr += config.n_layers * config.dim * config.dim );
+  auto w1 = ( ptr += config.n_layers * config.dim );
+  auto w2 = ( ptr += config.n_layers * config.dim * config.hidden_dim );
+  auto w3 = ( ptr += config.n_layers * config.hidden_dim * config.dim );
 
-  for ( int i = 0; i < config_.n_layers; i++ ) {
-    weights_.layers[i].rms_att_weight = rms_att_weight + i * config_.dim;
-    weights_.layers[i].wq = wq + i * config_.dim * config_.dim;
-    weights_.layers[i].wk = wk + i * config_.dim * config_.dim;
-    weights_.layers[i].wv = wv + i * config_.dim * config_.dim;
-    weights_.layers[i].wo = wo + i * config_.dim * config_.dim;
-    weights_.layers[i].rms_ffn_weight = rms_ffn_weight + i * config_.dim;
-    weights_.layers[i].w1 = w1 + i * config_.dim * config_.hidden_dim;
-    weights_.layers[i].w2 = w2 + i * config_.hidden_dim * config_.dim;
-    weights_.layers[i].w3 = w3 + i * config_.hidden_dim * config_.dim;
+  for ( int i = 0; i < config.n_layers; i++ ) {
+    layers[i].rms_att_weight = rms_att_weight + i * config.dim;
+    layers[i].wq = wq + i * config.dim * config.dim;
+    layers[i].wk = wk + i * config.dim * config.dim;
+    layers[i].wv = wv + i * config.dim * config.dim;
+    layers[i].wo = wo + i * config.dim * config.dim;
+    layers[i].rms_ffn_weight = rms_ffn_weight + i * config.dim;
+    layers[i].w1 = w1 + i * config.dim * config.hidden_dim;
+    layers[i].w2 = w2 + i * config.hidden_dim * config.dim;
+    layers[i].w3 = w3 + i * config.hidden_dim * config.dim;
   }
 
-  weights_.rms_final_weight = ( ptr += config_.n_layers * config_.dim * config_.hidden_dim );
-  weights_.freq_cis_real = ( ptr += config_.dim );
+  rms_final_weight = ( ptr += config.n_layers * config.dim * config.hidden_dim );
+  freq_cis_real = ( ptr += config.dim );
 
-  const int head_size = config_.dim / config_.n_heads;
-  weights_.freq_cis_imag = ( ptr += config_.seq_len * head_size / 2 );
-  weights_.wcls = shared_weights ? weights_.token_embedding_table : ( ptr += config_.seq_len * head_size / 2 );
+  const int head_size = config.dim / config.n_heads;
+  freq_cis_imag = ( ptr += config.seq_len * head_size / 2 );
+
+  // TODO shared_weights is assumed to be true, fix
+  // wcls = true ? token_embedding_table : ( ptr += config.seq_len * head_size / 2 );
+  wcls = token_embedding_table;
 }
 
-void Llama2::init_vocabulary( const std::filesystem::path& vocabulary_path )
-{
-  ifstream fin { vocabulary_path, ios::binary };
-  CHECK_GT( config_.vocab_size, 0 ) << "Vocabulary size must be positive.";
-
-  int len = 0;
-
-  for ( int i = 0; i < config_.vocab_size; i++ ) {
-    fin.read( reinterpret_cast<char*>( &len ), sizeof( int ) );
-    CHECK_GT( len, 0 ) << "Vocabulary entry length must be positive.";
-    string val;
-    val.resize( len );
-    fin.read( val.data(), val.length() );
-    vocabulary_.push_back( move( val ) );
-  }
-}
-
-void Llama2::init_state()
+Llama2::RunState::RunState( const Config& config )
 {
   const size_t state_size
-    = sizeof( float ) * config_.dim * 6                                         // x, xb, xb2, q, k, v
-      + sizeof( float ) * config_.hidden_dim * 2                                // hb, hb2
-      + sizeof( float ) * config_.n_heads * config_.seq_len                     // att
-      + sizeof( float ) * config_.vocab_size                                    // logits
-      + sizeof( float ) * config_.n_layers * config_.seq_len * config_.dim * 2; // key_cache, value_cache;
+    = sizeof( float ) * config.dim * 6                                       // x, xb, xb2, q, k, v
+      + sizeof( float ) * config.hidden_dim * 2                              // hb, hb2
+      + sizeof( float ) * config.n_heads * config.seq_len                    // att
+      + sizeof( float ) * config.vocab_size                                  // logits
+      + sizeof( float ) * config.n_layers * config.seq_len * config.dim * 2; // key_cache, value_cache;
 
-  state_.buffer_ = make_unique_aligned<float, 64>( state_size );
-  auto ptr = state_.buffer_.get();
+  buffer_ = make_unique_aligned<float, 64>( state_size );
+  auto ptr = buffer_.get();
 
-  state_.x = ptr;
-  state_.xb = ( ptr += config_.dim );
-  state_.xb2 = ( ptr += config_.dim );
-  state_.q = ( ptr += config_.dim );
-  state_.k = ( ptr += config_.dim );
-  state_.v = ( ptr += config_.dim );
-  state_.hb = ( ptr += config_.dim );
-  state_.hb2 = ( ptr += config_.hidden_dim );
-  state_.att = ( ptr += config_.hidden_dim );
-  state_.logits = ( ptr += config_.n_heads * config_.seq_len );
+  x = ptr;
+  xb = ( ptr += config.dim );
+  xb2 = ( ptr += config.dim );
+  q = ( ptr += config.dim );
+  k = ( ptr += config.dim );
+  v = ( ptr += config.dim );
+  hb = ( ptr += config.dim );
+  hb2 = ( ptr += config.hidden_dim );
+  att = ( ptr += config.hidden_dim );
+  logits = ( ptr += config.n_heads * config.seq_len );
 
-  auto kv_cache_start = ( ptr += config_.vocab_size );
-  state_.kv_caches = make_unique<RunState::LayerKVCache[]>( config_.n_layers );
+  auto kv_cache_start = ( ptr += config.vocab_size );
+  kv_caches = make_unique<RunState::LayerKVCache[]>( config.n_layers );
 
-  for ( int i = 0; i < config_.n_layers; i++ ) {
-    state_.kv_caches[i].k = kv_cache_start + i * config_.seq_len * config_.dim;
-    state_.kv_caches[i].v
-      = kv_cache_start + config_.n_layers * config_.seq_len * config_.dim + i * config_.seq_len * config_.dim;
+  for ( int i = 0; i < config.n_layers; i++ ) {
+    kv_caches[i].k = kv_cache_start + i * config.seq_len * config.dim;
+    kv_caches[i].v = kv_cache_start + config.n_layers * config.seq_len * config.dim + i * config.seq_len * config.dim;
   }
 }
 
@@ -316,7 +345,7 @@ void Llama2::transformer( const int token, const int pos )
 
 string Llama2::next_token()
 {
-  if ( current_pos_ >= max_steps_ ) {
+  if ( current_pos_ >= config_.seq_len ) {
     return string {};
   }
 
@@ -346,5 +375,5 @@ string Llama2::next_token()
   current_token_ = next_token;
   current_pos_++;
 
-  return vocabulary_[current_token_];
+  return vocabulary_.get_word( current_token_ );
 }
