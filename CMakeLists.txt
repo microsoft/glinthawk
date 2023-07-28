@@ -42,5 +42,5 @@ set ( ALL_LIBS
   OpenMP::OpenMP_CXX
 )
 
-add_executable ( glinthawk src/frontend/glinthawk.cc )
-target_link_libraries ( glinthawk ${ALL_LIBS} )
+add_executable ( infer src/frontend/infer.cc )
+target_link_libraries ( infer ${ALL_LIBS} )
