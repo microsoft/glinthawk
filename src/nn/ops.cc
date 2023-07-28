@@ -1,6 +1,7 @@
 #include "ops.hh"
 
 #include <cmath>
+#include <pmmintrin.h>
 
 namespace glinthawk {
 
@@ -8,13 +9,43 @@ namespace ops {
 
 void accum( float* a, const float* b, const int size )
 {
+#ifdef __SSE3__
+  for ( int i = 0; i < size; i += 4 ) {
+    __m128 avec = _mm_load_ps( &a[i] );
+    __m128 bvec = _mm_load_ps( &b[i] );
+    avec = _mm_add_ps( avec, bvec );
+    _mm_store_ps( &a[i], avec );
+  }
+#else
   for ( int i = 0; i < size; i++ ) {
     a[i] += b[i];
   }
+#endif
 }
 
 void rmsnorm( float* output, const float* x, const float* weight, const int size )
 {
+#ifdef __SSE3__
+  __m128 ss = _mm_setzero_ps();
+  const __m128 epsilon = _mm_set1_ps( 1e-5f );
+  for ( int j = 0; j < size; j += 4 ) {
+    __m128 xvec = _mm_load_ps( &x[j] );
+    ss = _mm_add_ps( ss, _mm_mul_ps( xvec, xvec ) );
+  }
+  ss = _mm_hadd_ps( ss, ss );
+  ss = _mm_hadd_ps( ss, ss );
+
+  ss = _mm_div_ps( ss, _mm_set1_ps( static_cast<float>( size ) ) );
+  ss = _mm_add_ps( ss, epsilon );
+  ss = _mm_rsqrt_ps( ss ); // reciprocal of square root
+
+  for ( int j = 0; j < size; j += 4 ) {
+    __m128 xvec = _mm_load_ps( &x[j] );
+    __m128 wvec = _mm_load_ps( &weight[j] );
+    __m128 res = _mm_mul_ps( wvec, _mm_mul_ps( ss, xvec ) );
+    _mm_store_ps( &output[j], res );
+  }
+#else
   // calculate sum of squares
   float ss = 0.0f;
   for ( int j = 0; j < size; j++ ) {
@@ -29,6 +60,7 @@ void rmsnorm( float* output, const float* x, const float* weight, const int size
   for ( int j = 0; j < size; j++ ) {
     output[j] = weight[j] * ( ss * x[j] );
   }
+#endif
 }
 
 void softmax( float* x, const int size )
@@ -58,8 +90,20 @@ void softmax( float* x, const int size )
 void matmul( float* xout, const float* x, const float* w, const int n, const int d )
 {
   int i;
-
 #pragma omp parallel for private( i )
+#ifdef __SSE3__
+  for ( i = 0; i < d; i++ ) {
+    __m128 val = _mm_setzero_ps();
+    for ( int j = 0; j < n; j += 4 ) {
+      __m128 xVec = _mm_load_ps( &x[j] );
+      __m128 wVec = _mm_load_ps( &w[i * n + j] );
+      val = _mm_add_ps( val, _mm_mul_ps( xVec, wVec ) );
+    }
+    val = _mm_hadd_ps( val, val );
+    val = _mm_hadd_ps( val, val );
+    _mm_store_ss( &xout[i], val );
+  }
+#else
   for ( i = 0; i < d; i++ ) {
     float val = 0.0f;
     for ( int j = 0; j < n; j++ ) {
@@ -67,6 +111,7 @@ void matmul( float* xout, const float* x, const float* w, const int n, const int
     }
     xout[i] = val;
   }
+#endif
 }
 
 int sample( const float* probabilities, const int n )
