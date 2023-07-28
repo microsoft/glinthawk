@@ -1,7 +1,10 @@
 #include "ops.hh"
 
 #include <cmath>
+
+#if defined( __SSE3__ )
 #include <pmmintrin.h>
+#endif
 
 namespace glinthawk {
 
@@ -9,7 +12,7 @@ namespace ops {
 
 void accum( float* a, const float* b, const int size )
 {
-#ifdef __SSE3__
+#if defined( __SSE3__ )
   for ( int i = 0; i < size; i += 4 ) {
     __m128 avec = _mm_load_ps( &a[i] );
     __m128 bvec = _mm_load_ps( &b[i] );
@@ -25,7 +28,7 @@ void accum( float* a, const float* b, const int size )
 
 void rmsnorm( float* output, const float* x, const float* weight, const int size )
 {
-#ifdef __SSE3__
+#if defined( __SSE3__ )
   __m128 ss = _mm_setzero_ps();
   const __m128 epsilon = _mm_set1_ps( 1e-5f );
   for ( int j = 0; j < size; j += 4 ) {
@@ -91,13 +94,13 @@ void matmul( float* xout, const float* x, const float* w, const int n, const int
 {
   int i;
 #pragma omp parallel for private( i )
-#ifdef __SSE3__
+#if defined( __SSE3__ )
   for ( i = 0; i < d; i++ ) {
     __m128 val = _mm_setzero_ps();
     for ( int j = 0; j < n; j += 4 ) {
-      __m128 xVec = _mm_load_ps( &x[j] );
-      __m128 wVec = _mm_load_ps( &w[i * n + j] );
-      val = _mm_add_ps( val, _mm_mul_ps( xVec, wVec ) );
+      __m128 xvec = _mm_load_ps( x + j );
+      __m128 wvec = _mm_load_ps( w + i * n + j );
+      val = _mm_add_ps( val, _mm_mul_ps( xvec, wvec ) );
     }
     val = _mm_hadd_ps( val, val );
     val = _mm_hadd_ps( val, val );

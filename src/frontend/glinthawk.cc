@@ -40,15 +40,18 @@ int main( int argc, char* argv[] )
   try {
     const filesystem::path tokenizer_path { argv[1] };
     const filesystem::path weights_path { argv[2] };
+
     Llama2 llama { tokenizer_path, weights_path };
 
     cout << endl;
+
     for ( string token = "<s>\n"; not token.empty(); ) {
       cout << token << flush;
 
       GlobalScopeTimer<Timer::Category::TokenGeneration> _;
       token = llama.next_token();
     }
+
     cout << endl;
 
     cerr << endl << global_timer().summary() << endl;

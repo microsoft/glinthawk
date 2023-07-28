@@ -88,7 +88,7 @@ private:
 
     struct KVCache
     {
-      RingBuffer buffer_;
+      std::unique_ptr<float[]> buffer_;
       const int seq_len_;
       const int dim_;
       const int n_layers_;

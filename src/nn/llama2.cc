@@ -193,32 +193,25 @@ Llama2::RunState::RunState( const Config& config )
 }
 
 Llama2::RunState::KVCache::KVCache( const Config& config )
-  : buffer_( sizeof( float ) * config.seq_len * config.n_layers * config.dim * 2 )
+  : buffer_( make_unique<float[]>( sizeof( float ) * config.seq_len * config.n_layers * config.dim * 2 ) )
   , seq_len_( config.seq_len )
   , dim_( config.dim )
   , n_layers_( config.n_layers )
   , head_size_( config.dim / config.n_heads )
 {
-  buffer_.push( buffer_.capacity() );
 }
 
 float* Llama2::RunState::KVCache::key( int layer, const int step, const int head )
 {
-  return reinterpret_cast<float*>( buffer_.readable_region().mutable_data() ) + step * ( n_layers_ * dim_ * 2 )
-         + layer * ( dim_ * 2 ) + head * head_size_;
+  return buffer_.get() + step * ( n_layers_ * dim_ * 2 ) + layer * ( dim_ * 2 ) + head * head_size_;
 }
 
 float* Llama2::RunState::KVCache::value( int layer, const int step, const int head )
 {
-  return reinterpret_cast<float*>( buffer_.readable_region().mutable_data() ) + step * ( n_layers_ * dim_ * 2 )
-         + layer * ( dim_ * 2 ) + dim_ + head * head_size_;
+  return buffer_.get() + step * ( n_layers_ * dim_ * 2 ) + layer * ( dim_ * 2 ) + dim_ + head * head_size_;
 }
 
-void Llama2::RunState::KVCache::pop()
-{
-  buffer_.pop( n_layers_ * dim_ * 2 );
-  buffer_.push( n_layers_ * dim_ * 2 );
-}
+void Llama2::RunState::KVCache::pop() { throw runtime_error( "KVCache::pop() not implemented" ); }
 
 void Llama2::transformer( const int token )
 {
@@ -232,7 +225,6 @@ void Llama2::transformer( const int token )
   const float* content_row = &( weights_.token_embedding_table[token * dim] );
   memcpy( x, content_row, dim * sizeof( *x ) );
 
-  // Question(sadjad): wtf is this?
   // pluck out the "pos" row of freq_cis_real and freq_cis_imag
   float* freq_cis_real_row = weights_.freq_cis_real + current_pos_ * head_size / 2;
   float* freq_cis_imag_row = weights_.freq_cis_imag + current_pos_ * head_size / 2;
@@ -256,12 +248,12 @@ void Llama2::transformer( const int token )
 
       // rotate q and k by the freq_cis_real and freq_cis_imag
       for ( int i = 0; i < head_size; i += 2 ) {
-        float q0 = q[i];
-        float q1 = q[i + 1];
-        float k0 = k[i];
-        float k1 = k[i + 1];
-        float fcr = freq_cis_real_row[i / 2];
-        float fci = freq_cis_imag_row[i / 2];
+        const float q0 = q[i];
+        const float q1 = q[i + 1];
+        const float k0 = k[i];
+        const float k1 = k[i + 1];
+        const float fcr = freq_cis_real_row[i / 2];
+        const float fci = freq_cis_imag_row[i / 2];
         q[i] = q0 * fcr - q1 * fci;
         q[i + 1] = q0 * fci + q1 * fcr;
         k[i] = k0 * fcr - k1 * fci;
