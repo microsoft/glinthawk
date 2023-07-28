@@ -6,6 +6,10 @@
 #include <string_view>
 #include <vector>
 
+#include "simple_string_span.hh"
+
+namespace glinthawk {
+
 //! A reference-counted handle to a file descriptor
 class FileDescriptor
 {
@@ -68,15 +72,11 @@ public:
 
   //! Read into `buffer`
   //! \returns number of bytes read
-  size_t read( std::string& buffer );
+  size_t read( simple_string_span buffer );
 
   //! Attempt to write a buffer
   //! \returns number of bytes written
   size_t write( const std::string_view buffer );
-
-  size_t write( const std::vector<std::string_view>& buffers );
-
-  void write_all( std::string_view buffer );
 
   //! Close the underlying file descriptor
   void close() { _internal_fd->close(); }
@@ -114,3 +114,5 @@ public:
 //! detect busy loop conditions.
 //!
 //! For an example of FileDescriptor use, see the EventLoop class documentation.
+
+} // namespace glinthawk

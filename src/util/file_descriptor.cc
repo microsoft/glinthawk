@@ -10,6 +10,7 @@
 #include <unistd.h>
 
 using namespace std;
+using namespace glinthawk;
 
 //! \param[in] fd is the file descriptor number returned by [open(2)](\ref
 //! man2::open) or similar
@@ -60,13 +61,13 @@ FileDescriptor::FileDescriptor( shared_ptr<FDWrapper> other_shared_ptr )
 FileDescriptor FileDescriptor::duplicate() const { return FileDescriptor( _internal_fd ); }
 
 //! \param[out] str is the string to be read
-size_t FileDescriptor::read( string& buffer )
+size_t FileDescriptor::read( simple_string_span buffer )
 {
   if ( buffer.empty() ) {
     throw runtime_error( "FileDescriptor::read: no space to read" );
   }
 
-  const ssize_t bytes_read = ::read( fd_num(), buffer.data(), buffer.size() );
+  const ssize_t bytes_read = ::read( fd_num(), buffer.mutable_data(), buffer.size() );
   if ( bytes_read < 0 ) {
     if ( _internal_fd->_non_blocking and ( errno == EAGAIN or errno == EINPROGRESS ) ) {
       return 0;
@@ -102,27 +103,6 @@ size_t FileDescriptor::write( const string_view buffer )
   }
 
   return bytes_written;
-}
-
-size_t FileDescriptor::write( const vector<string_view>& buffers )
-{
-  vector<iovec> iovecs;
-  iovecs.reserve( buffers.size() );
-  for ( const auto x : buffers ) {
-    iovecs.push_back( { const_cast<char*>( x.data() ), x.size() } );
-  }
-
-  const ssize_t bytes_written = CheckSystemCall( "writev", ::writev( fd_num(), iovecs.data(), iovecs.size() ) );
-  register_write();
-
-  return bytes_written;
-}
-
-void FileDescriptor::write_all( string_view buffer )
-{
-  while ( not buffer.empty() ) {
-    buffer.remove_prefix( write( buffer ) );
-  }
 }
 
 void FileDescriptor::set_blocking( const bool blocking )
