@@ -224,8 +224,8 @@ void Llama2::transformer( const int token )
   memcpy( x, content_row, dim * sizeof( *x ) );
 
   // pluck out the "pos" row of freq_cis_real and freq_cis_imag
-  const float* freq_cis_real_row = base_weights_.freq_cis_real + current_pos_ * head_size / 2;
-  const float* freq_cis_imag_row = base_weights_.freq_cis_imag + current_pos_ * head_size / 2;
+  const float* freq_cis_real_row = base_weights_.freq_cis_real + state_.current_pos * head_size / 2;
+  const float* freq_cis_imag_row = base_weights_.freq_cis_imag + state_.current_pos * head_size / 2;
 
   for ( int layer_num = 0; layer_num < config_.n_layers; layer_num++ ) {
     const auto& layer_weights = layer_weights_[layer_num];
@@ -260,8 +260,8 @@ void Llama2::transformer( const int token )
     }
 
     // save key,value at this time step (pos) to our kv cache
-    memcpy( state_.kv_cache.key( layer_num, current_pos_ ), state_.k, dim * sizeof( float ) );
-    memcpy( state_.kv_cache.value( layer_num, current_pos_ ), state_.v, dim * sizeof( float ) );
+    memcpy( state_.kv_cache.key( layer_num, state_.current_pos ), state_.k, dim * sizeof( float ) );
+    memcpy( state_.kv_cache.value( layer_num, state_.current_pos ), state_.v, dim * sizeof( float ) );
 
     // multihead attention. iterate over all heads
     int head_num;
@@ -274,7 +274,7 @@ void Llama2::transformer( const int token )
       float* att = state_.att + head_num * config_.seq_len;
 
       // iterate over all timesteps, including the current one
-      for ( int t = 0; t <= current_pos_; t++ ) {
+      for ( int t = 0; t <= state_.current_pos; t++ ) {
         // get the key vector for this head and at this timestep
         const float* k = state_.kv_cache.key( layer_num, t, head_num );
 
@@ -290,13 +290,13 @@ void Llama2::transformer( const int token )
       }
 
       // softmax the scores to get attention weights, from 0..pos inclusively
-      ops::softmax( att, current_pos_ + 1 );
+      ops::softmax( att, state_.current_pos + 1 );
 
       // weighted sum of the values, store back into xb
       float* xb = state_.xb + head_num * head_size;
       memset( xb, 0, head_size * sizeof( float ) );
 
-      for ( int t = 0; t <= current_pos_; t++ ) {
+      for ( int t = 0; t <= state_.current_pos; t++ ) {
         // get the value vector for this head and at this timestep
         const float* v = state_.kv_cache.value( layer_num, t, head_num );
 
@@ -351,14 +351,14 @@ void Llama2::transformer( const int token )
 
 string Llama2::next_token()
 {
-  if ( current_pos_ >= config_.seq_len ) {
+  if ( state_.current_pos >= config_.seq_len ) {
     return string {};
   }
 
   int next_token;
 
   // forward the transformer to get logits for the next token
-  transformer( current_token_ );
+  transformer( state_.current_token );
 
   // sample the next token
   if ( temperature_ == 0.0f ) {
@@ -378,8 +378,8 @@ string Llama2::next_token()
   }
 
   // advance forward
-  current_token_ = next_token;
-  current_pos_++;
+  state_.current_token = next_token;
+  state_.current_pos++;
 
-  return vocabulary_.get_word( current_token_ );
+  return vocabulary_.get_word( state_.current_token );
 }

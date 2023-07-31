@@ -84,6 +84,7 @@ private:
     float* att {};    // buffer for scores/attention values (n_heads, seq_len)
     float* logits {}; // output logits
 
+    // k-v cache
     struct KVCache
     {
       std::unique_ptr<float[]> buffer_;
@@ -101,6 +102,10 @@ private:
     };
 
     KVCache kv_cache;
+
+    // other information
+    int current_token { 1 }; // BOS
+    int current_pos { 0 };   // current position in the sequence
 
     RunState( const Config& config );
     RunState( const RunState& ) = delete;
@@ -131,15 +136,12 @@ private:
   const Vocabulary vocabulary_;
 
   RunState state_;
-
   float temperature_ { 0.0f };
-  int current_token_ { 1 }; // BOS
-  int current_pos_ { 0 };   // current position in the sequence
 
   void transformer( const int token );
 
 public:
-  Llama2( const std::filesystem::path& tokenizer_path, const std::filesystem::path& weights_path );
+  Llama2( const std::filesystem::path& tokenizer_path, const std::filesystem::path& model_path );
 
   std::string next_token();
 
