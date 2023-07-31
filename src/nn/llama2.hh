@@ -13,7 +13,7 @@ namespace glinthawk {
 
 class Llama2
 {
-private:
+protected:
   struct Config
   {
     Config( const std::filesystem::path& weights_path );
@@ -138,7 +138,9 @@ private:
   RunState state_;
   float temperature_ { 0.0f };
 
-  void transformer( const int token );
+  void pass_begin( const int token );
+  void transformer_layer( const int layer_num );
+  void pass_end();
 
 public:
   Llama2( const std::filesystem::path& tokenizer_path, const std::filesystem::path& model_path );
@@ -151,4 +153,7 @@ public:
   Llama2& operator=( Llama2&& ) = default;
 };
 
-}
+class PartialLlama2 : public Llama2
+{};
+
+} // namespace glinthawk
