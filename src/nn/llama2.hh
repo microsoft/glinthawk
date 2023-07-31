@@ -6,6 +6,7 @@
 #include <unordered_map>
 #include <vector>
 
+#include "util/file_descriptor.hh"
 #include "util/ring_buffer.hh"
 
 namespace glinthawk {
@@ -47,7 +48,8 @@ private:
       float* w3; // (hidden_dim, dim)
     };
 
-    std::unique_ptr<float[]> buffer_ {};
+    MMap_Region weights_region_;
+    const float* buffer_;
 
     // token embedding table
     float* token_embedding_table {}; // (vocab_size, dim)

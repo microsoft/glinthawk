@@ -5,9 +5,12 @@
 #include <fstream>
 #include <iostream>
 
+#include <fcntl.h>
 #include <glog/logging.h>
+#include <sys/stat.h>
 
 #include "nn/ops.hh"
+#include "util/exception.hh"
 #include "util/timer.hh"
 
 using namespace std;
@@ -104,35 +107,27 @@ unique_ptr<T[]> make_unique_aligned( size_t size )
 }
 
 Llama2::TransformerWeights::TransformerWeights( const Config& config, const filesystem::path& weights_path )
+  : weights_region_( [&] {
+    FileDescriptor weights_fd { CHECK_SYSCALL( "open", open( weights_path.c_str(), O_RDONLY ) ) };
+
+    struct stat st;
+    CHECK_SYSCALL( "fstat weights", fstat( weights_fd.fd_num(), &st ) );
+    const auto weights_file_size = st.st_size;
+
+    CHECK_GT( weights_file_size, sizeof( Config ) ) << "Weights file is empty.";
+    LOG( INFO ) << "Memory-mapping the weights file: " << weights_path;
+
+    return MMap_Region { nullptr,
+                         static_cast<size_t>( weights_file_size ),
+                         PROT_READ,
+                         MAP_PRIVATE,
+                         weights_fd.fd_num(),
+                         0 };
+  }() )
+  , buffer_( reinterpret_cast<const float*>( weights_region_.addr() ) )
 {
-  ifstream weights_file { weights_path, ios::binary };
-
-  CHECK( weights_file ) << "Failed to open weights file: " << weights_path;
-
-  // get weights_file size
-  weights_file.seekg( 0, ios::end );
-  auto weights_file_size = weights_file.tellg();
-  weights_file.seekg( 0, ios::beg );
-
-  // TODO not great, but want to keep compatibility with the .bin files; should be removed in the future
-  CHECK_GT( weights_file_size, sizeof( Config ) ) << "Weights file is empty.";
-  weights_file.seekg( sizeof( Config ), ios::beg );
-  weights_file_size -= sizeof( Config );
-
-  LOG( INFO ) << "Weights file size: " << weights_file_size << " bytes";
-
-  // allocate the buffer
-  buffer_ = make_unique_aligned<float, 64>( weights_file_size / sizeof( float ) );
-
-  // read the weights
-  {
-    GlobalScopeTimer<Timer::Category::DiskIO> _;
-    CHECK( weights_file.read( reinterpret_cast<char*>( buffer_.get() ), weights_file_size ) )
-      << "Failed to read weights file.";
-  }
-
   // initialize TransformerWeights
-  float* ptr = buffer_.get();
+  float* ptr = const_cast<float*>( buffer_ ) + sizeof( Config ) / sizeof( float );
 
   layers = make_unique<TransformerWeights::LayerWeights[]>( config.n_layers );
   token_embedding_table = ptr;

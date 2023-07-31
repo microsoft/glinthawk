@@ -27,7 +27,7 @@ MMap_Region::~MMap_Region()
 {
   if ( addr_ ) {
     try {
-      SystemCall( "munmap", munmap( addr_, length_ ) );
+      CHECK_SYSCALL( "munmap", munmap( addr_, length_ ) );
     } catch ( const exception& e ) {
       cerr << "Exception destructing MMap_Region: " << e.what() << endl;
     }
@@ -40,8 +40,8 @@ RingBuffer::RingBuffer( const size_t capacity )
       throw runtime_error( "RingBuffer capacity must be multiple of page size (" + to_string( sysconf( _SC_PAGESIZE ) )
                            + ")" );
     }
-    FileDescriptor fd { SystemCall( "memfd_create", syscall( SYS_memfd_create, "RingBuffer", 0 ) ) };
-    SystemCall( "ftruncate", ftruncate( fd.fd_num(), capacity ) );
+    FileDescriptor fd { CHECK_SYSCALL( "memfd_create", syscall( SYS_memfd_create, "RingBuffer", 0 ) ) };
+    CHECK_SYSCALL( "ftruncate", ftruncate( fd.fd_num(), capacity ) );
     return fd;
   }() )
   , virtual_address_space_( nullptr, 2 * capacity, PROT_NONE, MAP_SHARED | MAP_ANONYMOUS, -1 )
