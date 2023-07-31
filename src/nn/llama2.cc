@@ -85,9 +85,71 @@ int Llama2::Vocabulary::get_token( const string& word ) const
   return it->second;
 }
 
-Llama2::Llama2( const std::filesystem::path& tokenizer_path, const filesystem::path& weights_path )
-  : config_( weights_path )
-  , weights_( config_, weights_path )
+Llama2::BaseWeights::BaseWeights( const Config& config, const float* model )
+{
+  auto ptr = model;
+  this->token_embedding_table = ptr;
+
+  // skip over all the layer weights
+  ptr += config.vocab_size * config.dim
+         + config.n_layers * ( 2 * config.dim + 4 * config.dim * config.dim + 3 * config.dim * config.hidden_dim );
+
+  const int head_size = config.dim / config.n_heads;
+
+  this->rms_final_weight = ptr;
+  this->freq_cis_real = ( ptr += config.dim );
+  this->freq_cis_imag = ( ptr += config.seq_len * head_size / 2 );
+
+  // TODO shared_weights is assumed to be true, fix
+  // wcls = true ? token_embedding_table : ( ptr += config.seq_len * head_size / 2 );
+  this->wcls = token_embedding_table;
+}
+
+Llama2::LayerWeights::LayerWeights( const Config& config, const float* model, const int layer_num )
+{
+  auto ptr = model;
+
+  // base pointers
+  auto base_rms_att_weight = ( ptr += config.vocab_size * config.dim );
+  auto base_wq = ( ptr += config.n_layers * config.dim );
+  auto base_wk = ( ptr += config.n_layers * config.dim * config.dim );
+  auto base_wv = ( ptr += config.n_layers * config.dim * config.dim );
+  auto base_wo = ( ptr += config.n_layers * config.dim * config.dim );
+  auto base_rms_ffn_weight = ( ptr += config.n_layers * config.dim * config.dim );
+  auto base_w1 = ( ptr += config.n_layers * config.dim );
+  auto base_w2 = ( ptr += config.n_layers * config.dim * config.hidden_dim );
+  auto base_w3 = ( ptr += config.n_layers * config.hidden_dim * config.dim );
+
+  this->rms_att_weight = base_rms_att_weight + layer_num * config.dim;
+  this->rms_ffn_weight = base_rms_ffn_weight + layer_num * config.dim;
+  this->wq = base_wq + layer_num * config.dim * config.dim;
+  this->wk = base_wk + layer_num * config.dim * config.dim;
+  this->wv = base_wv + layer_num * config.dim * config.dim;
+  this->wo = base_wo + layer_num * config.dim * config.dim;
+  this->w1 = base_w1 + layer_num * config.dim * config.hidden_dim;
+  this->w2 = base_w2 + layer_num * config.hidden_dim * config.dim;
+  this->w3 = base_w3 + layer_num * config.hidden_dim * config.dim;
+}
+
+Llama2::Llama2( const std::filesystem::path& tokenizer_path, const filesystem::path& model_path )
+  : model_mmap_region_( [&] {
+    const auto model_fs = filesystem::file_size( model_path );
+    FileDescriptor weights_fd { CHECK_SYSCALL( "open", open( model_path.c_str(), O_RDONLY ) ) };
+    return MMap_Region { nullptr, model_fs, PROT_READ, MAP_PRIVATE, weights_fd.fd_num(), 0 };
+  }() )
+  , model_ptr_( reinterpret_cast<const float*>( model_mmap_region_.addr() ) + sizeof( Config ) / sizeof( float ) )
+  , config_( model_path )
+  , base_weights_( config_, model_ptr_ )
+  , layer_weights_( [&] {
+    std::vector<LayerWeights> layers {};
+    layers.reserve( config_.n_layers );
+
+    for ( int i = 0; i < config_.n_layers; i++ ) {
+      layers.emplace_back( config_, model_ptr_, i );
+    }
+
+    return layers;
+  }() )
   , vocabulary_( config_, tokenizer_path )
   , state_( config_ )
 {
@@ -104,65 +166,6 @@ unique_ptr<T[]> make_unique_aligned( size_t size )
   }
 
   return unique_ptr<T[]>( static_cast<T*>( ptr ) );
-}
-
-Llama2::TransformerWeights::TransformerWeights( const Config& config, const filesystem::path& weights_path )
-  : weights_region_( [&] {
-    FileDescriptor weights_fd { CHECK_SYSCALL( "open", open( weights_path.c_str(), O_RDONLY ) ) };
-
-    struct stat st;
-    CHECK_SYSCALL( "fstat weights", fstat( weights_fd.fd_num(), &st ) );
-    const auto weights_file_size = st.st_size;
-
-    CHECK_GT( weights_file_size, sizeof( Config ) ) << "Weights file is empty.";
-    LOG( INFO ) << "Memory-mapping the weights file: " << weights_path;
-
-    return MMap_Region { nullptr,
-                         static_cast<size_t>( weights_file_size ),
-                         PROT_READ,
-                         MAP_PRIVATE,
-                         weights_fd.fd_num(),
-                         0 };
-  }() )
-  , buffer_( reinterpret_cast<const float*>( weights_region_.addr() ) )
-{
-  // initialize TransformerWeights
-  float* ptr = const_cast<float*>( buffer_ ) + sizeof( Config ) / sizeof( float );
-
-  layers = make_unique<TransformerWeights::LayerWeights[]>( config.n_layers );
-  token_embedding_table = ptr;
-
-  auto rms_att_weight = ( ptr += config.vocab_size * config.dim );
-  auto wq = ( ptr += config.n_layers * config.dim );
-  auto wk = ( ptr += config.n_layers * config.dim * config.dim );
-  auto wv = ( ptr += config.n_layers * config.dim * config.dim );
-  auto wo = ( ptr += config.n_layers * config.dim * config.dim );
-  auto rms_ffn_weight = ( ptr += config.n_layers * config.dim * config.dim );
-  auto w1 = ( ptr += config.n_layers * config.dim );
-  auto w2 = ( ptr += config.n_layers * config.dim * config.hidden_dim );
-  auto w3 = ( ptr += config.n_layers * config.hidden_dim * config.dim );
-
-  for ( int i = 0; i < config.n_layers; i++ ) {
-    layers[i].rms_att_weight = rms_att_weight + i * config.dim;
-    layers[i].wq = wq + i * config.dim * config.dim;
-    layers[i].wk = wk + i * config.dim * config.dim;
-    layers[i].wv = wv + i * config.dim * config.dim;
-    layers[i].wo = wo + i * config.dim * config.dim;
-    layers[i].rms_ffn_weight = rms_ffn_weight + i * config.dim;
-    layers[i].w1 = w1 + i * config.dim * config.hidden_dim;
-    layers[i].w2 = w2 + i * config.hidden_dim * config.dim;
-    layers[i].w3 = w3 + i * config.hidden_dim * config.dim;
-  }
-
-  rms_final_weight = ( ptr += config.n_layers * config.dim * config.hidden_dim );
-  freq_cis_real = ( ptr += config.dim );
-
-  const int head_size = config.dim / config.n_heads;
-  freq_cis_imag = ( ptr += config.seq_len * head_size / 2 );
-
-  // TODO shared_weights is assumed to be true, fix
-  // wcls = true ? token_embedding_table : ( ptr += config.seq_len * head_size / 2 );
-  wcls = token_embedding_table;
 }
 
 Llama2::RunState::RunState( const Config& config )
@@ -217,15 +220,15 @@ void Llama2::transformer( const int token )
   const int head_size = dim / config_.n_heads;
 
   // copy the token embedding into x
-  const float* content_row = weights_.token_embedding_table + token * dim;
+  const float* content_row = base_weights_.token_embedding_table + token * dim;
   memcpy( x, content_row, dim * sizeof( *x ) );
 
   // pluck out the "pos" row of freq_cis_real and freq_cis_imag
-  float* freq_cis_real_row = weights_.freq_cis_real + current_pos_ * head_size / 2;
-  float* freq_cis_imag_row = weights_.freq_cis_imag + current_pos_ * head_size / 2;
+  const float* freq_cis_real_row = base_weights_.freq_cis_real + current_pos_ * head_size / 2;
+  const float* freq_cis_imag_row = base_weights_.freq_cis_imag + current_pos_ * head_size / 2;
 
   for ( int layer_num = 0; layer_num < config_.n_layers; layer_num++ ) {
-    const auto& layer_weights = weights_.layers[layer_num];
+    const auto& layer_weights = layer_weights_[layer_num];
 
     // attention rmsnorm
     ops::rmsnorm( state_.xb, x, layer_weights.rms_att_weight, dim );
@@ -340,10 +343,10 @@ void Llama2::transformer( const int token )
   }
 
   // final rmsnorm
-  ops::rmsnorm( x, x, weights_.rms_final_weight, dim );
+  ops::rmsnorm( x, x, base_weights_.rms_final_weight, dim );
 
   // classifier into logits
-  ops::matmul( state_.logits, x, weights_.wcls, config_.dim, config_.vocab_size );
+  ops::matmul( state_.logits, x, base_weights_.wcls, config_.dim, config_.vocab_size );
 }
 
 string Llama2::next_token()

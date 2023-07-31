@@ -16,60 +16,56 @@ class Llama2
 private:
   struct Config
   {
-    int dim {};        // transformer dimension
-    int hidden_dim {}; // for ffn layers
-    int n_layers {};   // number of layers
-    int n_heads {};    // number of query heads
-    int n_kv_heads {}; // number of key/value heads (can be < query heads because of multiquery)
-    int vocab_size {}; // vocabulary size (byte-level)
-    int seq_len {};    // max sequence length
-
     Config( const std::filesystem::path& weights_path );
     std::string to_string() const;
+
+    int32_t dim {};        // transformer dimension
+    int32_t hidden_dim {}; // for ffn layers
+    int32_t n_layers {};   // number of layers
+    int32_t n_heads {};    // number of query heads
+    int32_t n_kv_heads {}; // number of key/value heads (can be < query heads because of multiquery)
+    int32_t vocab_size {}; // vocabulary size (byte-level)
+    int32_t seq_len {};    // max sequence length
   };
 
-  struct TransformerWeights
+  struct BaseWeights
   {
-    struct LayerWeights
-    {
-      // weights for rmsnorms
-      float* rms_att_weight; // (dim) rmsnorm weights
-      float* rms_ffn_weight; // (dim)
-
-      // weights for matmuls
-      float* wq; // (dim, dim)
-      float* wk; // (dim, dim)
-      float* wv; // (dim, dim)
-      float* wo; // (dim, dim)
-
-      // weights for ffn
-      float* w1; // (hidden_dim, dim)
-      float* w2; // (dim, hidden_dim)
-      float* w3; // (hidden_dim, dim)
-    };
-
-    MMap_Region weights_region_;
-    const float* buffer_;
+    BaseWeights( const Config& config, const float* model );
+    BaseWeights( const BaseWeights& ) = delete;
+    BaseWeights operator=( const BaseWeights& ) = delete;
 
     // token embedding table
-    float* token_embedding_table {}; // (vocab_size, dim)
-
-    // transformer layers
-    std::unique_ptr<LayerWeights[]> layers {}; // (n_layers,)
+    const float* token_embedding_table {}; // (vocab_size, dim)
 
     // final rmsnorm
-    float* rms_final_weight {}; // (dim,)
+    const float* rms_final_weight {}; // (dim,)
 
     // freq_cis for RoPE relatively positional embeddings
-    float* freq_cis_real {}; // (seq_len, dim/2)
-    float* freq_cis_imag {}; // (seq_len, dim/2)
+    const float* freq_cis_real {}; // (seq_len, dim/2)
+    const float* freq_cis_imag {}; // (seq_len, dim/2)
 
     // classifier weights for the logits, on the last layer
-    float* wcls {};
+    const float* wcls {};
+  };
 
-    TransformerWeights( const Config& config, const std::filesystem::path& weights_path );
-    TransformerWeights( const TransformerWeights& ) = delete;
-    TransformerWeights operator=( const TransformerWeights& ) = delete;
+  struct LayerWeights
+  {
+    LayerWeights( const Config& config, const float* model, const int32_t layer_num );
+
+    // weights for rmsnorms
+    const float* rms_att_weight { nullptr }; // (dim) rmsnorm weights
+    const float* rms_ffn_weight { nullptr }; // (dim)
+
+    // weights for matmuls
+    const float* wq { nullptr }; // (dim, dim)
+    const float* wk { nullptr }; // (dim, dim)
+    const float* wv { nullptr }; // (dim, dim)
+    const float* wo { nullptr }; // (dim, dim)
+
+    // weights for ffn
+    const float* w1 { nullptr }; // (hidden_dim, dim)
+    const float* w2 { nullptr }; // (dim, hidden_dim)
+    const float* w3 { nullptr }; // (hidden_dim, dim)
   };
 
   struct RunState
@@ -126,9 +122,14 @@ private:
   };
 
 private:
-  Config config_;
-  TransformerWeights weights_;
-  Vocabulary vocabulary_;
+  MMap_Region model_mmap_region_;
+  const float* model_ptr_;
+
+  const Config config_;
+  const BaseWeights base_weights_;
+  const std::vector<LayerWeights> layer_weights_;
+  const Vocabulary vocabulary_;
+
   RunState state_;
 
   float temperature_ { 0.0f };
