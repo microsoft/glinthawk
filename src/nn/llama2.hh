@@ -2,6 +2,7 @@
 
 #include <filesystem>
 #include <memory>
+#include <optional>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -10,6 +11,21 @@
 #include "util/ring_buffer.hh"
 
 namespace glinthawk {
+
+struct MatrixBuffer
+{
+  float* ptr { nullptr };
+  int32_t len { 0 };
+};
+
+struct InferenceState
+{
+  int token { 1 };
+  int token_pos { 0 };
+  int next_layer { 0 };
+  MatrixBuffer activations {};
+  MatrixBuffer logits {};
+};
 
 class Llama2
 {
@@ -50,6 +66,7 @@ protected:
 
   struct LayerWeights
   {
+    LayerWeights() = default;
     LayerWeights( const Config& config, const float* model, const int32_t layer_num );
 
     // weights for rmsnorms
@@ -70,6 +87,10 @@ protected:
 
   struct RunState
   {
+    RunState( const Config& config );
+    RunState( const RunState& ) = delete;
+    RunState operator=( const RunState& ) = delete;
+
     std::unique_ptr<float[]> buffer_;
 
     // current wave of activations
@@ -102,14 +123,6 @@ protected:
     };
 
     KVCache kv_cache;
-
-    // other information
-    int current_token { 1 }; // BOS
-    int current_pos { 0 };   // current position in the sequence
-
-    RunState( const Config& config );
-    RunState( const RunState& ) = delete;
-    RunState operator=( const RunState& ) = delete;
   };
 
   class Vocabulary
@@ -131,21 +144,29 @@ private:
   const float* model_ptr_;
 
   const Config config_;
+  const int32_t start_layer_num_;
+  const int32_t end_layer_num_;
+
   const BaseWeights base_weights_;
   const std::vector<LayerWeights> layer_weights_;
   const Vocabulary vocabulary_;
 
   RunState state_;
-  float temperature_ { 0.0f };
+
+  const float temperature_ { 0.0f };
 
   void pass_begin( const int token );
-  void transformer_layer( const int layer_num );
+  void transformer_layer( const int layer_num, const int token_pos );
   void pass_end();
 
 public:
-  Llama2( const std::filesystem::path& tokenizer_path, const std::filesystem::path& model_path );
+  Llama2( const std::filesystem::path& tokenizer_path,
+          const std::filesystem::path& model_path,
+          const int32_t start_layer = 0,
+          const int32_t end_layer = -1 );
 
-  std::string next_token();
+  InferenceState forward( const InferenceState& inference_state );
+  std::pair<std::string, InferenceState> extract_word( const InferenceState& inference_state );
 
   Llama2( const Llama2& ) = delete;
   Llama2& operator=( const Llama2& ) = delete;

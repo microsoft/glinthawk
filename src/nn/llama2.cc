@@ -131,7 +131,10 @@ Llama2::LayerWeights::LayerWeights( const Config& config, const float* model, co
   this->w3 = base_w3 + layer_num * config.hidden_dim * config.dim;
 }
 
-Llama2::Llama2( const std::filesystem::path& tokenizer_path, const filesystem::path& model_path )
+Llama2::Llama2( const std::filesystem::path& tokenizer_path,
+                const filesystem::path& model_path,
+                const int32_t start_layer,
+                const int32_t end_layer )
   : model_mmap_region_( [&] {
     const auto model_fs = filesystem::file_size( model_path );
     FileDescriptor model_fd { CHECK_SYSCALL( "open", open( model_path.c_str(), O_RDONLY ) ) };
@@ -139,13 +142,18 @@ Llama2::Llama2( const std::filesystem::path& tokenizer_path, const filesystem::p
   }() )
   , model_ptr_( reinterpret_cast<const float*>( model_mmap_region_.addr() ) + sizeof( Config ) / sizeof( float ) )
   , config_( model_path )
+  , start_layer_num_( start_layer )
+  , end_layer_num_( end_layer == -1 ? config_.n_layers - 1 : end_layer )
   , base_weights_( config_, model_ptr_ )
   , layer_weights_( [&] {
-    std::vector<LayerWeights> layers {};
-    layers.reserve( config_.n_layers );
+    CHECK_GE( start_layer_num_, 0 ) << "Start layer must be non-negative.";
+    CHECK_LT( end_layer_num_, config_.n_layers ) << "End layer must be less than the number of layers.";
 
-    for ( int i = 0; i < config_.n_layers; i++ ) {
-      layers.emplace_back( config_, model_ptr_, i );
+    std::vector<LayerWeights> layers {};
+    layers.resize( config_.n_layers );
+
+    for ( int i = start_layer_num_; i <= end_layer_num_; i++ ) {
+      layers[i] = LayerWeights { config_, model_ptr_, i };
     }
 
     return layers;
@@ -160,11 +168,7 @@ unique_ptr<T[]> make_unique_aligned( size_t size )
 {
   GlobalScopeTimer<Timer::Category::MemoryAllocation> _;
   void* ptr = aligned_alloc( alignment, size * sizeof( T ) );
-
-  if ( not ptr ) {
-    throw runtime_error( "Failed to allocate memory." );
-  }
-
+  CHECK( ptr ) << "Failed to allocate memory.";
   return unique_ptr<T[]>( static_cast<T*>( ptr ) );
 }
 
@@ -211,14 +215,14 @@ float* Llama2::RunState::KVCache::value( int layer, const int step, const int he
 
 void Llama2::RunState::KVCache::pop() { throw runtime_error( "KVCache::pop() not implemented" ); }
 
-void Llama2::pass_begin(const int token)
+void Llama2::pass_begin( const int token )
 {
   // copy the token embedding into the state
   const float* content_row = base_weights_.token_embedding_table + token * config_.dim;
   memcpy( state_.x, content_row, config_.dim * sizeof( *state_.x ) );
 }
 
-void Llama2::transformer_layer( const int32_t layer_num )
+void Llama2::transformer_layer( const int32_t layer_num, const int token_pos )
 {
   float* x = state_.x;
   const int dim = config_.dim;
@@ -226,8 +230,8 @@ void Llama2::transformer_layer( const int32_t layer_num )
   const int head_size = dim / config_.n_heads;
 
   // pluck out the "pos" row of freq_cis_real and freq_cis_imag
-  const float* freq_cis_real_row = base_weights_.freq_cis_real + state_.current_pos * head_size / 2;
-  const float* freq_cis_imag_row = base_weights_.freq_cis_imag + state_.current_pos * head_size / 2;
+  const float* freq_cis_real_row = base_weights_.freq_cis_real + token_pos * head_size / 2;
+  const float* freq_cis_imag_row = base_weights_.freq_cis_imag + token_pos * head_size / 2;
 
   const auto& layer_weights = layer_weights_[layer_num];
 
@@ -261,8 +265,8 @@ void Llama2::transformer_layer( const int32_t layer_num )
   }
 
   // save key,value at this time step (pos) to our kv cache
-  memcpy( state_.kv_cache.key( layer_num, state_.current_pos ), state_.k, dim * sizeof( float ) );
-  memcpy( state_.kv_cache.value( layer_num, state_.current_pos ), state_.v, dim * sizeof( float ) );
+  memcpy( state_.kv_cache.key( layer_num, token_pos ), state_.k, dim * sizeof( float ) );
+  memcpy( state_.kv_cache.value( layer_num, token_pos ), state_.v, dim * sizeof( float ) );
 
   // multihead attention. iterate over all heads
   int head_num;
@@ -275,7 +279,7 @@ void Llama2::transformer_layer( const int32_t layer_num )
     float* att = state_.att + head_num * config_.seq_len;
 
     // iterate over all timesteps, including the current one
-    for ( int t = 0; t <= state_.current_pos; t++ ) {
+    for ( int t = 0; t <= token_pos; t++ ) {
       // get the key vector for this head and at this timestep
       const float* k = state_.kv_cache.key( layer_num, t, head_num );
 
@@ -291,13 +295,13 @@ void Llama2::transformer_layer( const int32_t layer_num )
     }
 
     // softmax the scores to get attention weights, from 0..pos inclusively
-    ops::softmax( att, state_.current_pos + 1 );
+    ops::softmax( att, token_pos + 1 );
 
     // weighted sum of the values, store back into xb
     float* xb = state_.xb + head_num * head_size;
     memset( xb, 0, head_size * sizeof( float ) );
 
-    for ( int t = 0; t <= state_.current_pos; t++ ) {
+    for ( int t = 0; t <= token_pos; t++ ) {
       // get the value vector for this head and at this timestep
       const float* v = state_.kv_cache.value( layer_num, t, head_num );
 
@@ -352,41 +356,66 @@ void Llama2::pass_end()
   ops::matmul( state_.logits, state_.x, base_weights_.wcls, config_.dim, config_.vocab_size );
 }
 
-string Llama2::next_token()
+InferenceState Llama2::forward( const InferenceState& inference_state )
 {
-  if ( state_.current_pos >= config_.seq_len ) {
-    return string {};
+  CHECK( start_layer_num_ == inference_state.next_layer ) << "Cannot apply to this instance.";
+
+  InferenceState result { inference_state };
+
+  if ( inference_state.next_layer == 0 ) {
+    pass_begin( inference_state.token );
+  } else {
+    memcpy( state_.x, inference_state.activations.ptr, config_.dim * sizeof( float ) );
+  }
+
+  for ( int i = start_layer_num_; i <= end_layer_num_; i++ ) {
+    transformer_layer( i, inference_state.token_pos );
+  }
+
+  if ( end_layer_num_ == config_.n_layers - 1 ) {
+    pass_end();
+
+    result.next_layer = -1; // next step is token extraction
+    result.token_pos++;
+    result.activations = { state_.x, config_.dim };
+    result.logits = { state_.logits, config_.vocab_size };
+  } else {
+    result.next_layer = end_layer_num_ + 1;
+    result.activations = { state_.x, config_.dim };
+  }
+
+  return result;
+}
+
+pair<string, InferenceState> Llama2::extract_word( const InferenceState& inference_state )
+{
+  CHECK( inference_state.next_layer == -1 ) << "Cannot extract word from this layer.";
+
+  if ( inference_state.token_pos >= config_.seq_len ) {
+    return { string {}, inference_state };
   }
 
   int next_token;
 
-  // forward the transformer to get logits for the next token
-  pass_begin( state_.current_token );
-  for ( int i = 0; i < config_.n_layers; i++ ) {
-    transformer_layer( i );
-  }
-  pass_end();
-
-  // sample the next token
   if ( temperature_ == 0.0f ) {
     // greedy argmax sampling
-    next_token = ops::argmax( state_.logits, config_.vocab_size );
+    next_token = ops::argmax( inference_state.logits.ptr, config_.vocab_size );
   } else {
     // apply the temperature to the logits
     for ( int q = 0; q < config_.vocab_size; q++ ) {
-      state_.logits[q] /= temperature_;
+      inference_state.logits.ptr[q] /= temperature_;
     }
 
     // apply softmax to the logits to get the probabilities for next token
-    ops::softmax( state_.logits, config_.vocab_size );
+    ops::softmax( inference_state.logits.ptr, config_.vocab_size );
 
     // we now want to sample from this distribution to get the next token
-    next_token = ops::sample( state_.logits, config_.vocab_size );
+    next_token = ops::sample( inference_state.logits.ptr, config_.vocab_size );
   }
 
-  // advance forward
-  state_.current_token = next_token;
-  state_.current_pos++;
+  InferenceState result { inference_state };
+  result.token = next_token;
+  result.next_layer = 0;
 
-  return vocabulary_.get_word( state_.current_token );
+  return { vocabulary_.get_word( next_token ), result };
 }

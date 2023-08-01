@@ -45,11 +45,14 @@ int main( int argc, char* argv[] )
 
     cout << endl;
 
+    InferenceState inference_state;
+
     for ( string token = "<s>\n"; not token.empty(); ) {
       cout << token << flush;
 
       GlobalScopeTimer<Timer::Category::TokenGeneration> _;
-      token = llama.next_token();
+      inference_state = llama.forward( inference_state );
+      tie( token, inference_state ) = llama.extract_word( inference_state );
     }
 
     cout << endl;
