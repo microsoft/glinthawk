@@ -134,8 +134,8 @@ Llama2::LayerWeights::LayerWeights( const Config& config, const float* model, co
 Llama2::Llama2( const std::filesystem::path& tokenizer_path, const filesystem::path& model_path )
   : model_mmap_region_( [&] {
     const auto model_fs = filesystem::file_size( model_path );
-    FileDescriptor weights_fd { CHECK_SYSCALL( "open", open( model_path.c_str(), O_RDONLY ) ) };
-    return MMap_Region { nullptr, model_fs, PROT_READ, MAP_PRIVATE, weights_fd.fd_num(), 0 };
+    FileDescriptor model_fd { CHECK_SYSCALL( "open", open( model_path.c_str(), O_RDONLY ) ) };
+    return MMap_Region { nullptr, model_fs, PROT_READ, MAP_PRIVATE, model_fd.fd_num(), 0 };
   }() )
   , model_ptr_( reinterpret_cast<const float*>( model_mmap_region_.addr() ) + sizeof( Config ) / sizeof( float ) )
   , config_( model_path )
