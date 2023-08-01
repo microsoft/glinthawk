@@ -87,7 +87,7 @@ protected:
 
   struct RunState
   {
-    RunState( const Config& config );
+    RunState( const Config& config, const int32_t start_layer, const int32_t end_layer );
     RunState( const RunState& ) = delete;
     RunState operator=( const RunState& ) = delete;
 
@@ -108,6 +108,9 @@ protected:
     // k-v cache
     struct KVCache
     {
+      const int32_t start_layer_;
+      const int32_t end_layer_;
+
       std::unique_ptr<float[]> buffer_;
       const int seq_len_;
       const int dim_;
@@ -119,7 +122,7 @@ protected:
 
       void pop();
 
-      KVCache( const Config& config );
+      KVCache( const Config& config, const int32_t start_layer, const int32_t end_layer );
     };
 
     KVCache kv_cache;

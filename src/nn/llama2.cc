@@ -159,7 +159,7 @@ Llama2::Llama2( const std::filesystem::path& tokenizer_path,
     return layers;
   }() )
   , vocabulary_( config_, tokenizer_path )
-  , state_( config_ )
+  , state_( config_, start_layer_num_, end_layer_num_ )
 {
 }
 
@@ -172,13 +172,13 @@ unique_ptr<T[]> make_unique_aligned( size_t size )
   return unique_ptr<T[]>( static_cast<T*>( ptr ) );
 }
 
-Llama2::RunState::RunState( const Config& config )
+Llama2::RunState::RunState( const Config& config, const int32_t start_layer, const int32_t end_layer )
   : buffer_( make_unique_aligned<float, 64>( sizeof( float ) * config.dim * 6          /* x, xb, xb2, q, k, v */
                                              + sizeof( float ) * config.hidden_dim * 2 /* hb, hb2 */
                                              + sizeof( float ) * config.n_heads * config.seq_len /* att */
                                              + sizeof( float ) * config.vocab_size               /* logits */
                                              ) )
-  , kv_cache( config )
+  , kv_cache( config, start_layer, end_layer )
 {
   auto ptr = buffer_.get();
 
@@ -194,22 +194,27 @@ Llama2::RunState::RunState( const Config& config )
   logits = ( ptr += config.n_heads * config.seq_len );
 }
 
-Llama2::RunState::KVCache::KVCache( const Config& config )
-  : buffer_( make_unique<float[]>( sizeof( float ) * config.seq_len * config.n_layers * config.dim * 2 ) )
+Llama2::RunState::KVCache::KVCache( const Config& config, const int32_t start_layer, const int32_t end_layer )
+  : start_layer_( start_layer )
+  , end_layer_( end_layer )
+  , buffer_(
+      make_unique<float[]>( sizeof( float ) * config.seq_len * ( end_layer - start_layer + 1 ) * config.dim * 2 ) )
   , seq_len_( config.seq_len )
   , dim_( config.dim )
-  , n_layers_( config.n_layers )
+  , n_layers_( end_layer_ - start_layer_ + 1 )
   , head_size_( config.dim / config.n_heads )
 {
 }
 
 float* Llama2::RunState::KVCache::key( int layer, const int step, const int head )
 {
+  layer -= start_layer_;
   return buffer_.get() + step * ( n_layers_ * dim_ * 2 ) + layer * ( dim_ * 2 ) + head * head_size_;
 }
 
 float* Llama2::RunState::KVCache::value( int layer, const int step, const int head )
 {
+  layer -= start_layer_;
   return buffer_.get() + step * ( n_layers_ * dim_ * 2 ) + layer * ( dim_ * 2 ) + dim_ + head * head_size_;
 }
 
