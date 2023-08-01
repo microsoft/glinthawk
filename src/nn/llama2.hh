@@ -7,25 +7,12 @@
 #include <unordered_map>
 #include <vector>
 
+#include "inference.hh"
+
 #include "util/file_descriptor.hh"
 #include "util/ring_buffer.hh"
 
 namespace glinthawk {
-
-struct MatrixBuffer
-{
-  float* ptr { nullptr };
-  int32_t len { 0 };
-};
-
-struct InferenceState
-{
-  int token { 1 };
-  int token_pos { 0 };
-  int next_layer { 0 };
-  MatrixBuffer activations {};
-  MatrixBuffer logits {};
-};
 
 class Llama2
 {
@@ -162,14 +149,15 @@ private:
   void transformer_layer( const int layer_num, const int token_pos );
   void pass_end();
 
+  std::pair<int, std::string> extract_output( const InferenceState& inference_state );
+
 public:
   Llama2( const std::filesystem::path& tokenizer_path,
           const std::filesystem::path& model_path,
           const int32_t start_layer = 0,
           const int32_t end_layer = -1 );
 
-  InferenceState forward( const InferenceState& inference_state );
-  std::pair<std::string, InferenceState> extract_word( const InferenceState& inference_state );
+  InferenceResult forward( const InferenceState& inference_state );
 
   Llama2( const Llama2& ) = delete;
   Llama2& operator=( const Llama2& ) = delete;

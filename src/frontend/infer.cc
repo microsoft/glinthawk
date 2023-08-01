@@ -42,19 +42,20 @@ int main( int argc, char* argv[] )
     const filesystem::path weights_path { argv[2] };
 
     Llama2 llama { tokenizer_path, weights_path };
-
-    cout << endl;
-
     InferenceState inference_state;
+    InferenceResult inference_result;
 
-    for ( string token = "<s>\n"; not token.empty(); ) {
-      cout << token << flush;
+    for ( string word = "<s>\n"; not word.empty(); ) {
+      cout << word << flush;
 
-      GlobalScopeTimer<Timer::Category::TokenGeneration> _;
-      inference_state = llama.forward( inference_state );
-      tie( token, inference_state ) = llama.extract_word( inference_state );
+      {
+        GlobalScopeTimer<Timer::Category::TokenGeneration> _;
+        inference_result = llama.forward( inference_state );
+      }
+
+      word = inference_result.word.value();
+      inference_state = inference_result.inference_state;
     }
-
     cout << endl;
 
     cerr << endl << global_timer().summary() << endl;

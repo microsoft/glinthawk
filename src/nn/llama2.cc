@@ -361,15 +361,16 @@ void Llama2::pass_end()
   ops::matmul( state_.logits, state_.x, base_weights_.wcls, config_.dim, config_.vocab_size );
 }
 
-InferenceState Llama2::forward( const InferenceState& inference_state )
+InferenceResult Llama2::forward( const InferenceState& inference_state )
 {
   CHECK( start_layer_num_ == inference_state.next_layer ) << "Cannot apply to this instance.";
 
-  InferenceState result { inference_state };
+  InferenceResult result;
 
   if ( inference_state.next_layer == 0 ) {
     pass_begin( inference_state.token );
   } else {
+    CHECK_EQ( inference_state.activations.len, config_.dim ) << "Invalid activations.";
     memcpy( state_.x, inference_state.activations.ptr, config_.dim * sizeof( float ) );
   }
 
@@ -380,47 +381,48 @@ InferenceState Llama2::forward( const InferenceState& inference_state )
   if ( end_layer_num_ == config_.n_layers - 1 ) {
     pass_end();
 
-    result.next_layer = -1; // next step is token extraction
-    result.token_pos++;
-    result.activations = { state_.x, config_.dim };
-    result.logits = { state_.logits, config_.vocab_size };
+    // token extraction
+    auto [next_token, next_word] = extract_output( inference_state );
+
+    result.inference_state.token = next_token;
+    result.inference_state.token_pos = inference_state.token_pos + 1;
+    result.inference_state.next_layer = 0;
+    result.inference_state.activations = { state_.x, config_.dim };
+    result.word.emplace( move( next_word ) );
   } else {
-    result.next_layer = end_layer_num_ + 1;
-    result.activations = { state_.x, config_.dim };
+    result.inference_state.token = inference_state.token;
+    result.inference_state.token_pos = inference_state.token_pos;
+    result.inference_state.next_layer = end_layer_num_ + 1;
+    result.inference_state.activations = { state_.x, config_.dim };
+    result.word.reset();
   }
 
   return result;
 }
 
-pair<string, InferenceState> Llama2::extract_word( const InferenceState& inference_state )
+std::pair<int, std::string> Llama2::extract_output( const InferenceState& inference_state )
 {
-  CHECK( inference_state.next_layer == -1 ) << "Cannot extract word from this layer.";
-
   if ( inference_state.token_pos >= config_.seq_len ) {
-    return { string {}, inference_state };
+    return { -1, string {} };
   }
 
   int next_token;
 
   if ( temperature_ == 0.0f ) {
     // greedy argmax sampling
-    next_token = ops::argmax( inference_state.logits.ptr, config_.vocab_size );
+    next_token = ops::argmax( state_.logits, config_.vocab_size );
   } else {
     // apply the temperature to the logits
     for ( int q = 0; q < config_.vocab_size; q++ ) {
-      inference_state.logits.ptr[q] /= temperature_;
+      state_.logits[q] /= temperature_;
     }
 
     // apply softmax to the logits to get the probabilities for next token
-    ops::softmax( inference_state.logits.ptr, config_.vocab_size );
+    ops::softmax( state_.logits, config_.vocab_size );
 
     // we now want to sample from this distribution to get the next token
-    next_token = ops::sample( inference_state.logits.ptr, config_.vocab_size );
+    next_token = ops::sample( state_.logits, config_.vocab_size );
   }
 
-  InferenceState result { inference_state };
-  result.token = next_token;
-  result.next_layer = 0;
-
-  return { vocabulary_.get_word( next_token ), result };
+  return { next_token, vocabulary_.get_word( next_token ) };
 }
