@@ -174,7 +174,4 @@ public:
   Llama2& operator=( Llama2&& ) = default;
 };
 
-class PartialLlama2 : public Llama2
-{};
-
 } // namespace glinthawk
