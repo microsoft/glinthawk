@@ -78,17 +78,16 @@ protected:
     RunState( const RunState& ) = delete;
     RunState operator=( const RunState& ) = delete;
 
-    std::unique_ptr<float[]> buffer_;
+    std::unique_ptr<float[]> buffer_; // we use this buffer for everything except for activations
+    std::unique_ptr<float[]> x {};    // activation at current time stamp (dim,)
 
-    // current wave of activations
-    float* x {};      // activation at current time stamp (dim,)
     float* xb {};     // same, but inside a residual branch (dim,)
     float* xb2 {};    // an additional buffer just for convenience (dim,)
-    float* hb {};     // buffer for hidden dimension in the ffn (hidden_dim,)
-    float* hb2 {};    // buffer for hidden dimension in the ffn (hidden_dim,)
     float* q {};      // query (dim,)
     float* k {};      // key (dim,)
     float* v {};      // value (dim,)
+    float* hb {};     // buffer for hidden dimension in the ffn (hidden_dim,)
+    float* hb2 {};    // buffer for hidden dimension in the ffn (hidden_dim,)
     float* att {};    // buffer for scores/attention values (n_heads, seq_len)
     float* logits {}; // output logits
 

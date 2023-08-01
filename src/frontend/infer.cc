@@ -54,7 +54,7 @@ int main( int argc, char* argv[] )
       }
 
       word = inference_result.word.value();
-      inference_state = inference_result.inference_state;
+      inference_state = move( inference_result.inference_state );
     }
     cout << endl;
 

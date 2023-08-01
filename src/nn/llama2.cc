@@ -173,25 +173,23 @@ unique_ptr<T[]> make_unique_aligned( size_t size )
 }
 
 Llama2::RunState::RunState( const Config& config, const int32_t start_layer, const int32_t end_layer )
-  : buffer_( make_unique_aligned<float, 64>( sizeof( float ) * config.dim * 6          /* x, xb, xb2, q, k, v */
-                                             + sizeof( float ) * config.hidden_dim * 2 /* hb, hb2 */
-                                             + sizeof( float ) * config.n_heads * config.seq_len /* att */
-                                             + sizeof( float ) * config.vocab_size               /* logits */
+  : buffer_( make_unique_aligned<float, 64>( config.dim * 5                    /* xb, xb2, q, k, v */
+                                             + config.hidden_dim * 2           /* hb, hb2 */
+                                             + config.n_heads * config.seq_len /* att */
+                                             + config.vocab_size               /* logits */
                                              ) )
+  , x( make_unique_aligned<float, 64>( config.dim ) )
+  , xb( buffer_.get() )
+  , xb2( buffer_.get() + config.dim )
+  , q( buffer_.get() + config.dim * 2 )
+  , k( buffer_.get() + config.dim * 3 )
+  , v( buffer_.get() + config.dim * 4 )
+  , hb( buffer_.get() + config.dim * 5 )
+  , hb2( buffer_.get() + config.dim * 5 + config.hidden_dim )
+  , att( buffer_.get() + config.dim * 5 + config.hidden_dim * 2 )
+  , logits( buffer_.get() + config.dim * 5 + config.hidden_dim * 2 + config.n_heads * config.seq_len )
   , kv_cache( config, start_layer, end_layer )
 {
-  auto ptr = buffer_.get();
-
-  x = ptr;
-  xb = ( ptr += config.dim );
-  xb2 = ( ptr += config.dim );
-  q = ( ptr += config.dim );
-  k = ( ptr += config.dim );
-  v = ( ptr += config.dim );
-  hb = ( ptr += config.dim );
-  hb2 = ( ptr += config.hidden_dim );
-  att = ( ptr += config.hidden_dim );
-  logits = ( ptr += config.n_heads * config.seq_len );
 }
 
 Llama2::RunState::KVCache::KVCache( const Config& config, const int32_t start_layer, const int32_t end_layer )
@@ -224,12 +222,12 @@ void Llama2::pass_begin( const int token )
 {
   // copy the token embedding into the state
   const float* content_row = base_weights_.token_embedding_table + token * config_.dim;
-  memcpy( state_.x, content_row, config_.dim * sizeof( *state_.x ) );
+  memcpy( state_.x.get(), content_row, config_.dim * sizeof( *state_.x.get() ) );
 }
 
 void Llama2::transformer_layer( const int32_t layer_num, const int token_pos )
 {
-  float* x = state_.x;
+  float* x = state_.x.get();
   const int dim = config_.dim;
   const int hidden_dim = config_.hidden_dim;
   const int head_size = dim / config_.n_heads;
@@ -354,11 +352,13 @@ void Llama2::transformer_layer( const int32_t layer_num, const int token_pos )
 
 void Llama2::pass_end()
 {
+  float* x = state_.x.get();
+
   // final rmsnorm
-  ops::rmsnorm( state_.x, state_.x, base_weights_.rms_final_weight, config_.dim );
+  ops::rmsnorm( x, x, base_weights_.rms_final_weight, config_.dim );
 
   // classifier into logits
-  ops::matmul( state_.logits, state_.x, base_weights_.wcls, config_.dim, config_.vocab_size );
+  ops::matmul( state_.logits, x, base_weights_.wcls, config_.dim, config_.vocab_size );
 }
 
 InferenceResult Llama2::forward( const InferenceState& inference_state )
@@ -371,7 +371,7 @@ InferenceResult Llama2::forward( const InferenceState& inference_state )
     pass_begin( inference_state.token );
   } else {
     CHECK_EQ( inference_state.activations.len, config_.dim ) << "Invalid activations.";
-    memcpy( state_.x, inference_state.activations.ptr, config_.dim * sizeof( float ) );
+    memcpy( state_.x.get(), inference_state.activations.ptr.get(), config_.dim * sizeof( float ) );
   }
 
   for ( int i = start_layer_num_; i <= end_layer_num_; i++ ) {
