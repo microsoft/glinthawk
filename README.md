@@ -1,1 +1,1 @@
-# Starter code for C++ projects
+# Glinthawk
