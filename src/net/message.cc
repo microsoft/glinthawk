@@ -1,0 +1,122 @@
+#include "message.hh"
+
+#include "session.hh"
+
+using namespace std;
+using namespace glinthawk;
+
+template<class SessionType, class OutgoingMessage, class IncomingMessage>
+MessageHandler<SessionType, OutgoingMessage, IncomingMessage>::MessageHandler( SessionType&& session )
+  : session_( move( session ) )
+{
+}
+
+template<class SessionType, class OutgoingMessage, class IncomingMessage>
+void MessageHandler<SessionType, OutgoingMessage, IncomingMessage>::uninstall_rules()
+{
+  for ( auto& rule : installed_rules_ ) {
+    rule.cancel();
+  }
+
+  installed_rules_.clear();
+}
+
+template<class SessionType, class OutgoingMessage, class IncomingMessage>
+void MessageHandler<SessionType, OutgoingMessage, IncomingMessage>::install_rules(
+  EventLoop& loop,
+  const RuleCategories& rule_categories,
+  const function<bool( IncomingMessage&& )>& incoming_callback,
+  const function<void( void )>& close_callback,
+  const optional<function<void()>>& exception_handler )
+{
+  if ( not installed_rules_.empty() ) {
+    throw runtime_error( "install_rules: already installed" );
+  }
+
+  using CallbackT = function<void( void )>;
+
+  CallbackT socket_read_handler = [this] { session_.do_read(); };
+  CallbackT socket_write_handler = [this] { session_.do_write(); };
+
+  CallbackT endpoint_read_handler = [this] { read( session_.inbound_plaintext() ); };
+
+  CallbackT endpoint_write_handler = [this] {
+    do {
+      write( session_.outbound_plaintext() );
+    } while ( ( not session_.outbound_plaintext().writable_region().empty() ) and ( not outgoing_empty() ) );
+  };
+
+  if ( exception_handler ) {
+    auto handler = *exception_handler;
+
+    socket_read_handler = [this, h = handler] {
+      try {
+        session_.do_read();
+      } catch ( exception& ) {
+        h();
+      }
+    };
+
+    socket_write_handler = [this, h = handler] {
+      try {
+        session_.do_write();
+      } catch ( exception& ) {
+        h();
+      }
+    };
+
+    endpoint_read_handler = [this, h = handler] {
+      try {
+        read( session_.inbound_plaintext() );
+      } catch ( exception& ) {
+        h();
+      }
+    };
+
+    endpoint_write_handler = [this, h = handler] {
+      try {
+        do {
+          write( session_.outbound_plaintext() );
+        } while ( ( not session_.outbound_plaintext().writable_region().empty() ) and ( not outgoing_empty() ) );
+      } catch ( exception& ) {
+        h();
+      }
+    };
+  }
+
+  installed_rules_.push_back( loop.add_rule(
+    rule_categories.session,
+    session_.socket(),
+    socket_read_handler,
+    [&] { return session_.want_read(); },
+    socket_write_handler,
+    [&] { return session_.want_write(); },
+    close_callback ) );
+
+  installed_rules_.push_back( loop.add_rule( rule_categories.endpoint_write, endpoint_write_handler, [&] {
+    return ( not session_.outbound_plaintext().writable_region().empty() ) and ( not outgoing_empty() );
+  } ) );
+
+  installed_rules_.push_back( loop.add_rule( rule_categories.endpoint_read, endpoint_read_handler, [&] {
+    return not session_.inbound_plaintext().readable_region().empty();
+  } ) );
+
+  installed_rules_.push_back( loop.add_rule(
+    rule_categories.response,
+    [this, incoming_callback] {
+      while ( not incoming_empty() ) {
+        auto response = move( incoming_front() );
+        incoming_pop();
+
+        if ( not incoming_callback( move( response ) ) ) {
+          // pop all response
+          while ( not incoming_empty() ) {
+            incoming_pop();
+          }
+
+          return;
+        }
+      }
+    },
+    [&] { return not incoming_empty(); } ) );
+}
