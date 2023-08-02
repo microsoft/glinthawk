@@ -40,8 +40,8 @@ public:
   template<class DurationA, class DurationB>
   void set( const DurationA& interval, const DurationB& initial )
   {
-    to_timespec( interval, timerspec_.it_interval );
-    to_timespec( initial, timerspec_.it_value );
+    util::to_timespec( interval, timerspec_.it_interval );
+    util::to_timespec( initial, timerspec_.it_value );
     CHECK_SYSCALL( "timerfd_settime", timerfd_settime( fd_num(), 0, &timerspec_, nullptr ) );
 
     armed_ = ( initial != std::chrono::nanoseconds::zero() );
