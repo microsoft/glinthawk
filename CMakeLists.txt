@@ -33,6 +33,7 @@ file ( GLOB SOURCE
   src/util/*.cc
   src/net/*.cc
   src/nn/*.cc
+  src/worker/*.cc
 )
 
 add_library ( libglinthawk STATIC ${SOURCE} )
@@ -43,5 +44,7 @@ set ( ALL_LIBS
   OpenMP::OpenMP_CXX
 )
 
+link_libraries ( ${ALL_LIBS} )
+
 add_executable ( infer src/frontend/infer.cc )
-target_link_libraries ( infer ${ALL_LIBS} )
+add_executable ( infer-partial src/frontend/infer-partial.cc )
