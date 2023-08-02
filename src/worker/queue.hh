@@ -31,10 +31,15 @@ private:
   void read( RingBuffer& in ) override;
 
 public:
-  InferenceStateMessageHandler( TCPSession&& session );
+  using MessageHandler::MessageHandler;
+
   ~InferenceStateMessageHandler() = default;
 
-  void push_message( InferenceState&& state ) override;
+  void push_message( InferenceState&& state ) override
+  {
+    outgoing_states_.emplace( std::move( state ) );
+    load();
+  }
 };
 
 } // namespace glinthawk
