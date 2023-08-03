@@ -33,12 +33,25 @@ struct InferenceState
   InferenceState() = default;
   InferenceState( const std::string_view serialized );
   std::string serialize();
+
+  std::string to_string() const
+  {
+    return "InferenceState<" + std::to_string( token ) + ", " + std::to_string( token_pos ) + ", "
+           + std::to_string( next_layer ) + ", " + std::to_string( activations.len ) + ">";
+  }
 };
 
 struct InferenceResult
 {
   InferenceState inference_state {};
   std::optional<std::string> word { std::nullopt };
+};
+
+class Model
+{
+public:
+  virtual ~Model() = default;
+  virtual InferenceResult forward( const InferenceState& inference_state ) = 0;
 };
 
 } // namespace glinthawk

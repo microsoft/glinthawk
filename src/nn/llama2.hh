@@ -14,7 +14,7 @@
 
 namespace glinthawk {
 
-class Llama2
+class Llama2 : public Model
 {
 protected:
   struct Config
@@ -156,7 +156,9 @@ public:
           const int32_t start_layer = 0,
           const int32_t end_layer = -1 );
 
-  InferenceResult forward( const InferenceState& inference_state );
+  InferenceResult forward( const InferenceState& inference_state ) override;
+
+  size_t num_layers() const { return layer_weights_.size(); }
 
   Llama2( const Llama2& ) = delete;
   Llama2& operator=( const Llama2& ) = delete;
