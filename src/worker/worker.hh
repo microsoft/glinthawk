@@ -1,27 +1,44 @@
 #pragma once
 
+#include <chrono>
 #include <list>
+
+#include "queue.hh"
 
 #include "net/address.hh"
 #include "net/message.hh"
 #include "net/session.hh"
 #include "net/socket.hh"
 #include "util/eventloop.hh"
+#include "util/timerfd.hh"
 
 namespace glinthawk {
 
 class Worker
 {
 private:
+  const Address this_address_;
+  const Address next_address_;
   EventLoop event_loop_ {};
 
-  TCPSocket listen_socket_ {};
-  std::list<TCPSocket> peers_ {};
+  InferenceStateMessageHandler::RuleCategories rule_categories_ {
+    event_loop_.add_category( "TCP Session" ),
+    event_loop_.add_category( "Message read" ),
+    event_loop_.add_category( "Message write" ),
+    event_loop_.add_category( "Message response" ),
+  };
 
-  void add_new_peer( TCPSocket&& new_peer_socket );
+  TCPSocket listen_socket_ {};
+
+  std::unique_ptr<InferenceStateMessageHandler> incoming_message_handler_ {};
+  std::unique_ptr<InferenceStateMessageHandler> outgoing_message_handler_ {};
+
+  TimerFD reconnect_timer_fd_ { std::chrono::seconds( 1 ) }; // retry connection to next every second
+
+  void reconnect_to_next();
 
 public:
-  Worker( const Address& worker_address );
+  Worker( const Address& this_address, const Address& next_address );
   ~Worker() = default;
 
   void run();

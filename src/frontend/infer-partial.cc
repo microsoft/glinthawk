@@ -60,7 +60,7 @@ int main( int argc, char* argv[] )
 
     Llama2 llama { tokenizer_path, weights_path, start_layer, end_layer };
 
-    Worker worker { { "0", listen_port } };
+    Worker worker { { "0", listen_port }, { next_host, next_port } };
     worker.run();
 
     cerr << endl << global_timer().summary() << endl;
