@@ -38,15 +38,16 @@ Worker::Worker( const Address& this_address,
           InferenceResult result;
 
           {
-            GlobalScopeTimer<Timer::Category::PartialInference> _;
+            // GlobalScopeTimer<Timer::Category::PartialInference> _;
             result = model_->forward( state );
           }
 
           if ( result.word ) {
-            cout << *result.word << flush;
+            LOG( INFO ) << state.to_string() << "\t=> " << result.inference_state.to_string() << " + TOKEN";
+            output_ << *result.word << flush;
+          } else {
+            LOG( INFO ) << state.to_string() << "\t=> " << result.inference_state.to_string();
           }
-
-          LOG( INFO ) << state.to_string() << " => " << result.inference_state.to_string();
 
           if ( result.inference_state.token == -1 ) {
             cerr << "\n\n"

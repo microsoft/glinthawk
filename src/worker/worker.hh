@@ -1,6 +1,7 @@
 #pragma once
 
 #include <chrono>
+#include <fstream>
 #include <list>
 
 #include "queue.hh"
@@ -46,6 +47,8 @@ private:
   std::unique_ptr<InferenceStateMessageHandler> outgoing_message_handler_ {};
 
   TimerFD reconnect_timer_fd_ { std::chrono::seconds( 1 ) }; // retry connection to next every second
+
+  std::ofstream output_ { "output.txt", std::ios::trunc };
 
   void reconnect_to_next();
 
