@@ -37,7 +37,6 @@ public:
 
   void push_message( InferenceState&& state ) override
   {
-    LOG( INFO ) << "Sending: " << state.to_string();
     outgoing_states_.emplace( std::move( state ) );
     load();
   }
