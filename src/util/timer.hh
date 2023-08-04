@@ -42,6 +42,7 @@ public:
     MemoryAllocation,
     DiskIO,
     TokenGeneration,
+    PartialInference,
     COUNT,
   };
 
@@ -53,6 +54,7 @@ public:
     "Memory Allocation",
     "I/O",
     "Token Generation",
+    "Partial Inference"
   } };
 
 private:
