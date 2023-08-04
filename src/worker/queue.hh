@@ -24,8 +24,8 @@ private:
 
   bool outgoing_empty() const override { return outgoing_states_.empty() and pending_outgoing_data_view_.empty(); }
   bool incoming_empty() const override { return incoming_states_.empty(); }
-  InferenceState& incoming_front() override { return incoming_states_.front(); }
   void incoming_pop() override { incoming_states_.pop(); }
+  InferenceState& incoming_front() override { return incoming_states_.front(); }
 
   void write( RingBuffer& out ) override;
   void read( RingBuffer& in ) override;
@@ -37,6 +37,7 @@ public:
 
   void push_message( InferenceState&& state ) override
   {
+    LOG( INFO ) << "Sending: " << state.to_string();
     outgoing_states_.emplace( std::move( state ) );
     load();
   }
