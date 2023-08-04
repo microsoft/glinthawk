@@ -9,6 +9,7 @@
 #include "net/message.hh"
 #include "net/session.hh"
 #include "net/socket.hh"
+#include "nn/inference.hh"
 #include "util/eventloop.hh"
 #include "util/timerfd.hh"
 
@@ -16,10 +17,21 @@ namespace glinthawk {
 
 class Worker
 {
+public:
+  enum class Type
+  {
+    First,
+    Mid,
+    Last
+  };
+
 private:
   const Address this_address_;
   const Address next_address_;
   EventLoop event_loop_ {};
+
+  std::unique_ptr<Model> model_ {};
+  const Type type_;
 
   InferenceStateMessageHandler::RuleCategories rule_categories_ {
     event_loop_.add_category( "TCP Session" ),
@@ -38,7 +50,7 @@ private:
   void reconnect_to_next();
 
 public:
-  Worker( const Address& this_address, const Address& next_address );
+  Worker( const Address& this_address, const Address& next_address, std::unique_ptr<Model>&& model, const Type type );
   ~Worker() = default;
 
   void run();
