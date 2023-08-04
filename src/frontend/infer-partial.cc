@@ -58,9 +58,18 @@ int main( int argc, char* argv[] )
     const string next_host { argv[6] };
     [[maybe_unused]] const uint16_t next_port { static_cast<uint16_t>( stoi( argv[7] ) ) };
 
-    Llama2 llama { tokenizer_path, weights_path, start_layer, end_layer };
+    auto llama = make_unique<Llama2>( tokenizer_path, weights_path, start_layer, end_layer );
 
-    Worker worker { { "0", listen_port }, { next_host, next_port } };
+    Worker::Type worker_type;
+    if ( start_layer == 0 ) {
+      worker_type = Worker::Type::First;
+    } else if ( static_cast<size_t>( end_layer ) + 1 == llama->num_layers() ) {
+      worker_type = Worker::Type::Last;
+    } else {
+      worker_type = Worker::Type::Mid;
+    }
+
+    Worker worker { { "0", listen_port }, { next_host, next_port }, move( llama ), worker_type };
     worker.run();
 
     cerr << endl << global_timer().summary() << endl;
