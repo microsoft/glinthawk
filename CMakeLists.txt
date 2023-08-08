@@ -1,10 +1,11 @@
 cmake_minimum_required ( VERSION 3.11.0 )
 cmake_policy ( SET CMP0135 NEW )
 
-project ( Glinthawk VERSION 1.0.0 LANGUAGES CXX )
+project ( Glinthawk VERSION 1.0.0 LANGUAGES CXX CUDA )
 
 include ( etc/cflags.cmake )
 include ( etc/openmp.cmake )
+include ( etc/cuda.cmake )
 
 find_package ( Glog REQUIRED )
 link_libraries ( glog::glog )
@@ -16,6 +17,7 @@ file ( GLOB SOURCE
   src/net/*.cc
   src/nn/*.cc
   src/worker/*.cc
+  src/gpu/*.cu
 )
 
 add_library ( glinthawk STATIC ${SOURCE} )
@@ -23,3 +25,4 @@ link_libraries ( glinthawk )
 
 add_executable ( infer src/frontend/infer.cc )
 add_executable ( infer-partial src/frontend/infer-partial.cc )
+add_executable ( gpu-test src/frontend/gpu-test.cc )
