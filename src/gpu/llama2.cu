@@ -10,6 +10,8 @@
 #include <glog/logging.h>
 #include <sys/stat.h>
 
+#include <cublas_v2.h>
+
 #include "util/exception.hh"
 #include "util/file_descriptor.hh"
 #include "util/ring_buffer.hh"
@@ -27,11 +29,10 @@ void CHECK_CUDA( const cudaError_t err, const source_location location = source_
 
 namespace ops {
 
-__global__ void accum( float* a, const float* b, const int size )
-{
-  for ( int i = 0; i < size; i++ ) {
-    a[i] += b[i];
-  }
+namespace {
+
+static cublasHandle_t handle;
+
 }
 
 __global__ void rmsnorm( float* output, const float* x, const float* weight, const int size )
@@ -75,23 +76,10 @@ __global__ void softmax( float* x, const int size )
   }
 }
 
-// W(d,n) @ x(n,) -> xout(d,)
-__global__ void matmul( float* xout, const float* x, const float* w, const int n, const int d )
-{
-  int i = blockIdx.x * blockDim.x + threadIdx.x;
-  if ( i < d ) {
-    float val = 0.0f;
-    for ( int j = 0; j < n; j++ ) {
-      val += w[i * n + j] * x[j];
-    }
-    xout[i] = val;
-  }
-}
-
 __global__ void sample( const float* probabilities, const int n, int* output )
 {
   // sample index from probabilities, they must sum to 1
-  float r = static_cast<float>( 90402 ) / RAND_MAX;
+  float r = static_cast<float>( 90402 /* RANDOM NUMBER*/ ) / RAND_MAX;
   float cdf = 0.0f;
 
   for ( int i = 0; i < n; i++ ) {
@@ -120,6 +108,27 @@ __global__ void argmax( const float* v, const int n, int* output )
 
   *output = max_i;
 }
+
+void accum( float* a, const float* b, const int size, const size_t threads_per_block )
+{
+  float alpha = 1.0f;
+  cublasSaxpy( handle, size, &alpha, b, 1, a, 1 );
+}
+
+// void rmsnorm( float* o, const float* x, const float* weight, const int size );
+// void softmax( float* x, const int size );
+
+void matmul( float* xout, const float* x, const float* W, const int n, const int d, const size_t threads_per_block )
+{
+  float alpha = 1.0f;
+  float beta = 0.0f;
+
+  // W(d,n) @ x(n,) -> xout(d,)
+  cublasSgemv( handle, CUBLAS_OP_T, n, d, &alpha, W, n, x, 1, &beta, xout, 1 );
+}
+
+// int sample( const float* probabilities, const int n );
+// int argmax( const float* v, const int n );
 
 }
 
@@ -271,6 +280,7 @@ Llama2::Llama2( const std::filesystem::path& tokenizer_path,
   , vocabulary_( config_, tokenizer_path )
   , state_( config_, start_layer_num_, end_layer_num_ )
 {
+  cublasCreate( &ops::handle );
 }
 
 Llama2::RunState::RunState( const Config& config, const int32_t start_layer, const int32_t end_layer )
@@ -421,14 +431,9 @@ void Llama2::transformer_layer( const int32_t layer_num, const int token_pos )
   ops::rmsnorm<<<1, 1>>>( state_.xb, x, layer_weights.rms_att_weight, dim );
 
   // qkv matmuls for this position
-  {
-    const size_t threads_per_block = 256;
-    const size_t blocks_per_grid = ( dim + threads_per_block - 1 ) / threads_per_block;
-
-    ops::matmul<<<blocks_per_grid, threads_per_block>>>( state_.q, state_.xb, layer_weights.wq, dim, dim );
-    ops::matmul<<<blocks_per_grid, threads_per_block>>>( state_.k, state_.xb, layer_weights.wk, dim, dim );
-    ops::matmul<<<blocks_per_grid, threads_per_block>>>( state_.v, state_.xb, layer_weights.wv, dim, dim );
-  }
+  ops::matmul( state_.q, state_.xb, layer_weights.wq, dim, dim, threads_per_block_ );
+  ops::matmul( state_.k, state_.xb, layer_weights.wk, dim, dim, threads_per_block_ );
+  ops::matmul( state_.v, state_.xb, layer_weights.wv, dim, dim, threads_per_block_ );
 
   do_rope<<<1, 1>>>( head_size, config_.n_heads, freq_cis_real_row, freq_cis_imag_row, state_.q, state_.k );
 
@@ -472,41 +477,26 @@ void Llama2::transformer_layer( const int32_t layer_num, const int token_pos )
   // end of multihead attention
 
   // final matmul to get the output of the attention
-  {
-    const size_t threads_per_block = 256;
-    const size_t blocks_per_grid = ( dim + threads_per_block - 1 ) / threads_per_block;
-
-    ops::matmul<<<blocks_per_grid, threads_per_block>>>( state_.xb2, state_.xb, layer_weights.wo, dim, dim );
-  }
+  ops::matmul( state_.xb2, state_.xb, layer_weights.wo, dim, dim, threads_per_block_ );
 
   // residual connection back into x
-  ops::accum<<<1, 1>>>( x, state_.xb2, dim );
+  ops::accum( x, state_.xb2, dim, threads_per_block_ );
 
   // ffn rmsnorm
   ops::rmsnorm<<<1, 1>>>( state_.xb, x, layer_weights.rms_ffn_weight, dim );
 
   // now for ffn in we have: self.w2(F.silu(self.w1(x)) * self.w3(x))
   // first calculate self.w1(x) and self.w3(x)
-  {
-    const size_t threads_per_block = 256;
-    const size_t blocks_per_grid = ( hidden_dim + threads_per_block - 1 ) / threads_per_block;
-
-    ops::matmul<<<blocks_per_grid, threads_per_block>>>( state_.hb, state_.xb, layer_weights.w1, dim, hidden_dim );
-    ops::matmul<<<blocks_per_grid, threads_per_block>>>( state_.hb2, state_.xb, layer_weights.w3, dim, hidden_dim );
-  }
+  ops::matmul( state_.hb, state_.xb, layer_weights.w1, dim, hidden_dim, threads_per_block_ );
+  ops::matmul( state_.hb2, state_.xb, layer_weights.w3, dim, hidden_dim, threads_per_block_ );
 
   silu<<<1, 1>>>( state_.hb, state_.hb2, hidden_dim );
 
   // final matmul to get the output of the ffn
-  {
-    const size_t threads_per_block = 256;
-    const size_t blocks_per_grid = ( dim + threads_per_block - 1 ) / threads_per_block;
-
-    ops::matmul<<<blocks_per_grid, threads_per_block>>>( state_.xb, state_.hb, layer_weights.w2, hidden_dim, dim );
-  }
+  ops::matmul( state_.xb, state_.hb, layer_weights.w2, hidden_dim, dim, threads_per_block_ );
 
   // residual connection
-  ops::accum<<<1, 1>>>( x, state_.xb, dim );
+  ops::accum( x, state_.xb, dim, threads_per_block_ );
 }
 
 void Llama2::pass_end()
@@ -517,12 +507,7 @@ void Llama2::pass_end()
   ops::rmsnorm<<<1, 1>>>( x, x, base_weights_.rms_final_weight, config_.dim );
 
   // classifier into logits
-  {
-    const size_t threads_per_block = 256;
-    const size_t blocks_per_grid = ( config_.vocab_size + threads_per_block - 1 ) / threads_per_block;
-
-    ops::matmul<<<blocks_per_grid, threads_per_block>>>( state_.logits, x, base_weights_.wcls, config_.dim, config_.vocab_size );
-  }
+  ops::matmul( state_.logits, x, base_weights_.wcls, config_.dim, config_.vocab_size, threads_per_block_ );
 }
 
 pair<int, string> Llama2::forward( const int token )

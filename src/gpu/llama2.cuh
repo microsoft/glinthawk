@@ -127,6 +127,8 @@ protected:
 
 private:
   CUDAInfo cuda_info_ {};
+  const size_t threads_per_block_ { cuda_info_.max_threads_per_block() };
+
   const float* model_ptr_;
 
   const Config config_;
