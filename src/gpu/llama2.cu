@@ -27,13 +27,13 @@ void CHECK_CUDA( const cudaError_t err, const source_location location = source_
   }
 }
 
-namespace ops {
-
 namespace {
 
 static cublasHandle_t handle;
 
 }
+
+namespace ops {
 
 __global__ void rmsnorm( float* output, const float* x, const float* weight, const int size )
 {
@@ -79,7 +79,7 @@ __global__ void softmax( float* x, const int size )
 __global__ void sample( const float* probabilities, const int n, int* output )
 {
   // sample index from probabilities, they must sum to 1
-  float r = static_cast<float>( 90402 /* RANDOM NUMBER*/ ) / RAND_MAX;
+  float r = static_cast<float>( 90402 /* RANDOM NUMBER */ ) / RAND_MAX;
   float cdf = 0.0f;
 
   for ( int i = 0; i < n; i++ ) {
@@ -280,7 +280,7 @@ Llama2::Llama2( const std::filesystem::path& tokenizer_path,
   , vocabulary_( config_, tokenizer_path )
   , state_( config_, start_layer_num_, end_layer_num_ )
 {
-  cublasCreate( &ops::handle );
+  cublasCreate( &handle );
 }
 
 Llama2::RunState::RunState( const Config& config, const int32_t start_layer, const int32_t end_layer )
@@ -414,6 +414,57 @@ __global__ void silu( float* hb, float* hb2, const int hidden_dim )
   }
 }
 
+__global__ void attention_head_0( const float* all_q,
+                                  const float* kv_cache,
+                                  float* att,
+                                  const int layer_num,
+                                  const int n_layers,
+                                  const int seq_len,
+                                  const int head_size,
+                                  const int dim )
+{
+  const int head_num = blockIdx.x;
+  const int token_num = blockIdx.y;
+  const int token_pos = threadIdx.x;
+
+  att += head_num * seq_len;
+  const float* q = all_q + head_num * head_size;
+  const float* k = kv_cache + token_num * n_layers * ( dim * 2 ) + layer_num * ( dim * 2 ) + head_num * head_size;
+
+  float score = 0.0f;
+  for ( int i = 0; i < head_size; i++ ) {
+    score += q[i] * k[i];
+  }
+  score /= sqrtf( head_size );
+
+  // save the score to the attention buffer
+  att[token_pos] = score;
+}
+
+__global__ void attention_head_2( float* att,
+                                  const float* kv_cache,
+                                  float* xb,
+                                  const int layer_num,
+                                  const int n_layers,
+                                  const int seq_len,
+                                  const int head_size,
+                                  const int dim )
+{
+  const int head_num = blockIdx.x;
+  const int token_num = blockIdx.y;
+  const int token_pos = threadIdx.x;
+
+  att += head_num * seq_len;
+  xb += head_num * head_size;
+
+  const float a = att[token_pos];
+  const float* v = kv_cache + token_num * n_layers * ( dim * 2 ) + layer_num * ( dim * 2 ) + dim + head_num * head_size;
+
+  for ( int i = 0; i < head_size; i++ ) {
+    atomicAdd( &xb[i], a * v[i] );
+  }
+}
+
 void Llama2::transformer_layer( const int32_t layer_num, const int token_pos )
 {
   float* x = state_.x;
@@ -444,35 +495,22 @@ void Llama2::transformer_layer( const int32_t layer_num, const int token_pos )
   CHECK_CUDA( cudaMemcpy( k_cache_pos, state_.k, dim * sizeof( float ), cudaMemcpyDeviceToDevice ) );
   CHECK_CUDA( cudaMemcpy( v_cache_pos, state_.v, dim * sizeof( float ), cudaMemcpyDeviceToDevice ) );
 
-  // multihead attention. iterate over all heads
-  for ( int head_num = 0; head_num < config_.n_heads; head_num++ ) {
-    // get the query vector for this head
-    const float* q = state_.q + head_num * head_size;
+  // multihead attention. for each head and for each token up to and including the current one
+  {
+    dim3 grid { static_cast<unsigned int>( config_.n_heads ), static_cast<unsigned int>( token_pos + 1 ) };
+    dim3 block { static_cast<unsigned int>( token_pos + 1 ) };
+    attention_head_0<<<grid, block>>>(
+      state_.q, state_.kv_cache.buffer_, state_.att, layer_num, config_.n_layers, token_pos, head_size, dim );
+  }
 
-    // attention scores for this head
-    float* att = state_.att + head_num * config_.seq_len;
+  ops::softmax<<<1, 1>>>( state_.att, token_pos + 1 );
+  CHECK_CUDA( cudaMemset( state_.xb, 0, dim * sizeof( float ) ) );
 
-    // iterate over all timesteps, including the current one
-    for ( int t = 0; t <= token_pos; t++ ) {
-      // get the key vector for this head and at this timestep
-      const float* k = state_.kv_cache.key( layer_num, t, head_num );
-      score<<<1, 1>>>( k, q, att, t, head_size );
-    }
-
-    // softmax the scores to get attention weights, from 0..pos inclusively
-    ops::softmax<<<1, 1>>>( att, token_pos + 1 );
-
-    // weighted sum of the values, store back into xb
-    float* xb = state_.xb + head_num * head_size;
-    CHECK_CUDA( cudaMemset( xb, 0, head_size * sizeof( float ) ) );
-
-    for ( int t = 0; t <= token_pos; t++ ) {
-      // get the value vector for this head and at this timestep
-      const float* v = state_.kv_cache.value( layer_num, t, head_num );
-
-      // get the attention weight for this timestep
-      attscore<<<1, 1>>>( xb, v, att, t, head_size );
-    }
+  {
+    dim3 grid { static_cast<unsigned int>( config_.n_heads ), static_cast<unsigned int>( token_pos + 1 ) };
+    dim3 block { static_cast<unsigned int>( token_pos + 1 ) };
+    attention_head_2<<<grid, block>>>(
+      state_.att, state_.kv_cache.buffer_, state_.xb, layer_num, config_.n_layers, token_pos, head_size, dim );
   }
   // end of multihead attention
 
