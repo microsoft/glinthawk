@@ -73,29 +73,6 @@ void softmax( float* _x, const int size )
   thrust::transform( x, x + size, x, [sum] __device__( const float x ) { return x / sum; } );
 }
 
-__device__ void softmax_device( float* x, const int size )
-{
-  // find max value (for numerical stability)
-  float max_val = x[0];
-  for ( int i = 1; i < size; i++ ) {
-    if ( x[i] > max_val ) {
-      max_val = x[i];
-    }
-  }
-
-  // exp and sum
-  float sum = 0.0f;
-  for ( int i = 0; i < size; i++ ) {
-    x[i] = expf( x[i] - max_val );
-    sum += x[i];
-  }
-
-  // normalize
-  for ( int i = 0; i < size; i++ ) {
-    x[i] /= sum;
-  }
-}
-
 void sample( const float* probabilities, const int n, int* output ) { throw runtime_error( "not implemented" ); }
 
 void argmax( const float* _v, const int n, int* _output )
@@ -410,14 +387,6 @@ __global__ void attention_0( const float* all_q,
 
   // save the score to the attention buffer
   att[token_pos] = score;
-}
-
-__global__ void attention_1( float* att, const int token_pos, const int seq_len )
-{
-  const int head_num = threadIdx.x;
-
-  att += head_num * seq_len;
-  ops::softmax_device( att, token_pos + 1 );
 }
 
 __global__ void find_max_for_rows( const float* att,
