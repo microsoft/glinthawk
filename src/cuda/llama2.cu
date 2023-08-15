@@ -12,6 +12,7 @@
 
 #include <cublas_v2.h>
 #include <thrust/device_ptr.h>
+#include <thrust/device_vector.h>
 #include <thrust/extrema.h>
 #include <thrust/functional.h>
 #include <thrust/transform_reduce.h>
@@ -95,22 +96,7 @@ __device__ void softmax_device( float* x, const int size )
   }
 }
 
-__global__ void sample( const float* probabilities, const int n, int* output )
-{
-  // sample index from probabilities, they must sum to 1
-  float r = static_cast<float>( 90402 /* RANDOM NUMBER */ ) / RAND_MAX;
-  float cdf = 0.0f;
-
-  for ( int i = 0; i < n; i++ ) {
-    cdf += probabilities[i];
-    if ( r < cdf ) {
-      *output = i;
-      return;
-    }
-  }
-
-  *output = n - 1;
-}
+void sample( const float* probabilities, const int n, int* output ) { throw runtime_error( "not implemented" ); }
 
 void argmax( const float* _v, const int n, int* _output )
 {
@@ -433,6 +419,75 @@ __global__ void attention_1( float* att, const int token_pos, const int seq_len 
   ops::softmax_device( att, token_pos + 1 );
 }
 
+__global__ void find_max_for_rows( const float* att,
+                                   float* output,
+                                   const int token_pos,
+                                   const int n_heads,
+                                   const int seq_len )
+{
+  const int head_num = threadIdx.x;
+  att += head_num * seq_len;
+
+  float max_value = att[0];
+  for ( int i = 1; i <= token_pos; i++ ) {
+    max_value = max( max_value, att[i] );
+  }
+
+  output[head_num] = max_value;
+}
+
+__global__ void subtract_and_expf( const float* values, float* att, const int n_heads, const int seq_len )
+{
+  const int head_num = threadIdx.x;
+  const int token_pos = blockIdx.x;
+
+  att += head_num * seq_len;
+  att[token_pos] = expf( att[token_pos] - values[head_num] );
+}
+
+__global__ void sum_rows( float* att, float* output, const int token_pos, const int n_heads, const int seq_len )
+{
+  const int head_num = threadIdx.x;
+  att += head_num * seq_len;
+
+  float sum = 0.0;
+  for ( int i = 0; i <= token_pos; i++ ) {
+    sum += att[i];
+  }
+
+  output[head_num] = sum;
+}
+
+__global__ void normalize_by_sum( float* att, const float* sums, const int n_heads, const int seq_len )
+{
+  const int head_num = threadIdx.x;
+  const int token_pos = blockIdx.x;
+
+  att += head_num * seq_len;
+  att[token_pos] /= sums[head_num];
+}
+
+void attention_softmax( float* att, const int token_pos, const int seq_len, const int n_heads )
+{
+  float* head_values;
+
+  CHECK_CUDA( cudaMalloc( &head_values, sizeof( float ) * n_heads ) );
+
+  // (1) find the max value for each head (each row)
+  find_max_for_rows<<<1, n_heads>>>( att, head_values, token_pos, n_heads, seq_len );
+
+  // (2) exp(att - max)
+  subtract_and_expf<<<token_pos + 1, n_heads>>>( head_values, att, n_heads, seq_len );
+
+  // (3) sum each row
+  sum_rows<<<1, n_heads>>>( att, head_values, token_pos, n_heads, seq_len );
+
+  // (4) normalize each row by its sum
+  normalize_by_sum<<<token_pos + 1, n_heads>>>( att, head_values, n_heads, seq_len );
+
+  cudaFree( head_values );
+}
+
 __global__ void attention_2( float* att,
                              const float* kv_cache,
                              float* xb,
@@ -491,7 +546,8 @@ void Llama2::transformer_layer( const int32_t layer_num, const int token_pos )
   attention_0<<<token_pos + 1, config_.n_heads>>>(
     state_.q, state_.kv_cache.buffer_, state_.att, layer_num, config_.n_layers, config_.seq_len, head_size, dim );
 
-  attention_1<<<1, config_.n_heads>>>( state_.att, token_pos, config_.seq_len );
+  // softmax
+  attention_softmax( state_.att, token_pos, config_.seq_len, config_.n_heads );
 
   CHECK_CUDA( cudaMemset( state_.xb, 0, dim * sizeof( float ) ) );
 
@@ -564,7 +620,7 @@ pair<int, string> Llama2::forward( const int token )
     ops::softmax( state_.logits, config_.vocab_size );
 
     // we now want to sample from this distribution to get the next token
-    ops::sample<<<1, 1>>>( state_.logits, config_.vocab_size, next_token_device );
+    ops::sample( state_.logits, config_.vocab_size, next_token_device );
   }
 
   token_pos++;
