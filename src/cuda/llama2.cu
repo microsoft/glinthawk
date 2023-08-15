@@ -11,6 +11,10 @@
 #include <sys/stat.h>
 
 #include <cublas_v2.h>
+#include <thrust/device_ptr.h>
+#include <thrust/extrema.h>
+#include <thrust/functional.h>
+#include <thrust/transform_reduce.h>
 
 #include "util/exception.hh"
 #include "util/file_descriptor.hh"
@@ -58,27 +62,14 @@ void rmsnorm( float* output, const float* x, const float* weight, const int size
   normalize_and_scale<<<1, size>>>( output, x, weight, size, ss );
 }
 
-__global__ void softmax( float* x, const int size )
+void softmax( float* _x, const int size )
 {
-  // find max value (for numerical stability)
-  float max_val = x[0];
-  for ( int i = 1; i < size; i++ ) {
-    if ( x[i] > max_val ) {
-      max_val = x[i];
-    }
-  }
+  thrust::device_ptr<float> x { _x };
 
-  // exp and sum
-  float sum = 0.0f;
-  for ( int i = 0; i < size; i++ ) {
-    x[i] = expf( x[i] - max_val );
-    sum += x[i];
-  }
-
-  // normalize
-  for ( int i = 0; i < size; i++ ) {
-    x[i] /= sum;
-  }
+  const float max_val = *thrust::max_element( x, x + size );
+  const float sum = thrust::transform_reduce(
+    x, x + size, [max_val] __device__( const float x ) { return expf( x - max_val ); }, 0.0f, thrust::plus<float>() );
+  thrust::transform( x, x + size, x, [sum] __device__( const float x ) { return x / sum; } );
 }
 
 __device__ void softmax_device( float* x, const int size )
@@ -121,20 +112,13 @@ __global__ void sample( const float* probabilities, const int n, int* output )
   *output = n - 1;
 }
 
-__global__ void argmax( const float* v, const int n, int* output )
+void argmax( const float* _v, const int n, int* _output )
 {
-  // return argmax of v in elements 0..n
-  int max_i = 0;
-  float max_p = v[0];
+  thrust::device_ptr<const float> v { _v };
+  thrust::device_ptr<int> output { _output };
 
-  for ( int i = 1; i < n; i++ ) {
-    if ( v[i] > max_p ) {
-      max_i = i;
-      max_p = v[i];
-    }
-  }
-
-  *output = max_i;
+  const auto it = thrust::max_element( v, v + n );
+  *output = thrust::distance( v, it );
 }
 
 void accum( float* a, const float* b, const int size )
@@ -153,6 +137,16 @@ void matmul( float* xout, const float* x, const float* W, const int n, const int
 
   // W(d,n) @ x(n,) -> xout(d,)
   cublasSgemv( handle, CUBLAS_OP_T, n, d, &alpha, W, n, x, 1, &beta, xout, 1 );
+}
+
+void silu( float* _hb, float* _hb2, const int hidden_dim )
+{
+  thrust::device_ptr<float> hb { _hb };
+  thrust::device_ptr<float> hb2 { _hb2 };
+
+  thrust::transform(
+    hb, hb + hidden_dim, hb, [] __device__( float x ) { return x * ( 1.0f / ( 1.0f + expf( -x ) ) ); } );
+  thrust::transform( hb, hb + hidden_dim, hb2, hb, thrust::multiplies<float>() );
 }
 
 // int sample( const float* probabilities, const int n );
@@ -405,19 +399,6 @@ __global__ void do_rope( const int head_size,
   k[elem_idx + 1] = k0 * fci + k1 * fcr;
 }
 
-__global__ void silu( float* hb, float* hb2, const int hidden_dim )
-{
-  // F.silu; silu(x)=x*σ(x),where σ(x) is the logistic sigmoid
-  for ( int i = 0; i < hidden_dim; i++ ) {
-    hb[i] = hb[i] * ( 1.0f / ( 1.0f + expf( -hb[i] ) ) );
-  }
-
-  // elementwise multiply with w3(x)
-  for ( int i = 0; i < hidden_dim; i++ ) {
-    hb[i] = hb[i] * hb2[i];
-  }
-}
-
 __global__ void attention_0( const float* all_q,
                              const float* kv_cache,
                              float* att,
@@ -532,7 +513,7 @@ void Llama2::transformer_layer( const int32_t layer_num, const int token_pos )
   ops::matmul( state_.hb, state_.xb, layer_weights.w1, dim, hidden_dim );
   ops::matmul( state_.hb2, state_.xb, layer_weights.w3, dim, hidden_dim );
 
-  silu<<<1, 1>>>( state_.hb, state_.hb2, hidden_dim );
+  ops::silu( state_.hb, state_.hb2, hidden_dim );
 
   // final matmul to get the output of the ffn
   ops::matmul( state_.xb, state_.hb, layer_weights.w2, hidden_dim, dim );
@@ -572,7 +553,7 @@ pair<int, string> Llama2::forward( const int token )
 
   if ( temperature_ == 0.0f ) {
     // greedy argmax sampling
-    ops::argmax<<<1, 1>>>( state_.logits, config_.vocab_size, next_token_device );
+    ops::argmax( state_.logits, config_.vocab_size, next_token_device );
   } else {
     // apply the temperature to the logits
     for ( int q = 0; q < config_.vocab_size; q++ ) {
@@ -580,7 +561,7 @@ pair<int, string> Llama2::forward( const int token )
     }
 
     // apply softmax to the logits to get the probabilities for next token
-    ops::softmax<<<1, 1>>>( state_.logits, config_.vocab_size );
+    ops::softmax( state_.logits, config_.vocab_size );
 
     // we now want to sample from this distribution to get the next token
     ops::sample<<<1, 1>>>( state_.logits, config_.vocab_size, next_token_device );
