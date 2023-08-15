@@ -294,9 +294,9 @@ Llama2::Llama2( const std::filesystem::path& tokenizer_path,
 Llama2::RunState::RunState( const Config& config, const int32_t start_layer, const int32_t end_layer )
   : buffer_( [&] {
     void* ptr;
-    const auto size
-      = sizeof( float )
-        * ( config.dim * 5 + config.hidden_dim * 2 + config.n_heads * config.seq_len + config.vocab_size );
+    const auto size = sizeof( float )
+                      * ( config.dim * 5 + config.hidden_dim * 2 + config.n_heads * config.seq_len + config.vocab_size
+                          + config.n_heads );
 
     CHECK_CUDA( cudaMalloc( &ptr, size ) );
     return reinterpret_cast<float*>( ptr );
@@ -308,14 +308,15 @@ Llama2::RunState::RunState( const Config& config, const int32_t start_layer, con
     return reinterpret_cast<float*>( ptr );
   }() )
   , xb( buffer_ )
-  , xb2( buffer_ + config.dim )
-  , q( buffer_ + config.dim * 2 )
-  , k( buffer_ + config.dim * 3 )
-  , v( buffer_ + config.dim * 4 )
-  , hb( buffer_ + config.dim * 5 )
-  , hb2( buffer_ + config.dim * 5 + config.hidden_dim )
-  , att( buffer_ + config.dim * 5 + config.hidden_dim * 2 )
-  , logits( buffer_ + config.dim * 5 + config.hidden_dim * 2 + config.n_heads * config.seq_len )
+  , xb2( xb + config.dim )
+  , q( xb2 + config.dim )
+  , k( q + config.dim )
+  , v( k + config.dim )
+  , hb( v + config.dim )
+  , hb2( hb + config.hidden_dim )
+  , att( hb2 + config.hidden_dim )
+  , logits( att + config.n_heads * config.seq_len )
+  , temp_softmax( logits + config.vocab_size )
   , kv_cache( config, start_layer, end_layer )
 {
 }
@@ -467,11 +468,9 @@ __global__ void normalize_by_sum( float* att, const float* sums, const int n_hea
   att[token_pos] /= sums[head_num];
 }
 
-void attention_softmax( float* att, const int token_pos, const int seq_len, const int n_heads )
+void attention_softmax( float* att, const int token_pos, const int seq_len, const int n_heads, float* temp_buffer )
 {
-  float* head_values;
-
-  CHECK_CUDA( cudaMalloc( &head_values, sizeof( float ) * n_heads ) );
+  float* head_values = temp_buffer;
 
   // (1) find the max value for each head (each row)
   find_max_for_rows<<<1, n_heads>>>( att, head_values, token_pos, n_heads, seq_len );
@@ -484,8 +483,6 @@ void attention_softmax( float* att, const int token_pos, const int seq_len, cons
 
   // (4) normalize each row by its sum
   normalize_by_sum<<<token_pos + 1, n_heads>>>( att, head_values, n_heads, seq_len );
-
-  cudaFree( head_values );
 }
 
 __global__ void attention_2( float* att,
@@ -547,7 +544,7 @@ void Llama2::transformer_layer( const int32_t layer_num, const int token_pos )
     state_.q, state_.kv_cache.buffer_, state_.att, layer_num, config_.n_layers, config_.seq_len, head_size, dim );
 
   // softmax
-  attention_softmax( state_.att, token_pos, config_.seq_len, config_.n_heads );
+  attention_softmax( state_.att, token_pos, config_.seq_len, config_.n_heads, state_.temp_softmax );
 
   CHECK_CUDA( cudaMemset( state_.xb, 0, dim * sizeof( float ) ) );
 
