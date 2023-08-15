@@ -76,6 +76,29 @@ __global__ void softmax( float* x, const int size )
   }
 }
 
+__device__ void softmax_device( float* x, const int size )
+{
+  // find max value (for numerical stability)
+  float max_val = x[0];
+  for ( int i = 1; i < size; i++ ) {
+    if ( x[i] > max_val ) {
+      max_val = x[i];
+    }
+  }
+
+  // exp and sum
+  float sum = 0.0f;
+  for ( int i = 0; i < size; i++ ) {
+    x[i] = expf( x[i] - max_val );
+    sum += x[i];
+  }
+
+  // normalize
+  for ( int i = 0; i < size; i++ ) {
+    x[i] /= sum;
+  }
+}
+
 __global__ void sample( const float* probabilities, const int n, int* output )
 {
   // sample index from probabilities, they must sum to 1
@@ -109,7 +132,7 @@ __global__ void argmax( const float* v, const int n, int* output )
   *output = max_i;
 }
 
-void accum( float* a, const float* b, const int size, const size_t threads_per_block )
+void accum( float* a, const float* b, const int size )
 {
   float alpha = 1.0f;
   cublasSaxpy( handle, size, &alpha, b, 1, a, 1 );
@@ -118,7 +141,7 @@ void accum( float* a, const float* b, const int size, const size_t threads_per_b
 // void rmsnorm( float* o, const float* x, const float* weight, const int size );
 // void softmax( float* x, const int size );
 
-void matmul( float* xout, const float* x, const float* W, const int n, const int d, const size_t threads_per_block )
+void matmul( float* xout, const float* x, const float* W, const int n, const int d )
 {
   float alpha = 1.0f;
   float beta = 0.0f;
@@ -337,7 +360,7 @@ float* Llama2::RunState::KVCache::key( int layer, const int step, const int head
 float* Llama2::RunState::KVCache::value( int layer, const int step, const int head )
 {
   layer -= start_layer_;
-  return buffer_ + step * ( n_layers_ * dim_ * 2 ) + layer * ( dim_ * 2 ) + dim_ + head * head_size_;
+  return buffer_ + step * ( n_layers_ * dim_ * 2 ) + layer * ( dim_ * 2 ) + head * head_size_ + dim_;
 }
 
 void Llama2::RunState::KVCache::pop() { throw runtime_error( "KVCache::pop() not implemented" ); }
@@ -378,29 +401,6 @@ __global__ void do_rope( const int head_size,
   }
 }
 
-__global__ void score( const float* k, const float* q, float* att, const int t, const int head_size )
-{
-  float score = 0.0f;
-  for ( int i = 0; i < head_size; i++ ) {
-    score += q[i] * k[i];
-  }
-  score /= sqrtf( head_size );
-
-  // save the score to the attention buffer
-  att[t] = score;
-}
-
-__global__ void attscore( float* xb, const float* v, const float* att, const int t, const int head_size )
-{
-  // get the attention weight for this timestep
-  const float a = att[t];
-
-  // accumulate the weighted value into xb
-  for ( int i = 0; i < head_size; i++ ) {
-    xb[i] += a * v[i];
-  }
-}
-
 __global__ void silu( float* hb, float* hb2, const int hidden_dim )
 {
   // F.silu; silu(x)=x*σ(x),where σ(x) is the logistic sigmoid
@@ -414,22 +414,21 @@ __global__ void silu( float* hb, float* hb2, const int hidden_dim )
   }
 }
 
-__global__ void attention_head_0( const float* all_q,
-                                  const float* kv_cache,
-                                  float* att,
-                                  const int layer_num,
-                                  const int n_layers,
-                                  const int seq_len,
-                                  const int head_size,
-                                  const int dim )
+__global__ void attention_0( const float* all_q,
+                             const float* kv_cache,
+                             float* att,
+                             const int layer_num,
+                             const int n_layers,
+                             const int seq_len,
+                             const int head_size,
+                             const int dim )
 {
-  const int head_num = blockIdx.x;
-  const int token_num = blockIdx.y;
-  const int token_pos = threadIdx.x;
+  const int head_num = threadIdx.x;
+  const int token_pos = blockIdx.x;
 
   att += head_num * seq_len;
   const float* q = all_q + head_num * head_size;
-  const float* k = kv_cache + token_num * n_layers * ( dim * 2 ) + layer_num * ( dim * 2 ) + head_num * head_size;
+  const float* k = kv_cache + token_pos * ( n_layers * dim * 2 ) + layer_num * ( dim * 2 ) + head_num * head_size;
 
   float score = 0.0f;
   for ( int i = 0; i < head_size; i++ ) {
@@ -441,24 +440,31 @@ __global__ void attention_head_0( const float* all_q,
   att[token_pos] = score;
 }
 
-__global__ void attention_head_2( float* att,
-                                  const float* kv_cache,
-                                  float* xb,
-                                  const int layer_num,
-                                  const int n_layers,
-                                  const int seq_len,
-                                  const int head_size,
-                                  const int dim )
+__global__ void attention_1( float* att, const int token_pos, const int seq_len )
 {
-  const int head_num = blockIdx.x;
-  const int token_num = blockIdx.y;
-  const int token_pos = threadIdx.x;
+  const int head_num = threadIdx.x;
+
+  att += head_num * seq_len;
+  ops::softmax_device( att, token_pos + 1 );
+}
+
+__global__ void attention_2( float* att,
+                             const float* kv_cache,
+                             float* xb,
+                             const int layer_num,
+                             const int n_layers,
+                             const int seq_len,
+                             const int head_size,
+                             const int dim )
+{
+  const int head_num = threadIdx.x;
+  const int token_pos = blockIdx.x;
 
   att += head_num * seq_len;
   xb += head_num * head_size;
 
   const float a = att[token_pos];
-  const float* v = kv_cache + token_num * n_layers * ( dim * 2 ) + layer_num * ( dim * 2 ) + dim + head_num * head_size;
+  const float* v = kv_cache + token_pos * ( n_layers * dim * 2 ) + layer_num * ( dim * 2 ) + head_num * head_size + dim;
 
   for ( int i = 0; i < head_size; i++ ) {
     atomicAdd( &xb[i], a * v[i] );
@@ -467,7 +473,7 @@ __global__ void attention_head_2( float* att,
 
 void Llama2::transformer_layer( const int32_t layer_num, const int token_pos )
 {
-  float* x = state_.x;
+  float* const x = state_.x;
   const int dim = config_.dim;
   const int hidden_dim = config_.hidden_dim;
   const int head_size = dim / config_.n_heads;
@@ -482,9 +488,9 @@ void Llama2::transformer_layer( const int32_t layer_num, const int token_pos )
   ops::rmsnorm<<<1, 1>>>( state_.xb, x, layer_weights.rms_att_weight, dim );
 
   // qkv matmuls for this position
-  ops::matmul( state_.q, state_.xb, layer_weights.wq, dim, dim, threads_per_block_ );
-  ops::matmul( state_.k, state_.xb, layer_weights.wk, dim, dim, threads_per_block_ );
-  ops::matmul( state_.v, state_.xb, layer_weights.wv, dim, dim, threads_per_block_ );
+  ops::matmul( state_.q, state_.xb, layer_weights.wq, dim, dim );
+  ops::matmul( state_.k, state_.xb, layer_weights.wk, dim, dim );
+  ops::matmul( state_.v, state_.xb, layer_weights.wv, dim, dim );
 
   do_rope<<<1, 1>>>( head_size, config_.n_heads, freq_cis_real_row, freq_cis_imag_row, state_.q, state_.k );
 
@@ -496,45 +502,38 @@ void Llama2::transformer_layer( const int32_t layer_num, const int token_pos )
   CHECK_CUDA( cudaMemcpy( v_cache_pos, state_.v, dim * sizeof( float ), cudaMemcpyDeviceToDevice ) );
 
   // multihead attention. for each head and for each token up to and including the current one
-  {
-    dim3 grid { static_cast<unsigned int>( config_.n_heads ), static_cast<unsigned int>( token_pos + 1 ) };
-    dim3 block { static_cast<unsigned int>( token_pos + 1 ) };
-    attention_head_0<<<grid, block>>>(
-      state_.q, state_.kv_cache.buffer_, state_.att, layer_num, config_.n_layers, token_pos, head_size, dim );
-  }
+  attention_0<<<token_pos + 1, config_.n_heads>>>(
+    state_.q, state_.kv_cache.buffer_, state_.att, layer_num, config_.n_layers, config_.seq_len, head_size, dim );
 
-  ops::softmax<<<1, 1>>>( state_.att, token_pos + 1 );
+  attention_1<<<1, config_.n_heads>>>( state_.att, token_pos, config_.seq_len );
+
   CHECK_CUDA( cudaMemset( state_.xb, 0, dim * sizeof( float ) ) );
 
-  {
-    dim3 grid { static_cast<unsigned int>( config_.n_heads ), static_cast<unsigned int>( token_pos + 1 ) };
-    dim3 block { static_cast<unsigned int>( token_pos + 1 ) };
-    attention_head_2<<<grid, block>>>(
-      state_.att, state_.kv_cache.buffer_, state_.xb, layer_num, config_.n_layers, token_pos, head_size, dim );
-  }
+  attention_2<<<token_pos + 1, config_.n_heads>>>(
+    state_.att, state_.kv_cache.buffer_, state_.xb, layer_num, config_.n_layers, config_.seq_len, head_size, dim );
   // end of multihead attention
 
   // final matmul to get the output of the attention
-  ops::matmul( state_.xb2, state_.xb, layer_weights.wo, dim, dim, threads_per_block_ );
+  ops::matmul( state_.xb2, state_.xb, layer_weights.wo, dim, dim );
 
   // residual connection back into x
-  ops::accum( x, state_.xb2, dim, threads_per_block_ );
+  ops::accum( x, state_.xb2, dim );
 
   // ffn rmsnorm
   ops::rmsnorm<<<1, 1>>>( state_.xb, x, layer_weights.rms_ffn_weight, dim );
 
   // now for ffn in we have: self.w2(F.silu(self.w1(x)) * self.w3(x))
   // first calculate self.w1(x) and self.w3(x)
-  ops::matmul( state_.hb, state_.xb, layer_weights.w1, dim, hidden_dim, threads_per_block_ );
-  ops::matmul( state_.hb2, state_.xb, layer_weights.w3, dim, hidden_dim, threads_per_block_ );
+  ops::matmul( state_.hb, state_.xb, layer_weights.w1, dim, hidden_dim );
+  ops::matmul( state_.hb2, state_.xb, layer_weights.w3, dim, hidden_dim );
 
   silu<<<1, 1>>>( state_.hb, state_.hb2, hidden_dim );
 
   // final matmul to get the output of the ffn
-  ops::matmul( state_.xb, state_.hb, layer_weights.w2, hidden_dim, dim, threads_per_block_ );
+  ops::matmul( state_.xb, state_.hb, layer_weights.w2, hidden_dim, dim );
 
   // residual connection
-  ops::accum( x, state_.xb, dim, threads_per_block_ );
+  ops::accum( x, state_.xb, dim );
 }
 
 void Llama2::pass_end()
@@ -545,7 +544,7 @@ void Llama2::pass_end()
   ops::rmsnorm<<<1, 1>>>( x, x, base_weights_.rms_final_weight, config_.dim );
 
   // classifier into logits
-  ops::matmul( state_.logits, x, base_weights_.wcls, config_.dim, config_.vocab_size, threads_per_block_ );
+  ops::matmul( state_.logits, x, base_weights_.wcls, config_.dim, config_.vocab_size );
 }
 
 pair<int, string> Llama2::forward( const int token )
