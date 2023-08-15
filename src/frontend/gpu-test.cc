@@ -4,7 +4,7 @@
 
 #include <glog/logging.h>
 
-#include "gpu/llama2.cuh"
+#include "cuda/llama2.cuh"
 #include "util/timer.hh"
 
 using namespace std;
