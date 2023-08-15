@@ -17,7 +17,7 @@ file ( GLOB SOURCE
   src/net/*.cc
   src/nn/*.cc
   src/worker/*.cc
-  src/gpu/*.cu
+  src/cuda/*.cu
 )
 
 add_library ( glinthawk STATIC ${SOURCE} )
