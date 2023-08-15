@@ -35,22 +35,27 @@ static cublasHandle_t handle;
 
 namespace ops {
 
-__global__ void rmsnorm( float* output, const float* x, const float* weight, const int size )
+__global__ void normalize_and_scale( float* output,
+                                     const float* x,
+                                     const float* weight,
+                                     const int size,
+                                     const float ss )
+{
+  const int i = threadIdx.x;
+  output[i] = weight[i] * ss * x[i];
+}
+
+void rmsnorm( float* output, const float* x, const float* weight, const int size )
 {
   // calculate sum of squares
   float ss = 0.0f;
-  for ( int j = 0; j < size; j++ ) {
-    ss += x[j] * x[j];
-  }
 
+  cublasSdot( handle, size, x, 1, x, 1, &ss );
   ss /= size;
   ss += 1e-5f;
   ss = 1.0f / sqrtf( ss );
 
-  // normalize and scale
-  for ( int j = 0; j < size; j++ ) {
-    output[j] = weight[j] * ( ss * x[j] );
-  }
+  normalize_and_scale<<<1, size>>>( output, x, weight, size, ss );
 }
 
 __global__ void softmax( float* x, const int size )
@@ -379,26 +384,25 @@ __global__ void do_rope( const int head_size,
                          float* state_q,
                          float* state_k )
 {
-  // apply RoPE rotation to the q and k vectors for each head
-  for ( int head_num = 0; head_num < n_heads; head_num++ ) {
-    // get the q and k vectors for this head
-    float* q = state_q + head_num * head_size;
-    float* k = state_k + head_num * head_size;
+  const int head_num = blockIdx.x;
+  const int elem_idx = 2 * threadIdx.x;
 
-    // rotate q and k by the freq_cis_real and freq_cis_imag
-    for ( int i = 0; i < head_size; i += 2 ) {
-      const float q0 = q[i];
-      const float q1 = q[i + 1];
-      const float k0 = k[i];
-      const float k1 = k[i + 1];
-      const float fcr = freq_cis_real_row[i / 2];
-      const float fci = freq_cis_imag_row[i / 2];
-      q[i] = q0 * fcr - q1 * fci;
-      q[i + 1] = q0 * fci + q1 * fcr;
-      k[i] = k0 * fcr - k1 * fci;
-      k[i + 1] = k0 * fci + k1 * fcr;
-    }
-  }
+  // apply RoPE rotation to the q and k vectors for each head
+  // get the q and k vectors for this head
+  float* q = state_q + head_num * head_size;
+  float* k = state_k + head_num * head_size;
+
+  // rotate q and k by the freq_cis_real and freq_cis_imag
+  const float q0 = q[elem_idx];
+  const float q1 = q[elem_idx + 1];
+  const float k0 = k[elem_idx];
+  const float k1 = k[elem_idx + 1];
+  const float fcr = freq_cis_real_row[elem_idx / 2];
+  const float fci = freq_cis_imag_row[elem_idx / 2];
+  q[elem_idx] = q0 * fcr - q1 * fci;
+  q[elem_idx + 1] = q0 * fci + q1 * fcr;
+  k[elem_idx] = k0 * fcr - k1 * fci;
+  k[elem_idx + 1] = k0 * fci + k1 * fcr;
 }
 
 __global__ void silu( float* hb, float* hb2, const int hidden_dim )
@@ -485,14 +489,15 @@ void Llama2::transformer_layer( const int32_t layer_num, const int token_pos )
   const auto& layer_weights = layer_weights_[layer_num];
 
   // attention rmsnorm
-  ops::rmsnorm<<<1, 1>>>( state_.xb, x, layer_weights.rms_att_weight, dim );
+  ops::rmsnorm( state_.xb, x, layer_weights.rms_att_weight, dim );
 
   // qkv matmuls for this position
   ops::matmul( state_.q, state_.xb, layer_weights.wq, dim, dim );
   ops::matmul( state_.k, state_.xb, layer_weights.wk, dim, dim );
   ops::matmul( state_.v, state_.xb, layer_weights.wv, dim, dim );
 
-  do_rope<<<1, 1>>>( head_size, config_.n_heads, freq_cis_real_row, freq_cis_imag_row, state_.q, state_.k );
+  do_rope<<<config_.n_heads, head_size / 2>>>(
+    head_size, config_.n_heads, freq_cis_real_row, freq_cis_imag_row, state_.q, state_.k );
 
   float* k_cache_pos = state_.kv_cache.key( layer_num, token_pos );
   float* v_cache_pos = state_.kv_cache.value( layer_num, token_pos );
@@ -520,7 +525,7 @@ void Llama2::transformer_layer( const int32_t layer_num, const int token_pos )
   ops::accum( x, state_.xb2, dim );
 
   // ffn rmsnorm
-  ops::rmsnorm<<<1, 1>>>( state_.xb, x, layer_weights.rms_ffn_weight, dim );
+  ops::rmsnorm( state_.xb, x, layer_weights.rms_ffn_weight, dim );
 
   // now for ffn in we have: self.w2(F.silu(self.w1(x)) * self.w3(x))
   // first calculate self.w1(x) and self.w3(x)
@@ -541,7 +546,7 @@ void Llama2::pass_end()
   float* x = state_.x;
 
   // final rmsnorm
-  ops::rmsnorm<<<1, 1>>>( x, x, base_weights_.rms_final_weight, config_.dim );
+  ops::rmsnorm( x, x, base_weights_.rms_final_weight, config_.dim );
 
   // classifier into logits
   ops::matmul( state_.logits, x, base_weights_.wcls, config_.dim, config_.vocab_size );
