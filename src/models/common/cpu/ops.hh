@@ -1,0 +1,13 @@
+#pragma once
+
+namespace glinthawk::models::common::cpu {
+
+void accum( float* a, const float* b, const int size );
+void rmsnorm( float* o, const float* x, const float* weight, const int size );
+void softmax( float* x, const int size );
+void matmul( float* xout, const float* x, const float* w, const int n, const int d );
+
+int sample(const float* probabilities, const int n);
+int argmax(const float* v, const int n);
+
+}

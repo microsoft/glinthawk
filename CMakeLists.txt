@@ -20,6 +20,13 @@ file ( GLOB SOURCE
   src/cuda/*.cu
 )
 
+file ( GLOB_RECURSE MODELS_SOURCE
+  src/models/*.cc
+  src/models/*.cu
+)
+
+list ( APPEND SOURCE ${MODELS_SOURCE} )
+
 add_library ( glinthawk STATIC ${SOURCE} )
 link_libraries ( glinthawk )
 
