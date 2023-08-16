@@ -12,10 +12,10 @@ using namespace glinthawk::models::llama2;
 
 /* MODEL CONFIG */
 
-Config::Config( const filesystem::path& weights_path )
+Config::Config( const filesystem::path& config_file )
 {
-  ifstream fin { weights_path, ios::binary };
-  CHECK( fin ) << "Failed to open weights file: " << weights_path;
+  ifstream fin { config_file, ios::binary };
+  CHECK( fin ) << "Failed to open config file: " << config_file;
 
   fin.read( reinterpret_cast<char*>( this ), sizeof( *this ) );
 
@@ -114,15 +114,15 @@ LayerWeights<DType>::LayerWeights( const Config& config, const DType* model, con
   auto ptr = model;
 
   // base pointers
-  DType* const base_rms_att_weight = ( ptr += config.vocab_size * config.dim );
-  DType* const base_wq = ( ptr += config.n_layers * config.dim );
-  DType* const base_wk = ( ptr += config.n_layers * config.dim * config.dim );
-  DType* const base_wv = ( ptr += config.n_layers * config.dim * config.dim );
-  DType* const base_wo = ( ptr += config.n_layers * config.dim * config.dim );
-  DType* const base_rms_ffn_weight = ( ptr += config.n_layers * config.dim * config.dim );
-  DType* const base_w1 = ( ptr += config.n_layers * config.dim );
-  DType* const base_w2 = ( ptr += config.n_layers * config.dim * config.hidden_dim );
-  DType* const base_w3 = ( ptr += config.n_layers * config.hidden_dim * config.dim );
+  const DType* base_rms_att_weight = ( ptr += config.vocab_size * config.dim );
+  const DType* base_wq = ( ptr += config.n_layers * config.dim );
+  const DType* base_wk = ( ptr += config.n_layers * config.dim * config.dim );
+  const DType* base_wv = ( ptr += config.n_layers * config.dim * config.dim );
+  const DType* base_wo = ( ptr += config.n_layers * config.dim * config.dim );
+  const DType* base_rms_ffn_weight = ( ptr += config.n_layers * config.dim * config.dim );
+  const DType* base_w1 = ( ptr += config.n_layers * config.dim );
+  const DType* base_w2 = ( ptr += config.n_layers * config.dim * config.hidden_dim );
+  const DType* base_w3 = ( ptr += config.n_layers * config.hidden_dim * config.dim );
 
   this->rms_att_weight = base_rms_att_weight + layer_num * config.dim;
   this->rms_ffn_weight = base_rms_ffn_weight + layer_num * config.dim;
@@ -138,7 +138,7 @@ LayerWeights<DType>::LayerWeights( const Config& config, const DType* model, con
 /* RUN STATE */
 
 template<typename DType>
-RunState<DType>::RunState( const Config& config, DType* buffer, const int32_t start_layer, const int32_t end_layer )
+RunState<DType>::RunState( const Config& config, DType* buffer )
   : buffer_( buffer )
   , x( buffer_ )
   , xb( buffer_ + config.dim )
@@ -151,7 +151,6 @@ RunState<DType>::RunState( const Config& config, DType* buffer, const int32_t st
   , att( hb2 + config.hidden_dim )
   , logits( att + config.n_heads * config.seq_len )
   , temp_softmax( logits + config.vocab_size )
-  , kv_cache( config, start_layer, end_layer )
 {
 }
 
@@ -163,13 +162,12 @@ size_t RunState<DType>::state_size( const Config& config )
              + config.n_heads );
 }
 
+/* KV CACHE */
+
 template<typename DType>
-RunState<DType>::KVCache::KVCache( const Config& config,
-                                   DType* buffer,
-                                   const int32_t start_layer,
-                                   const int32_t end_layer )
+KVCache<DType>::KVCache( const Config& config, DType* buffer, const int32_t start_layer, const int32_t end_layer )
   : start_layer_( start_layer )
-  , end_layer_( end_layer )
+  , end_layer_( end_layer == -1 ? config.n_layers - 1 : end_layer )
   , buffer_( buffer )
   , seq_len_( config.seq_len )
   , dim_( config.dim )
@@ -179,21 +177,55 @@ RunState<DType>::KVCache::KVCache( const Config& config,
 }
 
 template<typename DType>
-DType* RunState<DType>::KVCache::key( int layer, const int step, const int head )
+size_t KVCache<DType>::cache_size( const Config& config, const int32_t start_layer, const int32_t end_layer )
+{
+  return sizeof( DType ) * config.seq_len * config.dim * 2 * ( end_layer - start_layer + 1 );
+}
+
+template<typename DType>
+DType* KVCache<DType>::key( int layer, const int step, const int head )
 {
   layer -= start_layer_;
   return buffer_ + step * ( n_layers_ * dim_ * 2 ) + layer * ( dim_ * 2 ) + head * head_size_;
 }
 
 template<typename DType>
-DType* RunState<DType>::KVCache::value( int layer, const int step, const int head )
+DType* KVCache<DType>::value( int layer, const int step, const int head )
 {
   layer -= start_layer_;
   return buffer_ + step * ( n_layers_ * dim_ * 2 ) + layer * ( dim_ * 2 ) + head * head_size_ + dim_;
 }
 
+/* BaseLlama2 */
+
 template<typename DType>
-void RunState<DType>::KVCache::pop()
+BaseLlama2<DType>::BaseLlama2( const Config& config,
+                               unique_ptr<DType, void ( * )( DType* )>&& model,
+                               unique_ptr<DType, void ( * )( DType* )>&& run_state,
+                               unique_ptr<DType, void ( * )( DType* )>&& kv_cache,
+                               const int32_t start_layer,
+                               const int32_t end_layer )
+  : model_buffer_( move( model ) )
+  , run_state_buffer_( move( run_state ) )
+  , kv_cache_buffer_( move( kv_cache ) )
+  , config_( config )
+  , start_layer_num_( start_layer )
+  , end_layer_num_( end_layer == -1 ? config_.n_layers - 1 : end_layer )
+  , state_( config_, run_state_buffer_.get() )
+  , kv_cache_( config_, kv_cache_buffer_.get(), start_layer_num_, end_layer_num_ )
+  , base_weights_( config_, model_buffer_.get() )
+  , layer_weights_( [&] {
+    CHECK_GE( start_layer_num_, 0 ) << "Start layer must be non-negative.";
+    CHECK_LT( end_layer_num_, config_.n_layers ) << "End layer must be less than the number of layers.";
+
+    std::vector<LayerWeights<DType>> layers {};
+    layers.resize( config_.n_layers );
+
+    for ( int i = start_layer_num_; i <= end_layer_num_; i++ ) {
+      layers[i] = LayerWeights { config_, model_buffer_.get(), i };
+    }
+
+    return layers;
+  }() )
 {
-  throw runtime_error( "KVCache::pop() not implemented" );
 }
