@@ -87,13 +87,13 @@ struct LayerWeights
 template<typename DType>
 struct RunState
 {
-  RunState( const Config& config, DType* buffer, const int32_t start_layer, const int32_t end_layer );
+  RunState( const Config& config, DType* buffer );
   RunState( const RunState& ) = delete;
   RunState operator=( const RunState& ) = delete;
 
   static size_t state_size( const Config& config );
 
-  DType* buffer_;         // we use this buffer for everything except for activations
+  DType* buffer_;         // we use this buffer for everything, including activations
   DType* x {};            // activation at current time stamp (dim,)
   DType* xb {};           // same, but inside a residual branch (dim,)
   DType* xb2 {};          // an additional buffer just for convenience (dim,)
@@ -105,51 +105,52 @@ struct RunState
   DType* att {};          // buffer for scores/attention values (n_heads, seq_len)
   DType* logits {};       // output logits
   DType* temp_softmax {}; // temporary buffer for computing softmax (n_heads,)
-
-  // k-v cache
-  struct KVCache
-  {
-    const int32_t start_layer_;
-    const int32_t end_layer_;
-
-    DType* buffer_;
-    const int seq_len_;
-    const int dim_;
-    const int n_layers_;
-    const int head_size_;
-
-    inline DType* key( const int layer, const int step, const int head = 0 );
-    inline DType* value( const int layer, const int step, const int head = 0 );
-
-    void pop();
-
-    KVCache( const Config& config, DType* buffer, const int32_t start_layer, const int32_t end_layer );
-  };
-
-  KVCache kv_cache;
 };
 
 template<typename DType>
-class Llama2 : public glinthawk::models::Model<DType>
+struct KVCache
+{
+  KVCache( const Config& config, DType* buffer, const int32_t start_layer, const int32_t end_layer );
+
+  static size_t cache_size( const Config& config, const int32_t start_layer, const int32_t end_layer );
+
+  const int32_t start_layer_;
+  const int32_t end_layer_;
+
+  DType* buffer_;
+  const int seq_len_;
+  const int dim_;
+  const int n_layers_;
+  const int head_size_;
+
+  inline DType* key( const int layer, const int step, const int head = 0 );
+  inline DType* value( const int layer, const int step, const int head = 0 );
+};
+
+template<typename DType>
+class BaseLlama2 : public glinthawk::models::Model<DType>
 {
 protected:
   std::unique_ptr<DType, void ( * )( DType* )> model_buffer_;
   std::unique_ptr<DType, void ( * )( DType* )> run_state_buffer_;
+  std::unique_ptr<DType, void ( * )( DType* )> kv_cache_buffer_;
 
   const Config config_;
-  const Vocabulary vocabulary_;
+  const int32_t start_layer_num_;
+  const int32_t end_layer_num_;
+
+  RunState<DType> state_;
+  KVCache<DType> kv_cache_;
   const BaseWeights<DType> base_weights_;
   const std::vector<LayerWeights<DType>> layer_weights_;
 
-public:
-  Llama2( std::unique_ptr<DType, void ( * )( DType* )> model,
-          std::unique_ptr<DType, void ( * )( DType* )> run_state,
-          const Config& config,
-          const Vocabulary& vocabulary,
-          const BaseWeights<DType>& base_weights,
-          const std::vector<LayerWeights<DType>>& layer_weights );
-
-  InferenceState<DType> forward( const InferenceState<DType>& inference_state ) override;
+protected:
+  BaseLlama2( const Config& config,
+              std::unique_ptr<DType, void ( * )( DType* )>&& model,
+              std::unique_ptr<DType, void ( * )( DType* )>&& run_state,
+              std::unique_ptr<DType, void ( * )( DType* )>&& kv_cache,
+              const int32_t start_layer = 0,
+              const int32_t end_layer = -1 );
 };
 
 } // namespace glinthawk::models::llama2
