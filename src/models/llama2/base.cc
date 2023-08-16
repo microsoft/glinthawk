@@ -1,4 +1,4 @@
-#include "llama2.hh"
+#include "base.hh"
 
 #include <filesystem>
 #include <fstream>
@@ -85,7 +85,8 @@ int Vocabulary::get_token( const string& word ) const
 
 /* BASE WEIGHTS */
 
-BaseWeights::BaseWeights( const Config& config, const float* model )
+template<typename DType>
+BaseWeights<DType>::BaseWeights( const Config& config, const DType* model )
 {
   auto ptr = model;
   this->token_embedding_table = ptr;
@@ -107,20 +108,21 @@ BaseWeights::BaseWeights( const Config& config, const float* model )
 
 /* LAYER WEIGHTS */
 
-Llama2::LayerWeights::LayerWeights( const Config& config, const float* model, const int layer_num )
+template<typename DType>
+LayerWeights<DType>::LayerWeights( const Config& config, const DType* model, const int layer_num )
 {
   auto ptr = model;
 
   // base pointers
-  float* const base_rms_att_weight = ( ptr += config.vocab_size * config.dim );
-  float* const base_wq = ( ptr += config.n_layers * config.dim );
-  float* const base_wk = ( ptr += config.n_layers * config.dim * config.dim );
-  float* const base_wv = ( ptr += config.n_layers * config.dim * config.dim );
-  float* const base_wo = ( ptr += config.n_layers * config.dim * config.dim );
-  float* const base_rms_ffn_weight = ( ptr += config.n_layers * config.dim * config.dim );
-  float* const base_w1 = ( ptr += config.n_layers * config.dim );
-  float* const base_w2 = ( ptr += config.n_layers * config.dim * config.hidden_dim );
-  float* const base_w3 = ( ptr += config.n_layers * config.hidden_dim * config.dim );
+  DType* const base_rms_att_weight = ( ptr += config.vocab_size * config.dim );
+  DType* const base_wq = ( ptr += config.n_layers * config.dim );
+  DType* const base_wk = ( ptr += config.n_layers * config.dim * config.dim );
+  DType* const base_wv = ( ptr += config.n_layers * config.dim * config.dim );
+  DType* const base_wo = ( ptr += config.n_layers * config.dim * config.dim );
+  DType* const base_rms_ffn_weight = ( ptr += config.n_layers * config.dim * config.dim );
+  DType* const base_w1 = ( ptr += config.n_layers * config.dim );
+  DType* const base_w2 = ( ptr += config.n_layers * config.dim * config.hidden_dim );
+  DType* const base_w3 = ( ptr += config.n_layers * config.hidden_dim * config.dim );
 
   this->rms_att_weight = base_rms_att_weight + layer_num * config.dim;
   this->rms_ffn_weight = base_rms_ffn_weight + layer_num * config.dim;
@@ -135,7 +137,8 @@ Llama2::LayerWeights::LayerWeights( const Config& config, const float* model, co
 
 /* RUN STATE */
 
-RunState::RunState( const Config& config, float* buffer, const int32_t start_layer, const int32_t end_layer )
+template<typename DType>
+RunState<DType>::RunState( const Config& config, DType* buffer, const int32_t start_layer, const int32_t end_layer )
   : buffer_( buffer )
   , x( buffer_ )
   , xb( buffer_ + config.dim )
@@ -152,7 +155,19 @@ RunState::RunState( const Config& config, float* buffer, const int32_t start_lay
 {
 }
 
-RunState::KVCache::KVCache( const Config& config, float* buffer, const int32_t start_layer, const int32_t end_layer )
+template<typename DType>
+size_t RunState<DType>::state_size( const Config& config )
+{
+  return sizeof( DType )
+         * ( config.dim * 5 + config.hidden_dim * 2 + config.n_heads * config.seq_len + config.vocab_size
+             + config.n_heads );
+}
+
+template<typename DType>
+RunState<DType>::KVCache::KVCache( const Config& config,
+                                   DType* buffer,
+                                   const int32_t start_layer,
+                                   const int32_t end_layer )
   : start_layer_( start_layer )
   , end_layer_( end_layer )
   , buffer_( buffer )
@@ -163,16 +178,22 @@ RunState::KVCache::KVCache( const Config& config, float* buffer, const int32_t s
 {
 }
 
-float* RunState::KVCache::key( int layer, const int step, const int head )
+template<typename DType>
+DType* RunState<DType>::KVCache::key( int layer, const int step, const int head )
 {
   layer -= start_layer_;
   return buffer_ + step * ( n_layers_ * dim_ * 2 ) + layer * ( dim_ * 2 ) + head * head_size_;
 }
 
-float* RunState::KVCache::value( int layer, const int step, const int head )
+template<typename DType>
+DType* RunState<DType>::KVCache::value( int layer, const int step, const int head )
 {
   layer -= start_layer_;
   return buffer_ + step * ( n_layers_ * dim_ * 2 ) + layer * ( dim_ * 2 ) + head * head_size_ + dim_;
 }
 
-void RunState::KVCache::pop() { throw runtime_error( "KVCache::pop() not implemented" ); }
+template<typename DType>
+void RunState<DType>::KVCache::pop()
+{
+  throw runtime_error( "KVCache::pop() not implemented" );
+}
