@@ -1,5 +1,8 @@
 #include "ops.cuh"
 
+#include <source_location>
+#include <string>
+
 #include <cublas_v2.h>
 #include <thrust/device_ptr.h>
 #include <thrust/device_vector.h>
@@ -17,23 +20,31 @@ namespace {
 cublasHandle_t cublas_handle;
 }
 
+void CHECK_CUBLAS( const cublasStatus_t err, const source_location location = source_location::current() )
+{
+  if ( err != CUBLAS_STATUS_SUCCESS ) {
+    throw runtime_error( "CUBLAS error "s + cublasGetStatusName( err ) + ": " + cublasGetStatusString( err ) + " ("
+                         + location.file_name() + ":" + std::to_string( location.line() ) + ")" );
+  }
+}
+
 void init() { cublasCreate( &cublas_handle ); }
 
 __global__ void normalize_and_scale_full( float* output,
-                                     const float* x,
-                                     const float* weight,
-                                     const int size,
-                                     const float ss )
+                                          const float* x,
+                                          const float* weight,
+                                          const int size,
+                                          const float ss )
 {
   const int i = threadIdx.x;
-  output[i] = weight[i] * ss *  x[i];
+  output[i] = weight[i] * ss * x[i];
 }
 
 __global__ void normalize_and_scale_half( __half* output,
-                                     const __half* x,
-                                     const __half* weight,
-                                     const int size,
-                                     const float ss )
+                                          const __half* x,
+                                          const __half* weight,
+                                          const int size,
+                                          const float ss )
 {
   const int i = threadIdx.x;
   output[i] = weight[i] * __float2half( ss * __half2float( x[i] ) );
@@ -45,7 +56,7 @@ void rmsnorm<float>( float* output, const float* x, const float* weight, const i
   // calculate sum of squares
   float ss = 0.0f;
 
-  cublasSdot( cublas_handle, size, x, 1, x, 1, &ss );
+  CHECK_CUBLAS( cublasSdot( cublas_handle, size, x, 1, x, 1, &ss ) );
   ss /= size;
   ss += 1e-5f;
   ss = 1.0f / sqrtf( ss );
@@ -53,37 +64,17 @@ void rmsnorm<float>( float* output, const float* x, const float* weight, const i
   normalize_and_scale_full<<<1, size>>>( output, x, weight, size, ss );
 }
 
-__global__ void print_this( const __half* x, const int size, float* output )
-{
-  float result = 0.0;
-  for ( int i = 0; i < size; i++ ) {
-    float x_f = __half2float( x[i] );
-    result += x_f * x_f;
-  }
-
-  *output = result;
-
-  *output /= size;
-  *output += 1e-5f;
-  *output = 1.0f / sqrtf( *output );
-}
-
 template<>
 void rmsnorm<__half>( __half* output, const __half* x, const __half* weight, const int size )
 {
   // calculate sum of squares
   __half ss_half = __half();
-  cublasDotEx( cublas_handle, size, x, CUDA_R_16F, 1, x, CUDA_R_16F, 1, &ss_half, CUDA_R_16F, CUDA_R_32F );
-  float ss = __half2float(ss_half) / size;
+  CHECK_CUBLAS(
+    cublasDotEx( cublas_handle, size, x, CUDA_R_16F, 1, x, CUDA_R_16F, 1, &ss_half, CUDA_R_16F, CUDA_R_32F ) );
+
+  float ss = __half2float( ss_half ) / size;
   ss += 1e-5f;
   ss = 1.0f / sqrtf( ss );
-
-//  float* ss_gpu;
-//  cudaMalloc( &ss_gpu, sizeof( float ) );
-//  print_this<<<1, 1>>>( x, size, ss_gpu );
-//  float ss;
-//  cudaMemcpy(&ss, ss_gpu, sizeof(float), cudaMemcpyDeviceToHost);
-//  cudaFree( ss_gpu );
 
   normalize_and_scale_half<<<1, size>>>( output, x, weight, size, ss );
 }
@@ -141,7 +132,8 @@ template<>
 void accum<__half>( __half* a, const __half* b, const int size )
 {
   float alpha = 1.0f;
-  cublasStatus_t r_t = cublasAxpyEx( cublas_handle, size, &alpha, CUDA_R_32F, b, CUDA_R_16F, 1, a, CUDA_R_16F, 1, CUDA_R_32F );
+  CHECK_CUBLAS(
+    cublasAxpyEx( cublas_handle, size, &alpha, CUDA_R_32F, b, CUDA_R_16F, 1, a, CUDA_R_16F, 1, CUDA_R_32F ) );
 }
 
 // void rmsnorm( float* o, const float* x, const float* weight, const int size );
@@ -154,7 +146,7 @@ void matmul<float>( float* xout, const float* x, const float* W, const int n, co
   float beta = 0.0f;
 
   // W(d,n) @ x(n,) -> xout(d,)
-  cublasSgemv( cublas_handle, CUBLAS_OP_T, n, d, &alpha, W, n, x, 1, &beta, xout, 1 );
+  CHECK_CUBLAS( cublasSgemv( cublas_handle, CUBLAS_OP_T, n, d, &alpha, W, n, x, 1, &beta, xout, 1 ) );
 }
 
 template<>
@@ -170,7 +162,9 @@ void matmul<__half>( __half* xout, const __half* x, const __half* W, const int s
   const int lda = m;
   const int ldb = k;
   const int ldc = m;
-  cublasHgemm( cublas_handle, CUBLAS_OP_N, CUBLAS_OP_N, m, n, k, &alpha, x, lda, W, ldb, &beta, xout, ldc );
+
+  CHECK_CUBLAS(
+    cublasHgemm( cublas_handle, CUBLAS_OP_N, CUBLAS_OP_N, m, n, k, &alpha, x, lda, W, ldb, &beta, xout, ldc ) );
 }
 
 template<>
@@ -189,9 +183,8 @@ void silu<__half>( __half* _hb, __half* _hb2, const int hidden_dim )
   thrust::device_ptr<__half> hb { _hb };
   thrust::device_ptr<__half> hb2 { _hb2 };
 
-  thrust::transform( hb, hb + hidden_dim, hb, [] __device__( __half x ) {
-    return ( x / ( __float2half( 1.0f ) + hexp( -x ) ) );
-  } );
+  thrust::transform(
+    hb, hb + hidden_dim, hb, [] __device__( __half x ) { return ( x / ( __float2half( 1.0f ) + hexp( -x ) ) ); } );
 
   thrust::transform( hb, hb + hidden_dim, hb2, hb, thrust::multiplies<__half>() );
 }
