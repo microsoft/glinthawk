@@ -69,6 +69,7 @@ void rmsnorm<__half>( __half* output, const __half* x, const __half* weight, con
 {
   // calculate sum of squares
   __half ss_half = __half();
+
   CHECK_CUBLAS(
     cublasDotEx( cublas_handle, size, x, CUDA_R_16F, 1, x, CUDA_R_16F, 1, &ss_half, CUDA_R_16F, CUDA_R_32F ) );
 

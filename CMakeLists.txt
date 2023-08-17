@@ -17,7 +17,6 @@ file ( GLOB SOURCE
   src/net/*.cc
   src/nn/*.cc
   src/worker/*.cc
-  src/cuda/*.cu
 )
 
 file ( GLOB_RECURSE MODELS_SOURCE
