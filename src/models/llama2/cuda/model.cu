@@ -23,7 +23,7 @@ void CHECK_CUDA( const cudaError_t err, const source_location location = source_
 {
   if ( err != cudaSuccess ) {
     throw runtime_error( "CUDA error: " + string( cudaGetErrorString( err ) ) + " (" + location.file_name() + ":"
-                         + std::to_string( location.line() ) + ")" );
+                         + to_string( location.line() ) + ")" );
   }
 }
 
@@ -34,8 +34,8 @@ void cuda_deleter( DType* ptr )
 }
 
 template<typename DType>
-Llama2<DType> Llama2<DType>::create( const std::filesystem::path& model_config,
-                                     const std::filesystem::path& model_weights,
+Llama2<DType> Llama2<DType>::create( const filesystem::path& model_config,
+                                     const filesystem::path& model_weights,
                                      const int32_t start_layer,
                                      const int32_t end_layer )
 {
