@@ -29,6 +29,7 @@ void CHECK_CUBLAS( const cublasStatus_t err, const source_location location = so
 }
 
 void init() { cublasCreate( &cublas_handle ); }
+void destroy() { cublasDestroy( cublas_handle ); }
 
 __global__ void normalize_and_scale_full( float* output,
                                           const float* x,
