@@ -5,6 +5,8 @@
 #include <sstream>
 #include <string>
 
+#include <cuda_fp16.h>
+
 #include <glog/logging.h>
 
 using namespace std;
@@ -70,7 +72,7 @@ Vocabulary::Vocabulary( const std::filesystem::path& vocabulary_path )
     word_to_token_.emplace( val, i );
   }
 
-  LOG( INFO ) << "Loaded vocabulary of size " << ( i + 1 ) << " from " << vocabulary_path;
+  LOG( INFO ) << "Loaded vocabulary of size " << i << " from " << vocabulary_path;
 }
 
 string Vocabulary::get_word( int token ) const
@@ -240,4 +242,10 @@ template class BaseWeights<float>;
 template class LayerWeights<float>;
 template class KVCache<float>;
 template class BaseLlama2<float>;
+
+template class RunState<__half>;
+template class BaseWeights<__half>;
+template class LayerWeights<__half>;
+template class KVCache<__half>;
+template class BaseLlama2<__half>;
 }
