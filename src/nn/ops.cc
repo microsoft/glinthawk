@@ -34,7 +34,7 @@ void rmsnorm( float* output, const float* x, const float* weight, const int size
 {
 #if defined( __SSE3__ )
   __m128 ss = _mm_setzero_ps();
-  const __m128 epsilon = _mm_set1_ps( 1e-6f );
+  const __m128 epsilon = _mm_set1_ps( 1e-5f );
   for ( int j = 0; j < size; j += 4 ) {
     __m128 xvec = _mm_load_ps( &x[j] );
     ss = _mm_add_ps( ss, _mm_mul_ps( xvec, xvec ) );
@@ -60,7 +60,7 @@ void rmsnorm( float* output, const float* x, const float* weight, const int size
   }
 
   ss /= size;
-  ss += 1e-6f;
+  ss += 1e-5f;
   ss = 1.0f / sqrtf( ss );
 
   // normalize and scale
