@@ -141,6 +141,12 @@ LayerWeights<DType>::LayerWeights( const Config& config, const DType* model, con
   this->w3 = base_w3 + layer_num * config.hidden_dim * config.dim;
 }
 
+template<typename DType>
+size_t LayerWeights<DType>::layer_size( const Config& config )
+{
+  return sizeof( DType ) * ( 2 * config.dim + 4 * config.dim * config.dim + 3 * config.dim * config.hidden_dim );
+}
+
 /* RUN STATE */
 
 template<typename DType>

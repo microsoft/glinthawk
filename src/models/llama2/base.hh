@@ -13,8 +13,7 @@ namespace glinthawk::models::llama2 {
 
 struct Config
 {
-  Config( const std::filesystem::path& weights_path );
-  Config( const void* model_buffer );
+  Config( const std::filesystem::path& config_file );
 
   std::string to_string() const;
 
@@ -44,7 +43,7 @@ public:
 template<typename DType>
 struct BaseWeights
 {
-  BaseWeights( const Config& config, const DType* model );
+  BaseWeights( const Config& config, const DType* base_weights );
   BaseWeights( const BaseWeights& ) = delete;
   BaseWeights operator=( const BaseWeights& ) = delete;
 
@@ -67,6 +66,8 @@ struct LayerWeights
 {
   LayerWeights() = default;
   LayerWeights( const Config& config, const DType* model, const int32_t layer_num );
+
+  static size_t layer_size( const Config& config );
 
   // weights for rmsnorms
   const DType* rms_att_weight { nullptr }; // (dim) rmsnorm weights
