@@ -228,6 +228,33 @@ __global__ void attention_2( DType* att,
 }
 
 template<typename DType>
+__global__ void attention_2_v2( DType* att,
+                                const DType* kv_cache,
+                                DType* xb,
+                                const int layer_num,
+                                const int n_layers,
+                                const int seq_len,
+                                const int head_size,
+                                const int dim,
+                                const int n_tokens)
+{
+  const int head_num = threadIdx.x;
+  const int i_head = blockIdx.x;
+
+  att += head_num * seq_len;
+  xb += head_num * head_size;
+
+  const DType* v = kv_cache + layer_num * ( dim * 2 ) + head_num * head_size + dim + i_head;
+  DType res = DType();
+
+  for ( int i = 0; i < n_tokens; i++ ) {
+    res += att[i] * v[i * ( n_layers * dim * 2 )];
+  }
+
+  xb[i_head] = res;
+}
+
+template<typename DType>
 void Llama2<DType>::pass_begin( const int token )
 {
   // copy the token embedding into the state
@@ -284,14 +311,24 @@ void Llama2<DType>::transformer_layer( const int32_t layer_num, const int token_
 
   CHECK_CUDA( cudaMemset( this->state_.xb, 0, dim * sizeof( DType ) ) );
 
-  attention_2<<<token_pos + 1, this->config_.n_heads>>>( this->state_.att,
+//  attention_2<<<token_pos + 1, this->config_.n_heads>>>( this->state_.att,
+//                                                         this->kv_cache_.buffer_,
+//                                                         this->state_.xb,
+//                                                         layer_num,
+//                                                         this->config_.n_layers,
+//                                                         this->config_.seq_len,
+//                                                         head_size,
+//                                                         dim );
+
+  attention_2_v2<<<head_size, this->config_.n_heads>>>( this->state_.att,
                                                          this->kv_cache_.buffer_,
                                                          this->state_.xb,
                                                          layer_num,
                                                          this->config_.n_layers,
                                                          this->config_.seq_len,
                                                          head_size,
-                                                         dim );
+                                                         dim,
+                                                         token_pos+1);
   // end of multihead attention
 
   // final matmul to get the output of the attention
