@@ -41,7 +41,7 @@ int main( int argc, char* argv[] )
   FLAGS_timestamp_in_logfile_name = false;
   google::InitGoogleLogging( argv[0] );
 
-  // try {
+  try {
     const filesystem::path config_path { argv[1] };
     const filesystem::path tokenizer_path { argv[2] };
     const filesystem::path weights_path { argv[3] };
@@ -56,10 +56,10 @@ int main( int argc, char* argv[] )
     }
 
     cerr << endl << global_timer().summary() << endl;
-  // } catch ( const exception& e ) {
-  //   cerr << "Error: " << e.what() << endl;
-  //   return EXIT_FAILURE;
-  // }
+  } catch ( const exception& e ) {
+    cerr << "Error: " << e.what() << endl;
+    return EXIT_FAILURE;
+  }
 
   return EXIT_SUCCESS;
 }
