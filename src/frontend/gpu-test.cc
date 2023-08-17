@@ -3,6 +3,7 @@
 #include <iostream>
 
 #include <glog/logging.h>
+#include <cuda_fp16.h>
 
 #include "models/llama2/cuda/model.cuh"
 #include "util/timer.hh"
@@ -40,25 +41,25 @@ int main( int argc, char* argv[] )
   FLAGS_timestamp_in_logfile_name = false;
   google::InitGoogleLogging( argv[0] );
 
-  try {
+  // try {
     const filesystem::path config_path { argv[1] };
     const filesystem::path tokenizer_path { argv[2] };
     const filesystem::path weights_path { argv[3] };
 
-    auto llama = models::llama2::cuda::Llama2<float>::create( config_path, weights_path );
+    auto llama = models::llama2::cuda::Llama2<__half>::create( config_path, weights_path );
     models::llama2::Vocabulary vocabulary { tokenizer_path };
 
     for ( int token = 1 /* BOS */; token != 2 /* EOS */; ) {
-      cout << vocabulary.get_word( token ) << flush;
+      cout << vocabulary.get_word( token ) << "(" << token << ")" << flush;
       GlobalScopeTimer<Timer::Category::TokenGeneration> _;
       token = llama.forward( token );
     }
 
     cerr << endl << global_timer().summary() << endl;
-  } catch ( const exception& e ) {
-    cerr << "Error: " << e.what() << endl;
-    return EXIT_FAILURE;
-  }
+  // } catch ( const exception& e ) {
+  //   cerr << "Error: " << e.what() << endl;
+  //   return EXIT_FAILURE;
+  // }
 
   return EXIT_SUCCESS;
 }

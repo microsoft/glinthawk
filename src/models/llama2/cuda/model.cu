@@ -4,6 +4,8 @@
 #include <memory>
 #include <source_location>
 
+#include <cuda_fp16.h>
+
 #include "util/exception.hh"
 #include "util/file_descriptor.hh"
 #include "util/ring_buffer.hh"
@@ -120,7 +122,12 @@ __global__ void attention_0( const DType* all_q,
   for ( int i = 0; i < head_size; i++ ) {
     score += q[i] * k[i];
   }
-  score /= sqrtf( head_size );
+
+  if constexpr ( is_same_v<DType, __half> ) {
+    score /= hsqrt( head_size );
+  } else {
+    score /= sqrtf( head_size );
+  }
 
   // save the score to the attention buffer
   att[token_pos] = score;
@@ -138,7 +145,7 @@ __global__ void find_max_for_rows( const DType* att,
 
   DType max_value = att[0];
   for ( int i = 1; i <= token_pos; i++ ) {
-    max_value = max( max_value, att[i] );
+    max_value = __hmax( max_value, att[i] );
   }
 
   output[head_num] = max_value;
@@ -364,5 +371,6 @@ int Llama2<DType>::forward( const int token )
 }
 
 template class Llama2<float>;
+template class Llama2<__half>;
 
 } // namespace glinthawk::models::llama2::cuda
