@@ -57,7 +57,7 @@ void rmsnorm( float* output, const float* x, const float* weight, const int size
 
   cublasSdot( handle, size, x, 1, x, 1, &ss );
   ss /= size;
-  ss += 1e-5f;
+  ss += 1e-6f;
   ss = 1.0f / sqrtf( ss );
 
   normalize_and_scale<<<1, size>>>( output, x, weight, size, ss );

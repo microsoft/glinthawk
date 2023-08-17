@@ -47,26 +47,26 @@ void rmsnorm<float>( float* output, const float* x, const float* weight, const i
 
   cublasSdot( cublas_handle, size, x, 1, x, 1, &ss );
   ss /= size;
-  ss += 1e-5f;
+  ss += 1e-6f;
   ss = 1.0f / sqrtf( ss );
 
   normalize_and_scale_full<<<1, size>>>( output, x, weight, size, ss );
 }
 
-//__global__ void print_this( const __half* x, const int size, float* output )
-//{
-//  float result = 0.0;
-//  for ( int i = 0; i < size; i++ ) {
-//    float x_f = __half2float( x[i] );
-//    result += x_f * x_f;
-//  }
-//
-//  *output = result;
-//
-//  *output /= size;
-//  *output += 1e-5f;
-//  *output = 1.0f / sqrtf( *output );
-//}
+__global__ void print_this( const __half* x, const int size, float* output )
+{
+  float result = 0.0;
+  for ( int i = 0; i < size; i++ ) {
+    float x_f = __half2float( x[i] );
+    result += x_f * x_f;
+  }
+
+  *output = result;
+
+  *output /= size;
+  *output += 1e-6f;
+  *output = 1.0f / sqrtf( *output );
+}
 
 template<>
 void rmsnorm<__half>( __half* output, const __half* x, const __half* weight, const int size )
@@ -74,10 +74,16 @@ void rmsnorm<__half>( __half* output, const __half* x, const __half* weight, con
   // calculate sum of squares
   __half ss_half = __half();
   cublasDotEx( cublas_handle, size, x, CUDA_R_16F, 1, x, CUDA_R_16F, 1, &ss_half, CUDA_R_16F, CUDA_R_32F );
-
   float ss = __half2float(ss_half) / size;
-  ss += 1e-5f;
+  ss += 1e-6f;
   ss = 1.0f / sqrtf( ss );
+
+//  float* ss_gpu;
+//  cudaMalloc( &ss_gpu, sizeof( float ) );
+//  print_this<<<1, 1>>>( x, size, ss_gpu );
+//  float ss;
+//  cudaMemcpy(&ss, ss_gpu, sizeof(float), cudaMemcpyDeviceToHost);
+//  cudaFree( ss_gpu );
 
   normalize_and_scale_half<<<1, size>>>( output, x, weight, size, ss );
 }
