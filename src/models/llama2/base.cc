@@ -49,13 +49,17 @@ string Config::to_string() const
 
 /* VOCABULARY */
 
-Vocabulary::Vocabulary( const Config& config, const std::filesystem::path& vocabulary_path )
+Vocabulary::Vocabulary( const std::filesystem::path& vocabulary_path )
 {
   ifstream fin { vocabulary_path, ios::binary };
   int len = 0;
 
-  for ( int i = 0; i < config.vocab_size; i++ ) {
-    CHECK( fin.read( reinterpret_cast<char*>( &len ), sizeof( int ) ) ) << "Failed to read vocabulary entry length.";
+  int i;
+  for ( i = 0;; i++ ) {
+    if ( not fin.read( reinterpret_cast<char*>( &len ), sizeof( int ) ) ) {
+      break;
+    }
+
     CHECK_GT( len, 0 ) << "Vocabulary entry length must be positive.";
 
     string val;
@@ -66,7 +70,7 @@ Vocabulary::Vocabulary( const Config& config, const std::filesystem::path& vocab
     word_to_token_.emplace( val, i );
   }
 
-  LOG( INFO ) << "Loaded vocabulary of size " << config.vocab_size << " from " << vocabulary_path;
+  LOG( INFO ) << "Loaded vocabulary of size " << ( i + 1 ) << " from " << vocabulary_path;
 }
 
 string Vocabulary::get_word( int token ) const
@@ -228,4 +232,12 @@ BaseLlama2<DType>::BaseLlama2( const Config& config,
     return layers;
   }() )
 {
+}
+
+namespace glinthawk::models::llama2 {
+template class RunState<float>;
+template class BaseWeights<float>;
+template class LayerWeights<float>;
+template class KVCache<float>;
+template class BaseLlama2<float>;
 }

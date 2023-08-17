@@ -4,12 +4,11 @@
 
 #include <glog/logging.h>
 
-#include "cuda/llama2.cuh"
+#include "models/llama2/cuda/model.cuh"
 #include "util/timer.hh"
 
 using namespace std;
 using namespace glinthawk;
-using namespace glinthawk::gpu;
 
 static void signal_handler( int )
 {
@@ -17,7 +16,10 @@ static void signal_handler( int )
   exit( EXIT_FAILURE );
 }
 
-void usage( const char* argv0 ) { cout << "Usage: " << argv0 << " <tokenizer_path> <weights_path>" << endl; }
+void usage( const char* argv0 )
+{
+  cout << "Usage: " << argv0 << " <config_path> <tokenizer_path> <weights_path>" << endl;
+}
 
 int main( int argc, char* argv[] )
 {
@@ -25,7 +27,7 @@ int main( int argc, char* argv[] )
     abort();
   }
 
-  if ( argc != 3 ) {
+  if ( argc != 4 ) {
     usage( argv[0] );
     return EXIT_FAILURE;
   }
@@ -39,15 +41,17 @@ int main( int argc, char* argv[] )
   google::InitGoogleLogging( argv[0] );
 
   try {
-    const filesystem::path tokenizer_path { argv[1] };
-    const filesystem::path weights_path { argv[2] };
+    const filesystem::path config_path { argv[1] };
+    const filesystem::path tokenizer_path { argv[2] };
+    const filesystem::path weights_path { argv[3] };
 
-    Llama2 llama { tokenizer_path, weights_path };
+    auto llama = models::llama2::cuda::Llama2<float>::create( config_path, weights_path );
+    models::llama2::Vocabulary vocabulary { tokenizer_path };
 
-    for ( pair<int, string> token { 1, "<s>" } /* BOS */; token.first != 2 /* EOS */; ) {
-      cout << token.second << flush;
+    for ( int token = 1 /* BOS */; token != 2 /* EOS */; ) {
+      cout << vocabulary.get_word( token ) << flush;
       GlobalScopeTimer<Timer::Category::TokenGeneration> _;
-      token = llama.forward( token.first );
+      token = llama.forward( token );
     }
 
     cerr << endl << global_timer().summary() << endl;
