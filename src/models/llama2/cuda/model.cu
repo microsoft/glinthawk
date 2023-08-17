@@ -145,7 +145,11 @@ __global__ void find_max_for_rows( const DType* att,
 
   DType max_value = att[0];
   for ( int i = 1; i <= token_pos; i++ ) {
-    max_value = __hmax( max_value, att[i] );
+    if constexpr ( is_same_v<DType, __half> ) {
+      max_value = __hmax( max_value, att[i] );
+    } else {
+      max_value = max( max_value, att[i] );
+    }
   }
 
   output[head_num] = max_value;
@@ -236,7 +240,7 @@ __global__ void attention_2_v2( DType* att,
                                 const int seq_len,
                                 const int head_size,
                                 const int dim,
-                                const int n_tokens)
+                                const int n_tokens )
 {
   const int head_num = threadIdx.x;
   const int i_head = blockIdx.x;
@@ -311,24 +315,24 @@ void Llama2<DType>::transformer_layer( const int32_t layer_num, const int token_
 
   CHECK_CUDA( cudaMemset( this->state_.xb, 0, dim * sizeof( DType ) ) );
 
-//  attention_2<<<token_pos + 1, this->config_.n_heads>>>( this->state_.att,
-//                                                         this->kv_cache_.buffer_,
-//                                                         this->state_.xb,
-//                                                         layer_num,
-//                                                         this->config_.n_layers,
-//                                                         this->config_.seq_len,
-//                                                         head_size,
-//                                                         dim );
+  //  attention_2<<<token_pos + 1, this->config_.n_heads>>>( this->state_.att,
+  //                                                         this->kv_cache_.buffer_,
+  //                                                         this->state_.xb,
+  //                                                         layer_num,
+  //                                                         this->config_.n_layers,
+  //                                                         this->config_.seq_len,
+  //                                                         head_size,
+  //                                                         dim );
 
   attention_2_v2<<<head_size, this->config_.n_heads>>>( this->state_.att,
-                                                         this->kv_cache_.buffer_,
-                                                         this->state_.xb,
-                                                         layer_num,
-                                                         this->config_.n_layers,
-                                                         this->config_.seq_len,
-                                                         head_size,
-                                                         dim,
-                                                         token_pos+1);
+                                                        this->kv_cache_.buffer_,
+                                                        this->state_.xb,
+                                                        layer_num,
+                                                        this->config_.n_layers,
+                                                        this->config_.seq_len,
+                                                        head_size,
+                                                        dim,
+                                                        token_pos + 1 );
   // end of multihead attention
 
   // final matmul to get the output of the attention
