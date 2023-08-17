@@ -34,7 +34,7 @@ private:
   std::unordered_multimap<std::string, int> word_to_token_ {};
 
 public:
-  Vocabulary( const Config& config, const std::filesystem::path& vocabulary_path );
+  Vocabulary( const std::filesystem::path& vocabulary_path );
 
   size_t size() const { return token_to_word_.size(); }
   int get_token( const std::string& word ) const;

@@ -17,6 +17,8 @@ namespace {
 cublasHandle_t cublas_handle;
 }
 
+void init() { cublasCreate( &cublas_handle ); }
+
 template<typename DType>
 __global__ void normalize_and_scale( DType* output,
                                      const DType* x,
@@ -111,15 +113,46 @@ void matmul<__half>( __half* xout, const __half* x, const __half* W, const int n
   cublasHgemm( cublas_handle, CUBLAS_OP_T, CUBLAS_OP_N, n, d, 1, &alpha, W, n, x, 1, &beta, xout, 1 );
 }
 
-template<typename DType>
-void silu( DType* _hb, DType* _hb2, const int hidden_dim )
+template<>
+void silu<float>( float* _hb, float* _hb2, const int hidden_dim )
 {
-  thrust::device_ptr<DType> hb { _hb };
-  thrust::device_ptr<DType> hb2 { _hb2 };
+  thrust::device_ptr<float> hb { _hb };
+  thrust::device_ptr<float> hb2 { _hb2 };
 
   thrust::transform(
-    hb, hb + hidden_dim, hb, [] __device__( DType x ) { return x * ( 1.0f / ( 1.0f + expf( -x ) ) ); } );
-  thrust::transform( hb, hb + hidden_dim, hb2, hb, thrust::multiplies<DType>() );
+    hb, hb + hidden_dim, hb, [] __device__( float x ) { return x * ( 1.0f / ( 1.0f + expf( -x ) ) ); } );
+  thrust::transform( hb, hb + hidden_dim, hb2, hb, thrust::multiplies<float>() );
 }
+
+template<>
+void silu<__half>( __half* _hb, __half* _hb2, const int hidden_dim )
+{
+  thrust::device_ptr<__half> hb { _hb };
+  thrust::device_ptr<__half> hb2 { _hb2 };
+
+  thrust::transform( hb, hb + hidden_dim, hb, [] __device__( __half x ) {
+    return x * ( static_cast<__half>( 1.0f ) / ( static_cast<__half>( 1.0f ) + hexp( -x ) ) );
+  } );
+
+  thrust::transform( hb, hb + hidden_dim, hb2, hb, thrust::multiplies<__half>() );
+}
+
+template void rmsnorm<float>( float* output, const float* x, const float* weight, const int size );
+template void rmsnorm<__half>( __half* output, const __half* x, const __half* weight, const int size );
+
+template void argmax<float>( const float* v, const int n, int* output );
+template void argmax<__half>( const __half* v, const int n, int* output );
+
+template void sample<float>( const float* probabilities, const int n, int* output );
+template void sample<__half>( const __half* probabilities, const int n, int* output );
+
+template void accum<float>( float* a, const float* b, const int size );
+template void accum<__half>( __half* a, const __half* b, const int size );
+
+template void softmax<float>( float* x, const int size );
+template void softmax<__half>( __half* x, const int size );
+
+template void matmul<float>( float* xout, const float* x, const float* w, const int n, const int d );
+template void matmul<__half>( __half* xout, const __half* x, const __half* w, const int n, const int d );
 
 } // namespace glinthawk::models::common::cuda

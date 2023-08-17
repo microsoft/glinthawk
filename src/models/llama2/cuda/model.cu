@@ -32,11 +32,13 @@ void cuda_deleter( DType* ptr )
 }
 
 template<typename DType>
-Llama2<DType>::Llama2( const std::filesystem::path& model_config,
-                       const std::filesystem::path& model_weights,
-                       const int32_t start_layer,
-                       const int32_t end_layer )
+Llama2<DType> Llama2<DType>::create( const std::filesystem::path& model_config,
+                                     const std::filesystem::path& model_weights,
+                                     const int32_t start_layer,
+                                     const int32_t end_layer )
 {
+  ops::init();
+
   llama2::Config config { model_config };
   const auto run_state_size = RunState<DType>::state_size( config );
   const auto model_size = filesystem::file_size( model_weights );
@@ -65,8 +67,7 @@ Llama2<DType>::Llama2( const std::filesystem::path& model_config,
     CHECK_CUDA( cudaMemcpy( model.get(), model_mmap.addr(), model_size, cudaMemcpyHostToDevice ) );
   }
 
-  glinthawk::models::llama2::BaseLlama2<DType>(
-    config, move( model ), move( run_state ), move( kv_cache ), start_layer, end_layer );
+  return { config, move( model ), move( run_state ), move( kv_cache ), start_layer, end_layer };
 }
 
 template<typename DType>
@@ -321,5 +322,47 @@ void Llama2<DType>::pass_end()
   ops::matmul(
     this->state_.logits, this->state_.x, this->base_weights_.wcls, this->config_.dim, this->config_.vocab_size );
 }
+
+template<typename DType>
+int Llama2<DType>::forward( const int token )
+{
+  if ( token_pos_ >= this->config_.seq_len ) {
+    return 2; /* EOS */
+  }
+
+  pass_begin( token );
+
+  for ( int layer_num = this->start_layer_num_; layer_num <= this->end_layer_num_; layer_num++ ) {
+    transformer_layer( layer_num, token_pos_ );
+  }
+
+  pass_end();
+
+  int next_token;
+  int* next_token_device;
+  CHECK_CUDA( cudaMalloc( &next_token_device, sizeof( int ) ) );
+
+  if ( temperature_ == 0.0f ) {
+    // greedy argmax sampling
+    ops::argmax( this->state_.logits, this->config_.vocab_size, next_token_device );
+  } else {
+    // apply the temperature to the logits
+    for ( int q = 0; q < this->config_.vocab_size; q++ ) {
+      this->state_.logits[q] /= temperature_;
+    }
+
+    // apply softmax to the logits to get the probabilities for next token
+    ops::softmax( this->state_.logits, this->config_.vocab_size );
+
+    // we now want to sample from this distribution to get the next token
+    ops::sample( this->state_.logits, this->config_.vocab_size, next_token_device );
+  }
+
+  token_pos_++;
+  CHECK_CUDA( cudaMemcpy( &next_token, next_token_device, sizeof( int ), cudaMemcpyDeviceToHost ) );
+  return next_token;
+}
+
+template class Llama2<float>;
 
 } // namespace glinthawk::models::llama2::cuda
