@@ -1,14 +1,26 @@
 #pragma once
 
-namespace glinthawk::models::common::cuda {
+namespace glinthawk::models::common::cuda::ops {
 
-void accum( float* a, const float* b, const int size );
-void rmsnorm( float* o, const float* x, const float* weight, const int size );
-void softmax( float* x, const int size );
-void matmul( float* xout, const float* x, const float* w, const int n, const int d );
+template<typename DType>
+void accum( DType* a, const DType* b, const int size );
 
-int sample(const float* probabilities, const int n);
-int argmax(const float* v, const int n);
-void silu( float* hb, float* hb2, const int hidden_dim );
+template<typename DType>
+void rmsnorm( DType* o, const DType* x, const DType* weight, const int size );
+
+template<typename DType>
+void softmax( DType* x, const int size );
+
+template<typename DType>
+void matmul( DType* xout, const DType* x, const DType* w, const int n, const int d );
+
+template<typename DType>
+int sample( const DType* probabilities, const int n );
+
+template<typename DType>
+int argmax( const DType* v, const int n );
+
+template<typename DType>
+void silu( DType* hb, DType* hb2, const int hidden_dim );
 
 }
