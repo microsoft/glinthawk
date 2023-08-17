@@ -50,7 +50,7 @@ int main( int argc, char* argv[] )
     models::llama2::Vocabulary vocabulary { tokenizer_path };
 
     for ( int token = 1 /* BOS */; token != 2 /* EOS */; ) {
-      cout << vocabulary.get_word( token ) << "(" << token << ")" << flush;
+      cout << vocabulary.get_word( token ) << flush;
       GlobalScopeTimer<Timer::Category::TokenGeneration> _;
       token = llama.forward( token );
     }
