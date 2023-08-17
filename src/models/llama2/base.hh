@@ -47,11 +47,8 @@ struct BaseWeights
   BaseWeights( const BaseWeights& ) = delete;
   BaseWeights operator=( const BaseWeights& ) = delete;
 
-  // token embedding table
   const DType* token_embedding_table {}; // (vocab_size, dim)
-
-  // final rmsnorm
-  const DType* rms_final_weight {}; // (dim,)
+  const DType* rms_final_weight {};      // (dim,)
 
   // freq_cis for RoPE relatively positional embeddings
   const DType* freq_cis_real {}; // (seq_len, dim/2)
@@ -65,7 +62,7 @@ template<typename DType>
 struct LayerWeights
 {
   LayerWeights() = default;
-  LayerWeights( const Config& config, const DType* model, const int32_t layer_num );
+  LayerWeights( const Config& config, const DType* model );
 
   static size_t layer_size( const Config& config );
 
@@ -132,7 +129,8 @@ template<typename DType>
 class BaseLlama2 : public glinthawk::models::Model<DType>
 {
 protected:
-  std::unique_ptr<DType, void ( * )( DType* )> model_buffer_;
+  std::unique_ptr<DType, void ( * )( DType* )> base_weights_buffer_;
+  std::unique_ptr<DType, void ( * )( DType* )> layers_buffer_;
   std::unique_ptr<DType, void ( * )( DType* )> run_state_buffer_;
   std::unique_ptr<DType, void ( * )( DType* )> kv_cache_buffer_;
 
@@ -147,7 +145,8 @@ protected:
 
 protected:
   BaseLlama2( const Config& config,
-              std::unique_ptr<DType, void ( * )( DType* )>&& model,
+              std::unique_ptr<DType, void ( * )( DType* )>&& base_weights,
+              std::unique_ptr<DType, void ( * )( DType* )>&& layers_weights,
               std::unique_ptr<DType, void ( * )( DType* )>&& run_state,
               std::unique_ptr<DType, void ( * )( DType* )>&& kv_cache,
               const int32_t start_layer = 0,

@@ -14,6 +14,18 @@ using namespace glinthawk::models::llama2;
 
 /* MODEL CONFIG */
 
+namespace {
+
+template<typename DType>
+DType* _advance_pointer( DType*& ptr, const size_t size )
+{
+  auto old = ptr;
+  ptr += size;
+  return old;
+}
+
+}
+
 Config::Config( const filesystem::path& config_file )
 {
   ifstream fin { config_file, ios::binary };
@@ -95,17 +107,13 @@ template<typename DType>
 BaseWeights<DType>::BaseWeights( const Config& config, const DType* model )
 {
   auto ptr = model;
-  this->token_embedding_table = ptr;
-
-  // skip over all the layer weights
-  ptr += config.vocab_size * config.dim
-         + config.n_layers * ( 2 * config.dim + 4 * config.dim * config.dim + 3 * config.dim * config.hidden_dim );
+  this->token_embedding_table = _advance_pointer( ptr, config.vocab_size * config.dim );
 
   const int head_size = config.dim / config.n_heads;
 
-  this->rms_final_weight = ptr;
-  this->freq_cis_real = ( ptr += config.dim );
-  this->freq_cis_imag = ( ptr += config.seq_len * head_size / 2 );
+  this->rms_final_weight = _advance_pointer( ptr, config.dim );
+  this->freq_cis_real = _advance_pointer( ptr, config.seq_len * head_size / 2 );
+  this->freq_cis_imag = _advance_pointer( ptr, config.seq_len * head_size / 2 );
 
   // TODO shared_weights is assumed to be true, fix
   // wcls = true ? token_embedding_table : ( ptr += config.seq_len * head_size / 2 );
@@ -115,30 +123,20 @@ BaseWeights<DType>::BaseWeights( const Config& config, const DType* model )
 /* LAYER WEIGHTS */
 
 template<typename DType>
-LayerWeights<DType>::LayerWeights( const Config& config, const DType* model, const int layer_num )
+LayerWeights<DType>::LayerWeights( const Config& config, const DType* model )
 {
   auto ptr = model;
 
   // base pointers
-  const DType* base_rms_att_weight = ( ptr += config.vocab_size * config.dim );
-  const DType* base_wq = ( ptr += config.n_layers * config.dim );
-  const DType* base_wk = ( ptr += config.n_layers * config.dim * config.dim );
-  const DType* base_wv = ( ptr += config.n_layers * config.dim * config.dim );
-  const DType* base_wo = ( ptr += config.n_layers * config.dim * config.dim );
-  const DType* base_rms_ffn_weight = ( ptr += config.n_layers * config.dim * config.dim );
-  const DType* base_w1 = ( ptr += config.n_layers * config.dim );
-  const DType* base_w2 = ( ptr += config.n_layers * config.dim * config.hidden_dim );
-  const DType* base_w3 = ( ptr += config.n_layers * config.hidden_dim * config.dim );
-
-  this->rms_att_weight = base_rms_att_weight + layer_num * config.dim;
-  this->rms_ffn_weight = base_rms_ffn_weight + layer_num * config.dim;
-  this->wq = base_wq + layer_num * config.dim * config.dim;
-  this->wk = base_wk + layer_num * config.dim * config.dim;
-  this->wv = base_wv + layer_num * config.dim * config.dim;
-  this->wo = base_wo + layer_num * config.dim * config.dim;
-  this->w1 = base_w1 + layer_num * config.dim * config.hidden_dim;
-  this->w2 = base_w2 + layer_num * config.hidden_dim * config.dim;
-  this->w3 = base_w3 + layer_num * config.hidden_dim * config.dim;
+  this->rms_att_weight = _advance_pointer( ptr, config.dim );
+  this->rms_ffn_weight = _advance_pointer( ptr, config.dim );
+  this->wq = _advance_pointer( ptr, config.dim * config.dim );
+  this->wk = _advance_pointer( ptr, config.dim * config.dim );
+  this->wv = _advance_pointer( ptr, config.dim * config.dim );
+  this->wo = _advance_pointer( ptr, config.dim * config.dim );
+  this->w1 = _advance_pointer( ptr, config.dim * config.hidden_dim );
+  this->w2 = _advance_pointer( ptr, config.dim * config.hidden_dim );
+  this->w3 = _advance_pointer( ptr, config.dim * config.hidden_dim );
 }
 
 template<typename DType>
@@ -212,12 +210,14 @@ DType* KVCache<DType>::value( int layer, const int step, const int head )
 
 template<typename DType>
 BaseLlama2<DType>::BaseLlama2( const Config& config,
-                               unique_ptr<DType, void ( * )( DType* )>&& model,
+                               unique_ptr<DType, void ( * )( DType* )>&& base_weights,
+                               unique_ptr<DType, void ( * )( DType* )>&& layers_weights,
                                unique_ptr<DType, void ( * )( DType* )>&& run_state,
                                unique_ptr<DType, void ( * )( DType* )>&& kv_cache,
                                const int32_t start_layer,
                                const int32_t end_layer )
-  : model_buffer_( move( model ) )
+  : base_weights_buffer_( move( base_weights ) )
+  , layers_buffer_( move( layers_weights ) )
   , run_state_buffer_( move( run_state ) )
   , kv_cache_buffer_( move( kv_cache ) )
   , config_( config )
@@ -225,16 +225,20 @@ BaseLlama2<DType>::BaseLlama2( const Config& config,
   , end_layer_num_( end_layer == -1 ? config_.n_layers - 1 : end_layer )
   , state_( config_, run_state_buffer_.get() )
   , kv_cache_( config_, kv_cache_buffer_.get(), start_layer_num_, end_layer_num_ )
-  , base_weights_( config_, model_buffer_.get() )
+  , base_weights_( config_, base_weights_buffer_.get() )
   , layer_weights_( [&] {
     CHECK_GE( start_layer_num_, 0 ) << "Start layer must be non-negative.";
     CHECK_LT( end_layer_num_, config_.n_layers ) << "End layer must be less than the number of layers.";
+    CHECK_LE( start_layer_num_, end_layer_num_ ) << "Start layer must be less than or equal to end layer.";
 
     std::vector<LayerWeights<DType>> layers {};
     layers.resize( config_.n_layers );
 
+    const size_t layer_size = LayerWeights<DType>::layer_size( config_ );
+    auto ptr = layers_buffer_.get();
+
     for ( int i = start_layer_num_; i <= end_layer_num_; i++ ) {
-      layers[i] = LayerWeights { config_, model_buffer_.get(), i };
+      layers[i] = LayerWeights { config_, ptr + ( i - start_layer_num_ ) * layer_size };
     }
 
     return layers;
