@@ -33,5 +33,5 @@ add_executable ( infer src/frontend/infer.cc )
 add_executable ( infer-partial src/frontend/infer-partial.cc )
 
 if ( CUDA_ENABLED )
-  add_executable ( gpu-test src/frontend/gpu-test.cc )
+  add_executable ( infer-gpu src/frontend/infer-gpu.cc )
 endif ()
