@@ -47,7 +47,7 @@ void rmsnorm<float>( float* output, const float* x, const float* weight, const i
 
   cublasSdot( cublas_handle, size, x, 1, x, 1, &ss );
   ss /= size;
-  ss += 1e-6f;
+  ss += 1e-5f;
   ss = 1.0f / sqrtf( ss );
 
   normalize_and_scale_full<<<1, size>>>( output, x, weight, size, ss );
@@ -64,7 +64,7 @@ __global__ void print_this( const __half* x, const int size, float* output )
   *output = result;
 
   *output /= size;
-  *output += 1e-6f;
+  *output += 1e-5f;
   *output = 1.0f / sqrtf( *output );
 }
 
@@ -75,7 +75,7 @@ void rmsnorm<__half>( __half* output, const __half* x, const __half* weight, con
   __half ss_half = __half();
   cublasDotEx( cublas_handle, size, x, CUDA_R_16F, 1, x, CUDA_R_16F, 1, &ss_half, CUDA_R_16F, CUDA_R_32F );
   float ss = __half2float(ss_half) / size;
-  ss += 1e-6f;
+  ss += 1e-5f;
   ss = 1.0f / sqrtf( ss );
 
 //  float* ss_gpu;
