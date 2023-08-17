@@ -3,6 +3,7 @@
 namespace glinthawk::models::common::cuda::ops {
 
 void init();
+void destroy();
 
 template<typename DType>
 void accum( DType* a, const DType* b, const int size );
