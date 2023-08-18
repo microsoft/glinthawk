@@ -120,6 +120,13 @@ BaseWeights<DType>::BaseWeights( const Config& config, const DType* model )
   this->wcls = token_embedding_table;
 }
 
+template<typename DType>
+size_t BaseWeights<DType>::base_size( const Config& config )
+{
+  return sizeof( DType )
+         * ( config.vocab_size * config.dim + config.dim + config.seq_len * config.dim / config.n_heads );
+}
+
 /* LAYER WEIGHTS */
 
 template<typename DType>

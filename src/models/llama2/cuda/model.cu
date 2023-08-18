@@ -34,42 +34,89 @@ void cuda_deleter( DType* ptr )
 }
 
 template<typename DType>
-Llama2<DType> Llama2<DType>::create( const filesystem::path& model_config,
-                                     const filesystem::path& model_weights,
-                                     const int32_t start_layer,
-                                     const int32_t end_layer )
+std::string dtype_str()
+{
+  if constexpr ( is_same_v<DType, float> ) {
+    return "FP32";
+  } else if constexpr ( is_same_v<DType, __half> ) {
+    return "FP16";
+  } else {
+    return "unknown";
+  }
+}
+
+template<typename DType>
+Llama2<DType> Llama2<DType>::load( const filesystem::path& model_path,
+                                   const int32_t start_layer,
+                                   const int32_t end_layer_raw )
 {
   ops::init();
 
-  llama2::Config config { model_config };
-  const auto run_state_size = RunState<DType>::state_size( config );
-  const auto model_size = filesystem::file_size( model_weights );
-  const auto kv_cache_size
-    = KVCache<DType>::cache_size( config, start_layer, end_layer == -1 ? config.n_layers - 1 : end_layer );
+  const string filename_suffix = "_" + dtype_str<DType>();
+  const auto config_path = model_path / "CONFIG";
+  const auto base_path = model_path / ( "BASEWEIGHTS" + filename_suffix );
 
-  // Allocate memory for the model
-  DType* model_raw_ptr;
-  CHECK_CUDA( cudaMalloc( &model_raw_ptr, model_size ) );
-  unique_ptr<DType, void ( * )( DType* )> model { model_raw_ptr, cuda_deleter };
+  llama2::Config config { config_path };
+
+  const int32_t end_layer = ( end_layer_raw == -1 ) ? ( config.n_layers - 1 ) : end_layer_raw;
+  const int32_t layer_count = end_layer - start_layer + 1;
+
+  CHECK_GE( start_layer, 0 ) << "Start layer must be non-negative.";
+  CHECK_LE( start_layer, end_layer ) << "Start layer must be less than or equal to end layer.";
+  CHECK_LT( end_layer, config.n_layers ) << "End layer must be less than the number of layers.";
+
+  const auto run_state_size = RunState<DType>::state_size( config );
+  const auto base_size = BaseWeights<DType>::base_size( config );
+  const auto layer_size = LayerWeights<DType>::layer_size( config );
+  const auto kv_cache_size = KVCache<DType>::cache_size( config, start_layer, end_layer );
+
+  DType* base_raw_ptr;
+  DType* layers_raw_ptr;
+  DType* run_state_raw_ptr;
+  DType* kv_cache_raw_ptr;
+
+  // Allocate memory for the base weights
+  CHECK_CUDA( cudaMalloc( &base_raw_ptr, base_size ) );
+  unique_ptr<DType, void ( * )( DType* )> base { base_raw_ptr, cuda_deleter };
+
+  // Allocate memory for the layers
+  CHECK_CUDA( cudaMalloc( &layers_raw_ptr, layer_size * layer_count ) );
+  unique_ptr<DType, void ( * )( DType* )> layers { layers_raw_ptr, cuda_deleter };
 
   // Allocate memory for the run state
-  DType* run_state_raw_ptr;
   CHECK_CUDA( cudaMalloc( &run_state_raw_ptr, run_state_size ) );
   unique_ptr<DType, void ( * )( DType* )> run_state { run_state_raw_ptr, cuda_deleter };
 
   // Allocate memory for the kv cache
-  DType* kv_cache_raw_ptr;
   CHECK_CUDA( cudaMalloc( &kv_cache_raw_ptr, kv_cache_size ) );
   unique_ptr<DType, void ( * )( DType* )> kv_cache { kv_cache_raw_ptr, cuda_deleter };
 
   // Load the model
+  // (1) loading the base weights
   {
-    FileDescriptor model_fd { CHECK_SYSCALL( "open", open( model_weights.c_str(), O_RDONLY ) ) };
-    MMap_Region model_mmap { nullptr, model_size, PROT_READ, MAP_PRIVATE, model_fd.fd_num(), 0 };
-    CHECK_CUDA( cudaMemcpy( model.get(), model_mmap.addr(), model_size, cudaMemcpyHostToDevice ) );
+    CHECK_EQ( filesystem::file_size( base_path ), base_size ) << "Base weights are not the expected size.";
+
+    FileDescriptor base_fd { CHECK_SYSCALL( "open", open( base_path.c_str(), O_RDONLY ) ) };
+    MMap_Region base_mmap { nullptr, base_size, PROT_READ, MAP_PRIVATE, base_fd.fd_num(), 0 };
+    CHECK_CUDA( cudaMemcpy( base.get(), base_mmap.addr(), base_size, cudaMemcpyHostToDevice ) );
   }
 
-  return { config, move( model ), move( run_state ), move( kv_cache ), start_layer, end_layer };
+  // (2) load the layers
+  for ( auto i = start_layer; i <= end_layer; i++ ) {
+    const auto layer_path = model_path / ( "LAYER" + to_string( i ) + filename_suffix );
+
+    CHECK_EQ( filesystem::file_size( layer_path ), layer_size ) << "Layer " << i << " is not the expected size.";
+
+    FileDescriptor layer_fd { CHECK_SYSCALL( "open", open( layer_path.c_str(), O_RDONLY ) ) };
+    MMap_Region layer_mmap { nullptr, layer_size, PROT_READ, MAP_PRIVATE, layer_fd.fd_num(), 0 };
+
+    CHECK_CUDA( cudaMemcpy(
+      layers.get() + ( i - start_layer ) * layer_size, layer_mmap.addr(), layer_size, cudaMemcpyHostToDevice ) );
+
+    LOG( INFO ) << "Loaded layer " << i << " from " << layer_path;
+  }
+
+  return { config, move( base ), move( layers ), move( run_state ), move( kv_cache ), start_layer, end_layer };
 }
 
 template<typename DType>
