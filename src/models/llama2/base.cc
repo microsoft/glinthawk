@@ -31,9 +31,31 @@ Config::Config( const filesystem::path& config_file )
   ifstream fin { config_file, ios::binary };
   CHECK( fin ) << "Failed to open config file: " << config_file;
 
-  fin.read( reinterpret_cast<char*>( this ), sizeof( *this ) );
+  string raw_config;
+  raw_config.resize( config_size() );
 
-  vocab_size = abs( vocab_size );
+  fin.read( raw_config.data(), config_size() );
+  if ( fin.gcount() != static_cast<streamsize>( config_size() ) ) {
+    LOG( FATAL ) << "Failed to read config file: " << config_file;
+  }
+
+  auto ptr = raw_config.data();
+
+  this->dim = *reinterpret_cast<const int32_t*>( _advance_pointer( ptr, sizeof( int32_t ) ) );
+  this->hidden_dim = *reinterpret_cast<const int32_t*>( _advance_pointer( ptr, sizeof( int32_t ) ) );
+  this->n_layers = *reinterpret_cast<const int32_t*>( _advance_pointer( ptr, sizeof( int32_t ) ) );
+  this->n_heads = *reinterpret_cast<const int32_t*>( _advance_pointer( ptr, sizeof( int32_t ) ) );
+  this->n_kv_heads = *reinterpret_cast<const int32_t*>( _advance_pointer( ptr, sizeof( int32_t ) ) );
+
+  // if vocab size is negative, that means that wcls is present
+  const auto original_vocab_size = *reinterpret_cast<const int32_t*>( _advance_pointer( ptr, sizeof( int32_t ) ) );
+
+  this->vocab_size = abs( original_vocab_size );
+  this->seq_len = *reinterpret_cast<const int32_t*>( _advance_pointer( ptr, sizeof( int32_t ) ) );
+
+  if ( original_vocab_size < 0 ) {
+    wcls_present = true;
+  }
 
   CHECK_GT( dim, 0 ) << "Transformer dimension must be positive.";
   CHECK_GT( hidden_dim, 0 ) << "FFN hidden dimension must be positive.";
@@ -56,7 +78,8 @@ string Config::to_string() const
   oss << "n_heads: " << n_heads << ", ";
   oss << "n_kv_heads: " << n_kv_heads << ", ";
   oss << "vocab_size: " << vocab_size << ", ";
-  oss << "seq_len: " << seq_len;
+  oss << "seq_len: " << seq_len << ", ";
+  oss << "wcls_present: " << wcls_present;
   oss << " }";
   return oss.str();
 }
@@ -106,25 +129,22 @@ int Vocabulary::get_token( const string& word ) const
 template<typename DType>
 BaseWeights<DType>::BaseWeights( const Config& config, const DType* model )
 {
-  auto ptr = model;
-  this->token_embedding_table = _advance_pointer( ptr, config.vocab_size * config.dim );
-
   const int head_size = config.dim / config.n_heads;
 
-  this->rms_final_weight = _advance_pointer( ptr, config.dim );
-  this->freq_cis_real = _advance_pointer( ptr, config.seq_len * head_size / 2 );
-  this->freq_cis_imag = _advance_pointer( ptr, config.seq_len * head_size / 2 );
-
-  // TODO shared_weights is assumed to be true, fix
-  // wcls = true ? token_embedding_table : ( ptr += config.seq_len * head_size / 2 );
-  this->wcls = token_embedding_table;
+  auto ptr = model;
+  token_embedding_table = _advance_pointer( ptr, config.vocab_size * config.dim );
+  rms_final_weight = _advance_pointer( ptr, config.dim );
+  freq_cis_real = _advance_pointer( ptr, config.seq_len * head_size / 2 );
+  freq_cis_imag = _advance_pointer( ptr, config.seq_len * head_size / 2 );
+  wcls = config.wcls_present ? ptr : token_embedding_table;
 }
 
 template<typename DType>
 size_t BaseWeights<DType>::base_size( const Config& config )
 {
   return sizeof( DType )
-         * ( config.vocab_size * config.dim + config.dim + config.seq_len * config.dim / config.n_heads );
+         * ( config.vocab_size * config.dim + config.dim + config.seq_len * config.dim / config.n_heads
+             + ( config.wcls_present ? ( config.vocab_size * config.dim ) : 0 ) );
 }
 
 /* LAYER WEIGHTS */
@@ -135,7 +155,7 @@ LayerWeights<DType>::LayerWeights( const Config& config, const DType* model )
   auto ptr = model;
 
   // base pointers
-  this->rms_att_weight = _advance_pointer( ptr, config.dim );
+  rms_att_weight = _advance_pointer( ptr, config.dim );
   this->rms_ffn_weight = _advance_pointer( ptr, config.dim );
   this->wq = _advance_pointer( ptr, config.dim * config.dim );
   this->wk = _advance_pointer( ptr, config.dim * config.dim );
@@ -245,7 +265,9 @@ BaseLlama2<DType>::BaseLlama2( const Config& config,
     auto ptr = layers_buffer_.get();
 
     for ( int i = start_layer_num_; i <= end_layer_num_; i++ ) {
-      layers[i] = LayerWeights { config_, ptr + ( i - start_layer_num_ ) * layer_size };
+      layers[i] = LayerWeights {
+        config_, reinterpret_cast<DType*>( reinterpret_cast<uint8_t*>( ptr ) + ( i - start_layer_num_ ) * layer_size )
+      };
     }
 
     return layers;

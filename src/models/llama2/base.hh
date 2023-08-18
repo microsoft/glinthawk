@@ -17,13 +17,17 @@ struct Config
 
   std::string to_string() const;
 
-  int32_t dim {};        // transformer dimension
-  int32_t hidden_dim {}; // for ffn layers
-  int32_t n_layers {};   // number of layers
-  int32_t n_heads {};    // number of query heads
-  int32_t n_kv_heads {}; // number of key/value heads (can be < query heads because of multiquery)
-  int32_t vocab_size {}; // vocabulary size (byte-level)
-  int32_t seq_len {};    // max sequence length
+  static size_t config_size() { return sizeof( int32_t ) * 7; }
+
+  uint64_t dim {};        // transformer dimension
+  uint64_t hidden_dim {}; // for ffn layers
+  uint64_t n_layers {};   // number of layers
+  uint64_t n_heads {};    // number of query heads
+  uint64_t n_kv_heads {}; // number of key/value heads (can be < query heads because of multiquery)
+  uint64_t vocab_size {}; // vocabulary size (byte-level)
+  uint64_t seq_len {};    // max sequence length
+
+  bool wcls_present { false };
 };
 
 class Vocabulary
@@ -123,8 +127,8 @@ struct KVCache
   const int n_layers_;
   const int head_size_;
 
-  inline DType* key( const int layer, const int step, const int head = 0 );
-  inline DType* value( const int layer, const int step, const int head = 0 );
+  DType* key( int layer, const int step, const int head = 0 );
+  DType* value( int layer, const int step, const int head = 0 );
 };
 
 template<typename DType>

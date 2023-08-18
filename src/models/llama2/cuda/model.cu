@@ -22,8 +22,8 @@ namespace glinthawk::models::llama2::cuda {
 void CHECK_CUDA( const cudaError_t err, const source_location location = source_location::current() )
 {
   if ( err != cudaSuccess ) {
-    throw runtime_error( "CUDA error: " + string( cudaGetErrorString( err ) ) + " (" + location.file_name() + ":"
-                         + to_string( location.line() ) + ")" );
+    throw runtime_error( "CUDA error " + string( cudaGetErrorName( err ) ) + ": " + string( cudaGetErrorString( err ) )
+                         + " (" + location.file_name() + ":" + to_string( location.line() ) + ")" );
   }
 }
 
@@ -92,6 +92,7 @@ Llama2<DType> Llama2<DType>::load( const filesystem::path& model_path,
   unique_ptr<DType, void ( * )( DType* )> kv_cache { kv_cache_raw_ptr, cuda_deleter };
 
   // Load the model
+
   // (1) loading the base weights
   {
     CHECK_EQ( filesystem::file_size( base_path ), base_size ) << "Base weights are not the expected size.";
@@ -99,6 +100,8 @@ Llama2<DType> Llama2<DType>::load( const filesystem::path& model_path,
     FileDescriptor base_fd { CHECK_SYSCALL( "open", open( base_path.c_str(), O_RDONLY ) ) };
     MMap_Region base_mmap { nullptr, base_size, PROT_READ, MAP_PRIVATE, base_fd.fd_num(), 0 };
     CHECK_CUDA( cudaMemcpy( base.get(), base_mmap.addr(), base_size, cudaMemcpyHostToDevice ) );
+
+    LOG( INFO ) << "Loaded base weights from " << base_path << " (" << base_size << " bytes).";
   }
 
   // (2) load the layers
@@ -110,10 +113,12 @@ Llama2<DType> Llama2<DType>::load( const filesystem::path& model_path,
     FileDescriptor layer_fd { CHECK_SYSCALL( "open", open( layer_path.c_str(), O_RDONLY ) ) };
     MMap_Region layer_mmap { nullptr, layer_size, PROT_READ, MAP_PRIVATE, layer_fd.fd_num(), 0 };
 
-    CHECK_CUDA( cudaMemcpy(
-      layers.get() + ( i - start_layer ) * layer_size, layer_mmap.addr(), layer_size, cudaMemcpyHostToDevice ) );
+    CHECK_CUDA( cudaMemcpy( reinterpret_cast<uint8_t*>( layers.get() ) + ( i - start_layer ) * layer_size,
+                            layer_mmap.addr(),
+                            layer_size,
+                            cudaMemcpyHostToDevice ) );
 
-    LOG( INFO ) << "Loaded layer " << i << " from " << layer_path;
+    LOG( INFO ) << "Loaded layer " << i << " from " << layer_path << " (" << layer_size << " bytes).";
   }
 
   return { config, move( base ), move( layers ), move( run_state ), move( kv_cache ), start_layer, end_layer };
