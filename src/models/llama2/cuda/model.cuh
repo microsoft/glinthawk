@@ -15,15 +15,13 @@ private:
   int token_pos_ { 0 };
   float temperature_ { 0.0f };
 
-
 protected:
   using BaseLlama2<DType>::BaseLlama2;
 
 public:
-  static Llama2 create( const std::filesystem::path& model_config,
-                        const std::filesystem::path& model_weights,
-                        const int32_t start_layer = 0,
-                        const int32_t end_layer = -1 );
+  static Llama2 load( const std::filesystem::path& model_dir,
+                      const int32_t start_layer = 0,
+                      const int32_t end_layer = -1 );
 
   int forward( const int token );
 };

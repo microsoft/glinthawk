@@ -47,6 +47,8 @@ struct BaseWeights
   BaseWeights( const BaseWeights& ) = delete;
   BaseWeights operator=( const BaseWeights& ) = delete;
 
+  static size_t base_size( const Config& config );
+
   const DType* token_embedding_table {}; // (vocab_size, dim)
   const DType* rms_final_weight {};      // (dim,)
 

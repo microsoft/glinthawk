@@ -19,7 +19,7 @@ static void signal_handler( int )
 
 void usage( const char* argv0 )
 {
-  cout << "Usage: " << argv0 << " <config_path> <tokenizer_path> <weights_path>" << endl;
+  cout << "Usage: " << argv0 << " <model_dir_path> <tokenizer_path>" << endl;
 }
 
 int main( int argc, char* argv[] )
@@ -28,7 +28,7 @@ int main( int argc, char* argv[] )
     abort();
   }
 
-  if ( argc != 4 ) {
+  if ( argc != 3 ) {
     usage( argv[0] );
     return EXIT_FAILURE;
   }
@@ -42,11 +42,10 @@ int main( int argc, char* argv[] )
   google::InitGoogleLogging( argv[0] );
 
   try {
-    const filesystem::path config_path { argv[1] };
+    const filesystem::path model_dir_path { argv[1] };
     const filesystem::path tokenizer_path { argv[2] };
-    const filesystem::path weights_path { argv[3] };
 
-    auto llama = models::llama2::cuda::Llama2<__half>::create( config_path, weights_path );
+    auto llama = models::llama2::cuda::Llama2<__half>::load( model_dir_path );
     models::llama2::Vocabulary vocabulary { tokenizer_path };
 
     for ( int token = 1 /* BOS */; token != 2 /* EOS */; ) {
