@@ -365,16 +365,6 @@ void Llama2<DType>::transformer_layer( const int32_t layer_num, const int token_
   attention_softmax(
     this->state_.att, token_pos, this->config_.seq_len, this->config_.n_heads, this->state_.temp_softmax );
 
-  CHECK_CUDA( cudaMemset( this->state_.xb, 0, dim * sizeof( DType ) ) );
-
-  //  attention_2<<<token_pos + 1, this->config_.n_heads>>>( this->state_.att,
-  //                                                         this->kv_cache_.buffer_,
-  //                                                         this->state_.xb,
-  //                                                         layer_num,
-  //                                                         this->config_.n_layers,
-  //                                                         this->config_.seq_len,
-  //                                                         head_size,
-  //                                                         dim );
 
   attention_2_v2<<<head_size, this->config_.n_heads>>>( this->state_.att,
                                                         this->kv_cache_.buffer_,

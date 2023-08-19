@@ -48,7 +48,14 @@ int main( int argc, char* argv[] )
     auto llama = models::llama2::cuda::Llama2<__half>::load( model_dir_path );
     models::llama2::Vocabulary vocabulary { tokenizer_path };
 
-    for ( int token = 1 /* BOS */; token != 2 /* EOS */; ) {
+    std::vector<int> prompt_tokens = std::vector<int>{ 1, 518, 25580, 29962, 25538, 2211, 25562, 363, 7952, 292, 9045, 29891, 29889, 518, 29914, 25580, 29962 };
+    size_t i = 0;
+
+    for ( int token = prompt_tokens[0] /* BOS */; token != 2 /* EOS */; ) {
+      if (i < prompt_tokens.size()){
+        token = prompt_tokens[i];
+        i++;
+      }
       cout << vocabulary.get_word( token ) << flush;
       GlobalScopeTimer<Timer::Category::TokenGeneration> _;
       token = llama.forward( token );
