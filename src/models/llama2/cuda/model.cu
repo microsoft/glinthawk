@@ -284,7 +284,7 @@ __global__ void attention_2( DType* att,
 }
 
 template<typename DType>
-__global__ void attention_2_v2( DType* att,
+__global__ void attention_2_v2( const DType* att,
                                 const DType* kv_cache,
                                 DType* xb,
                                 const int layer_num,
@@ -359,16 +359,17 @@ void Llama2<DType>::transformer_layer( const int32_t layer_num, const int token_
   attention_softmax(
     this->state_.att, token_pos, this->config_.seq_len, this->config_.n_heads, this->state_.temp_softmax );
 
-
-  attention_2_v2<<<this->config_.n_heads, head_size>>>( this->state_.att,
-                                                        this->kv_cache_.buffer_,
-                                                        this->state_.xb,
-                                                        layer_num,
-                                                        this->config_.n_layers,
-                                                        this->config_.seq_len,
-                                                        head_size,
-                                                        dim,
-                                                        token_pos + 1 );
+//  attention_2_v2<<<this->config_.n_heads, head_size>>>( this->state_.att,
+//                                                        this->kv_cache_.buffer_,
+//                                                        this->state_.xb,
+//                                                        layer_num,
+//                                                        this->config_.n_layers,
+//                                                        this->config_.seq_len,
+//                                                        head_size,
+//                                                        dim,
+//                                                        token_pos + 1 );
+  ops::attention_2_gemm( this->state_.att, this->kv_cache_.buffer_ + layer_num * ( dim * 2 ) + dim, this->state_.xb,
+                         this->config_.n_layers, this->config_.seq_len, head_size, this->config_.n_heads, token_pos + 1);
   // end of multihead attention
 
   // final matmul to get the output of the attention

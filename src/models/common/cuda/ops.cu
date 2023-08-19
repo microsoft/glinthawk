@@ -156,6 +156,47 @@ cublasGemmStridedBatchedEx( cublas_handle, CUBLAS_OP_N, CUBLAS_OP_N, m, n, k, &a
 }
 
 template<typename DType>
+void attention_2_gemm(const DType* att,
+                       const DType* value,
+                       DType* xb,
+                       const int n_layers,
+                       const int seq_len,
+                       const int head_size,
+                       const int n_heads,
+                       const int n_tokens)
+{
+  const float alpha = 1.0f;
+  const float beta = 0.0f;
+
+  const int m = head_size;
+  const int n = 1;
+  const int k = n_tokens;
+
+  const int lda = n_layers * n_heads * head_size * 2;
+  const int ldb = k;
+  const int ldc = m;
+
+  const int strideA = head_size;
+  const int strideB = seq_len;
+  const int strideC = head_size;
+
+  const int batchCount = n_heads;
+
+  if constexpr ( is_same_v<DType, __half> ) {
+      CHECK_CUBLAS(
+        cublasGemmStridedBatchedEx( cublas_handle, CUBLAS_OP_N, CUBLAS_OP_N, m, n, k, &alpha, value, CUDA_R_16F, lda, strideA,
+                                    att, CUDA_R_16F, ldb, strideB, &beta, xb, CUDA_R_16F, ldc, strideC, batchCount, CUDA_R_32F,
+                                    CUBLAS_GEMM_DEFAULT ) );
+  } else {
+      CHECK_CUBLAS(
+        cublasGemmStridedBatchedEx( cublas_handle, CUBLAS_OP_N, CUBLAS_OP_N, m, n, k, &alpha, value, CUDA_R_32F, lda, strideA,
+                                    att, CUDA_R_32F, ldb, strideB, &beta, xb, CUDA_R_32F, ldc, strideC, batchCount, CUDA_R_32F,
+                                    CUBLAS_GEMM_DEFAULT ) );
+  }
+
+}
+
+template<typename DType>
 void sample( const DType* probabilities, const int n, int* output )
 {
   throw runtime_error( "not implemented" );
@@ -289,5 +330,22 @@ template void attention_0_gemm<__half>(const __half* query,
                                        const int head_size,
                                        const int n_heads,
                                        const int n_tokens);
+
+template void attention_2_gemm<float>(const float* query,
+                                       const float* key,
+                                       float* att,
+                                       const int n_layers,
+                                       const int seq_len,
+                                       const int head_size,
+                                       const int n_heads,
+                                       const int n_tokens);
+template void attention_2_gemm<__half>(const __half* query,
+                                        const __half* key,
+                                        __half* att,
+                                        const int n_layers,
+                                        const int seq_len,
+                                        const int head_size,
+                                        const int n_heads,
+                                        const int n_tokens);
 
 } // namespace glinthawk::models::common::cuda
