@@ -20,10 +20,10 @@ template<typename DType>
 void matmul( DType* xout, const DType* x, const DType* w, const uint64_t n, const uint64_t d );
 
 template<typename DType>
-void sample( const DType* probabilities, const uint64_t n, uint32_t* output );
+uint32_t sample( const DType* probabilities, const uint64_t n );
 
 template<typename DType>
-void argmax( const DType* v, const uint64_t n, uint32_t* output );
+uint32_t argmax( const DType* v, const uint64_t n );
 
 template<typename DType>
 void silu( DType* hb, DType* hb2, const uint64_t hidden_dim );

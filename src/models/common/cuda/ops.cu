@@ -235,19 +235,17 @@ void attention_2_gemm( const DType* att,
 }
 
 template<typename DType>
-void sample( const DType* probabilities, const uint64_t n, uint32_t* output )
+uint32_t sample( const DType* probabilities, const uint64_t n )
 {
   throw runtime_error( "not implemented" );
 }
 
 template<typename DType>
-void argmax( const DType* _v, const uint64_t n, uint32_t* _output )
+uint32_t argmax( const DType* _v, const uint64_t n )
 {
   thrust::device_ptr<const DType> v { _v };
-  thrust::device_ptr<uint32_t> output { _output };
-
   const auto it = thrust::max_element( v, v + n );
-  *output = thrust::distance( v, it );
+  return thrust::distance( v, it );
 }
 
 template<>
@@ -352,11 +350,11 @@ template void matmul<__half>( __half* xout, const __half* x, const __half* w, co
 template void rmsnorm<float>( float* output, const float* x, const float* weight, const uint64_t size );
 template void rmsnorm<__half>( __half* output, const __half* x, const __half* weight, const uint64_t size );
 
-template void argmax<float>( const float* v, const uint64_t n, uint32_t* output );
-template void argmax<__half>( const __half* v, const uint64_t n, uint32_t* output );
+template uint32_t argmax<float>( const float* v, const uint64_t n );
+template uint32_t argmax<__half>( const __half* v, const uint64_t n );
 
-template void sample<float>( const float* probabilities, const uint64_t n, uint32_t* output );
-template void sample<__half>( const __half* probabilities, const uint64_t n, uint32_t* output );
+template uint32_t sample<float>( const float* probabilities, const uint64_t n );
+template uint32_t sample<__half>( const __half* probabilities, const uint64_t n );
 
 template void accum<float>( float* a, const float* b, const uint64_t size );
 template void accum<__half>( __half* a, const __half* b, const uint64_t size );

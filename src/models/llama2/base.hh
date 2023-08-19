@@ -132,7 +132,7 @@ struct KVCache
 };
 
 template<typename DType>
-class BaseLlama2 : public glinthawk::models::Model<DType>
+class BaseLlama2 : public virtual glinthawk::models::Model<DType>
 {
 protected:
   std::unique_ptr<DType, void ( * )( DType* )> base_weights_buffer_;
@@ -157,6 +157,9 @@ protected:
               std::unique_ptr<DType, void ( * )( DType* )>&& kv_cache,
               const int32_t start_layer = 0,
               const int32_t end_layer = -1 );
+
+public:
+  ~BaseLlama2() override = default;
 };
 
 } // namespace glinthawk::models::llama2
