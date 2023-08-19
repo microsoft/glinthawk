@@ -294,8 +294,8 @@ __global__ void attention_2_v2( DType* att,
                                 const int dim,
                                 const int n_tokens )
 {
-  const int head_num = threadIdx.x;
-  const int i_head = blockIdx.x;
+  const int head_num = blockIdx.x;
+  const int i_head = threadIdx.x;
 
   att += head_num * seq_len;
   xb += head_num * head_size;
@@ -352,21 +352,15 @@ void Llama2<DType>::transformer_layer( const int32_t layer_num, const int token_
   CHECK_CUDA( cudaMemcpy( v_cache_pos, this->state_.v, dim * sizeof( DType ), cudaMemcpyDeviceToDevice ) );
 
   // multihead attention. for each head and for each token up to and including the current one
-  attention_0<<<token_pos + 1, this->config_.n_heads>>>( this->state_.q,
-                                                         this->kv_cache_.buffer_,
-                                                         this->state_.att,
-                                                         layer_num,
-                                                         this->config_.n_layers,
-                                                         this->config_.seq_len,
-                                                         head_size,
-                                                         dim );
+  ops::attention_0_gemm( this->state_.q, this->kv_cache_.buffer_ + layer_num * ( dim * 2 ), this->state_.att,
+                         this->config_.n_layers, this->config_.seq_len, head_size, this->config_.n_heads, token_pos + 1);
 
   // softmax
   attention_softmax(
     this->state_.att, token_pos, this->config_.seq_len, this->config_.n_heads, this->state_.temp_softmax );
 
 
-  attention_2_v2<<<head_size, this->config_.n_heads>>>( this->state_.att,
+  attention_2_v2<<<this->config_.n_heads, head_size>>>( this->state_.att,
                                                         this->kv_cache_.buffer_,
                                                         this->state_.xb,
                                                         layer_num,
