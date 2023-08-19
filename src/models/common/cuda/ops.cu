@@ -37,7 +37,7 @@ __global__ void normalize_and_scale_full( float* output,
                                           const int size,
                                           const float ss )
 {
-  const int i = threadIdx.x + blockIdx.x * 1024;
+  const int i = threadIdx.x + blockIdx.x * 64;
   if (i < size)
     output[i] = weight[i] * ss * x[i];
 }
@@ -48,7 +48,7 @@ __global__ void normalize_and_scale_half( __half* output,
                                           const int size,
                                           const float ss )
 {
-  const int i = threadIdx.x + blockIdx.x * 1024;
+  const int i = threadIdx.x + blockIdx.x * 64;
   if (i < size)
     output[i] = weight[i] * __float2half( ss * __half2float( x[i] ) );
 }
@@ -64,7 +64,7 @@ void rmsnorm<float>( float* output, const float* x, const float* weight, const i
   ss += 1e-5f;
   ss = 1.0f / sqrtf( ss );
 
-  normalize_and_scale_full<<<(size+1023)/1024, 1024>>>( output, x, weight, size, ss );
+  normalize_and_scale_full<<<(size+63)/64, 1024>>>( output, x, weight, size, ss );
 }
 
 struct square : public thrust::unary_function<__half,float>
@@ -86,7 +86,7 @@ void rmsnorm<__half>( __half* output, const __half* x, const __half* weight, con
   ss += 1e-5f;
   ss = 1.0f / sqrtf( ss );
 
-  normalize_and_scale_half<<<(size+1023)/1024, 1024>>>( output, x, weight, size, ss );
+  normalize_and_scale_half<<<(size+63)/64, 64>>>( output, x, weight, size, ss );
 }
 
 template<>
@@ -104,7 +104,6 @@ template<>
 void softmax( __half* _x, const int size )
 {
   thrust::device_ptr<__half> x { _x };
-
   const __half max_val = *thrust::max_element( x, x + size );
   const __half sum = thrust::transform_reduce(
     x,
@@ -113,6 +112,47 @@ void softmax( __half* _x, const int size )
     __half(),
     thrust::plus<__half>() );
   thrust::transform( x, x + size, x, [sum] __device__( const __half x ) { return x / sum; } );
+}
+
+template<typename DType>
+void attention_0_gemm(const DType* query,
+                      const DType* key,
+                      DType* att,
+                      const int n_layers,
+                      const int seq_len,
+                      const int head_size,
+                      const int n_heads,
+                      const int n_tokens)
+{
+  const float alpha = 1.0f / sqrtf( head_size );
+  const float beta = 0.0f;
+
+  const int m = 1;
+  const int n = n_tokens;
+  const int k = head_size;
+
+  const int lda = m;
+  const int ldb = n_layers * n_heads * head_size * 2;
+  const int ldc = m;
+
+  const int strideA = head_size;
+  const int strideB = head_size;
+  const int strideC = seq_len;
+
+  const int batchCount = n_heads;
+
+  if constexpr ( is_same_v<DType, __half> ) {
+        CHECK_CUBLAS(
+cublasGemmStridedBatchedEx( cublas_handle, CUBLAS_OP_N, CUBLAS_OP_N, m, n, k, &alpha, query, CUDA_R_16F, lda, strideA,
+                        key, CUDA_R_16F, ldb, strideB, &beta, att, CUDA_R_16F, ldc, strideC, batchCount, CUDA_R_32F,
+                        CUBLAS_GEMM_DEFAULT ) );
+  } else {
+      CHECK_CUBLAS(
+  cublasGemmStridedBatchedEx( cublas_handle, CUBLAS_OP_N, CUBLAS_OP_N, m, n, k, &alpha, query, CUDA_R_32F, lda, strideA,
+                              key, CUDA_R_32F, ldb, strideB, &beta, att, CUDA_R_32F, ldc, strideC, batchCount, CUDA_R_32F,
+                              CUBLAS_GEMM_DEFAULT ) );
+  }
+
 }
 
 template<typename DType>
@@ -138,12 +178,18 @@ void accum<float>( float* a, const float* b, const int size )
   cublasSaxpy( cublas_handle, size, &alpha, b, 1, a, 1 );
 }
 
+__global__ void accum_cuda(__half* a, const __half* b, const int size){
+  const int i = blockIdx.x * 64 + threadIdx.x;
+  a[i] += b[i];
+}
+
 template<>
 void accum<__half>( __half* a, const __half* b, const int size )
 {
-  float alpha = 1.0f;
-  CHECK_CUBLAS(
-    cublasAxpyEx( cublas_handle, size, &alpha, CUDA_R_32F, b, CUDA_R_16F, 1, a, CUDA_R_16F, 1, CUDA_R_32F ) );
+//  float alpha = 1.0f;
+//  CHECK_CUBLAS(
+//    cublasAxpyEx( cublas_handle, size, &alpha, CUDA_R_32F, b, CUDA_R_16F, 1, a, CUDA_R_16F, 1, CUDA_R_32F ) );
+  accum_cuda<<<(size+63)/64, 64>>>(a, b, size);
 }
 
 // void rmsnorm( float* o, const float* x, const float* weight, const int size );
@@ -174,11 +220,12 @@ void matmul<__half>( __half* xout, const __half* x, const __half* W, const int s
   const int ldc = m;
 
   CHECK_CUBLAS(
-    cublasGemmEx(cublas_handle, CUBLAS_OP_N, CUBLAS_OP_N, m, n, k, &alpha, x, CUDA_R_16F, lda, W, CUDA_R_16F, ldb, &beta, xout, CUDA_R_16F, ldc, CUDA_R_32F, CUBLAS_GEMM_DEFAULT ) );
+    cublasGemmEx(cublas_handle, CUBLAS_OP_N, CUBLAS_OP_N, m, n, k, &alpha, x, CUDA_R_16F, lda, W, CUDA_R_16F, ldb,
+                  &beta, xout, CUDA_R_16F, ldc, CUDA_R_32F, CUBLAS_GEMM_DEFAULT ) );
 }
 
 __global__ void silu_direct(float* _hb, const float* _hb2, const int hidden_dim) {
-  const int i = threadIdx.x + blockIdx.x * 1024;
+  const int i = threadIdx.x + blockIdx.x * 64;
   if (i < hidden_dim){
     const float x = _hb[i];
     _hb[i] = x / (1.0f + expf(-x)) * _hb2[i];
@@ -186,7 +233,7 @@ __global__ void silu_direct(float* _hb, const float* _hb2, const int hidden_dim)
 }
 
 __global__ void silu_direct(__half* _hb, const __half* _hb2, const int hidden_dim) {
-  const int i = threadIdx.x + blockIdx.x * 1024;
+  const int i = threadIdx.x + blockIdx.x * 64;
   if (i < hidden_dim){
     const __half x = _hb[i];
     _hb[i] = x / (__half(1.0f) + hexp(-x)) * _hb2[i];
@@ -196,13 +243,13 @@ __global__ void silu_direct(__half* _hb, const __half* _hb2, const int hidden_di
 template<>
 void silu<float>( float* _hb, float* _hb2, const int hidden_dim )
 {
-  silu_direct<<<(hidden_dim+1023)/1024, 1024>>>( _hb, _hb2, hidden_dim );
+  silu_direct<<<(hidden_dim+63)/64, 64>>>( _hb, _hb2, hidden_dim );
 }
 
 template<>
 void silu<__half>( __half* _hb, __half* _hb2, const int hidden_dim )
 {
-  silu_direct<<<(hidden_dim+1023)/1024, 1024>>>( _hb, _hb2, hidden_dim );
+  silu_direct<<<(hidden_dim+63)/64, 64>>>( _hb, _hb2, hidden_dim );
 }
 
 template void matmul<float>( float* xout, const float* x, const float* w, const int n, const int d );
@@ -225,5 +272,22 @@ template void softmax<__half>( __half* x, const int size );
 
 template void matmul<float>( float* xout, const float* x, const float* w, const int n, const int d );
 template void matmul<__half>( __half* xout, const __half* x, const __half* w, const int n, const int d );
+
+template void attention_0_gemm<float>(const float* query,
+                       const float* key,
+                                       float* att,
+                       const int n_layers,
+                       const int seq_len,
+                       const int head_size,
+                       const int n_heads,
+                       const int n_tokens);
+template void attention_0_gemm<__half>(const __half* query,
+                                       const __half* key,
+                                        __half* att,
+                                       const int n_layers,
+                                       const int seq_len,
+                                       const int head_size,
+                                       const int n_heads,
+                                       const int n_tokens);
 
 } // namespace glinthawk::models::common::cuda

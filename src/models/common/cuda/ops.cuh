@@ -26,4 +26,14 @@ void argmax( const DType* v, const int n, int* output );
 template<typename DType>
 void silu( DType* hb, DType* hb2, const int hidden_dim );
 
+template<typename DType>
+void attention_0_gemm(const DType* q,
+                            const DType* k,
+                            DType* att,
+                            const int n_layers,
+                            const int seq_len,
+                            const int head_size,
+                            const int n_heads,
+                            const int n_tokens);
+
 }
