@@ -67,15 +67,22 @@ void rmsnorm<float>( float* output, const float* x, const float* weight, const i
   normalize_and_scale_full<<<(size+1023)/1024, 1024>>>( output, x, weight, size, ss );
 }
 
+struct square : public thrust::unary_function<__half,float>
+{
+  __host__ __device__
+    float operator()(const __half& x) const {
+      const float x_f = __half2float(x);
+      return x_f * x_f;
+  }
+};
+
 template<>
 void rmsnorm<__half>( __half* output, const __half* x, const __half* weight, const int size )
 {
   // calculate sum of squares
-  __half ss_half = __half();
-
-  CHECK_CUBLAS(
-    cublasNrm2Ex( cublas_handle, size, x, CUDA_R_16F, 1, &ss_half, CUDA_R_16F, CUDA_R_32F ) );
-  float ss = __half2float(ss_half) * __half2float(ss_half) / size;
+  thrust::device_ptr<__half> thrust_x { const_cast<__half*>(x) };
+  float ss = thrust::transform_reduce(thrust_x, thrust_x + size, square(), 0.0f, thrust::plus<float>() );
+  ss /= size;
   ss += 1e-5f;
   ss = 1.0f / sqrtf( ss );
 
