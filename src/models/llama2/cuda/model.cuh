@@ -8,11 +8,11 @@ template<typename DType>
 class Llama2 : public glinthawk::models::llama2::BaseLlama2<DType>
 {
 private:
-  void pass_begin( const int token );
-  void transformer_layer( const int layer_num, const int token_pos );
+  void pass_begin( const uint32_t token );
+  void transformer_layer( const int32_t layer_num, const uint64_t token_pos );
   void pass_end();
 
-  int token_pos_ { 0 };
+  uint64_t token_pos_ { 0 };
   float temperature_ { 0.0f };
 
 protected:
@@ -23,7 +23,9 @@ public:
                       const int32_t start_layer = 0,
                       const int32_t end_layer = -1 );
 
-  int forward( const int token );
+  ~Llama2();
+
+  uint32_t forward( const uint32_t token );
 };
 
 } // namespace glinthawk::models::llama2::cuda

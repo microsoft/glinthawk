@@ -1,5 +1,6 @@
 #include "model.cuh"
 
+#include <cstdint>
 #include <fcntl.h>
 #include <memory>
 #include <source_location>
@@ -43,6 +44,12 @@ std::string dtype_str()
   } else {
     return "unknown";
   }
+}
+
+template<typename DType>
+Llama2<DType>::~Llama2()
+{
+  ops::destroy();
 }
 
 template<typename DType>
@@ -101,7 +108,7 @@ Llama2<DType> Llama2<DType>::load( const filesystem::path& model_path,
     MMap_Region base_mmap { nullptr, base_size, PROT_READ, MAP_PRIVATE, base_fd.fd_num(), 0 };
     CHECK_CUDA( cudaMemcpy( base.get(), base_mmap.addr(), base_size, cudaMemcpyHostToDevice ) );
 
-    LOG( INFO ) << "Loaded base weights from " << base_path << " (" << base_size << " bytes).";
+    LOG( INFO ) << "Loaded base weights (" << base_size << " bytes).";
   }
 
   // (2) load the layers
@@ -118,22 +125,22 @@ Llama2<DType> Llama2<DType>::load( const filesystem::path& model_path,
                             layer_size,
                             cudaMemcpyHostToDevice ) );
 
-    LOG( INFO ) << "Loaded layer " << i << " from " << layer_path << " (" << layer_size << " bytes).";
+    LOG( INFO ) << "Loaded layer " << i << " (" << layer_size << " bytes).";
   }
 
   return { config, move( base ), move( layers ), move( run_state ), move( kv_cache ), start_layer, end_layer };
 }
 
 template<typename DType>
-__global__ void do_rope( const int head_size,
-                         const int n_heads,
+__global__ void do_rope( const uint64_t head_size,
+                         const uint64_t n_heads,
                          const DType* freq_cis_real_row,
                          const DType* freq_cis_imag_row,
                          DType* state_q,
                          DType* state_k )
 {
-  const int head_num = blockIdx.x;
-  const int elem_idx = 2 * threadIdx.x;
+  const uint64_t head_num = blockIdx.x;
+  const uint64_t elem_idx = 2 * threadIdx.x;
 
   // apply RoPE rotation to the q and k vectors for each head
   // get the q and k vectors for this head
@@ -154,49 +161,17 @@ __global__ void do_rope( const int head_size,
 }
 
 template<typename DType>
-__global__ void attention_0( const DType* all_q,
-                             const DType* kv_cache,
-                             DType* att,
-                             const int layer_num,
-                             const int n_layers,
-                             const int seq_len,
-                             const int head_size,
-                             const int dim )
-{
-  const int head_num = threadIdx.x;
-  const int token_pos = blockIdx.x;
-
-  att += head_num * seq_len;
-  const DType* q = all_q + head_num * head_size;
-  const DType* k = kv_cache + token_pos * ( n_layers * dim * 2 ) + layer_num * ( dim * 2 ) + head_num * head_size;
-
-  DType score = 0.0f;
-  for ( int i = 0; i < head_size; i++ ) {
-    score += q[i] * k[i];
-  }
-
-  if constexpr ( is_same_v<DType, __half> ) {
-    score /= hsqrt( head_size );
-  } else {
-    score /= sqrtf( head_size );
-  }
-
-  // save the score to the attention buffer
-  att[token_pos] = score;
-}
-
-template<typename DType>
 __global__ void find_max_for_rows( const DType* att,
                                    DType* output,
-                                   const int token_pos,
-                                   const int n_heads,
-                                   const int seq_len )
+                                   const uint64_t token_pos,
+                                   const uint64_t n_heads,
+                                   const uint64_t seq_len )
 {
-  const int head_num = threadIdx.x;
+  const uint64_t head_num = threadIdx.x;
   att += head_num * seq_len;
 
   DType max_value = att[0];
-  for ( int i = 1; i <= token_pos; i++ ) {
+  for ( uint64_t i = 1; i <= token_pos; i++ ) {
     if constexpr ( is_same_v<DType, __half> ) {
       max_value = __hmax( max_value, att[i] );
     } else {
@@ -208,23 +183,27 @@ __global__ void find_max_for_rows( const DType* att,
 }
 
 template<typename DType>
-__global__ void subtract_and_expf( const DType* values, DType* att, const int n_heads, const int seq_len )
+__global__ void subtract_and_expf( const DType* values, DType* att, const uint64_t n_heads, const uint64_t seq_len )
 {
-  const int head_num = threadIdx.x;
-  const int token_pos = blockIdx.x;
+  const uint64_t head_num = threadIdx.x;
+  const uint64_t token_pos = blockIdx.x;
 
   att += head_num * seq_len;
   att[token_pos] = expf( att[token_pos] - values[head_num] );
 }
 
 template<typename DType>
-__global__ void sum_rows( DType* att, DType* output, const int token_pos, const int n_heads, const int seq_len )
+__global__ void sum_rows( DType* att,
+                          DType* output,
+                          const uint64_t token_pos,
+                          const uint64_t n_heads,
+                          const uint64_t seq_len )
 {
-  const int head_num = threadIdx.x;
+  const uint64_t head_num = threadIdx.x;
   att += head_num * seq_len;
 
   DType sum = 0.0;
-  for ( int i = 0; i <= token_pos; i++ ) {
+  for ( uint64_t i = 0; i <= token_pos; i++ ) {
     sum += att[i];
   }
 
@@ -232,17 +211,21 @@ __global__ void sum_rows( DType* att, DType* output, const int token_pos, const 
 }
 
 template<typename DType>
-__global__ void normalize_by_sum( DType* att, const DType* sums, const int n_heads, const int seq_len )
+__global__ void normalize_by_sum( DType* att, const DType* sums, const uint64_t n_heads, const uint64_t seq_len )
 {
-  const int head_num = threadIdx.x;
-  const int token_pos = blockIdx.x;
+  const uint64_t head_num = threadIdx.x;
+  const uint64_t token_pos = blockIdx.x;
 
   att += head_num * seq_len;
   att[token_pos] /= sums[head_num];
 }
 
 template<typename DType>
-void attention_softmax( DType* att, const int token_pos, const int seq_len, const int n_heads, DType* temp_buffer )
+void attention_softmax( DType* att,
+                        const uint64_t token_pos,
+                        const uint64_t seq_len,
+                        const uint64_t n_heads,
+                        DType* temp_buffer )
 {
   DType* head_values = temp_buffer;
 
@@ -260,58 +243,7 @@ void attention_softmax( DType* att, const int token_pos, const int seq_len, cons
 }
 
 template<typename DType>
-__global__ void attention_2( DType* att,
-                             const DType* kv_cache,
-                             DType* xb,
-                             const int layer_num,
-                             const int n_layers,
-                             const int seq_len,
-                             const int head_size,
-                             const int dim )
-{
-  const int head_num = threadIdx.x;
-  const int token_pos = blockIdx.x;
-
-  att += head_num * seq_len;
-  xb += head_num * head_size;
-
-  const DType a = att[token_pos];
-  const DType* v = kv_cache + token_pos * ( n_layers * dim * 2 ) + layer_num * ( dim * 2 ) + head_num * head_size + dim;
-
-  for ( int i = 0; i < head_size; i++ ) {
-    atomicAdd( &xb[i], a * v[i] );
-  }
-}
-
-template<typename DType>
-__global__ void attention_2_v2( const DType* att,
-                                const DType* kv_cache,
-                                DType* xb,
-                                const int layer_num,
-                                const int n_layers,
-                                const int seq_len,
-                                const int head_size,
-                                const int dim,
-                                const int n_tokens )
-{
-  const int head_num = blockIdx.x;
-  const int i_head = threadIdx.x;
-
-  att += head_num * seq_len;
-  xb += head_num * head_size;
-
-  const DType* v = kv_cache + layer_num * ( dim * 2 ) + head_num * head_size + dim + i_head;
-  DType res = DType();
-
-  for ( int i = 0; i < n_tokens; i++ ) {
-    res += att[i] * v[i * ( n_layers * dim * 2 )];
-  }
-
-  xb[i_head] = res;
-}
-
-template<typename DType>
-void Llama2<DType>::pass_begin( const int token )
+void Llama2<DType>::pass_begin( const uint32_t token )
 {
   // copy the token embedding into the state
   const DType* content_row = this->base_weights_.token_embedding_table + token * this->config_.dim;
@@ -320,12 +252,12 @@ void Llama2<DType>::pass_begin( const int token )
 }
 
 template<typename DType>
-void Llama2<DType>::transformer_layer( const int32_t layer_num, const int token_pos )
+void Llama2<DType>::transformer_layer( const int32_t layer_num, const uint64_t token_pos )
 {
   DType* const x = this->state_.x;
-  const int dim = this->config_.dim;
-  const int hidden_dim = this->config_.hidden_dim;
-  const int head_size = dim / this->config_.n_heads;
+  const uint64_t dim = this->config_.dim;
+  const uint64_t hidden_dim = this->config_.hidden_dim;
+  const uint64_t head_size = dim / this->config_.n_heads;
 
   // pluck out the "pos" row of freq_cis_real and freq_cis_imag
   const DType* freq_cis_real_row = this->base_weights_.freq_cis_real + token_pos * head_size / 2;
@@ -352,24 +284,27 @@ void Llama2<DType>::transformer_layer( const int32_t layer_num, const int token_
   CHECK_CUDA( cudaMemcpy( v_cache_pos, this->state_.v, dim * sizeof( DType ), cudaMemcpyDeviceToDevice ) );
 
   // multihead attention. for each head and for each token up to and including the current one
-  ops::attention_0_gemm( this->state_.q, this->kv_cache_.buffer_ + layer_num * ( dim * 2 ), this->state_.att,
-                         this->config_.n_layers, this->config_.seq_len, head_size, this->config_.n_heads, token_pos + 1);
+  ops::attention_0_gemm( this->state_.q,
+                         this->kv_cache_.buffer_ + layer_num * ( dim * 2 ),
+                         this->state_.att,
+                         this->config_.n_layers,
+                         this->config_.seq_len,
+                         head_size,
+                         this->config_.n_heads,
+                         token_pos + 1 );
 
   // softmax
   attention_softmax(
     this->state_.att, token_pos, this->config_.seq_len, this->config_.n_heads, this->state_.temp_softmax );
 
-//  attention_2_v2<<<this->config_.n_heads, head_size>>>( this->state_.att,
-//                                                        this->kv_cache_.buffer_,
-//                                                        this->state_.xb,
-//                                                        layer_num,
-//                                                        this->config_.n_layers,
-//                                                        this->config_.seq_len,
-//                                                        head_size,
-//                                                        dim,
-//                                                        token_pos + 1 );
-  ops::attention_2_gemm( this->state_.att, this->kv_cache_.buffer_ + layer_num * ( dim * 2 ) + dim, this->state_.xb,
-                         this->config_.n_layers, this->config_.seq_len, head_size, this->config_.n_heads, token_pos + 1);
+  ops::attention_2_gemm( this->state_.att,
+                         this->kv_cache_.buffer_ + layer_num * ( dim * 2 ) + dim,
+                         this->state_.xb,
+                         this->config_.n_layers,
+                         this->config_.seq_len,
+                         head_size,
+                         this->config_.n_heads,
+                         token_pos + 1 );
   // end of multihead attention
 
   // final matmul to get the output of the attention
@@ -409,7 +344,7 @@ void Llama2<DType>::pass_end()
 }
 
 template<typename DType>
-int Llama2<DType>::forward( const int token )
+uint32_t Llama2<DType>::forward( const uint32_t token )
 {
   if ( token_pos_ >= this->config_.seq_len ) {
     return 2; /* EOS */
@@ -423,16 +358,16 @@ int Llama2<DType>::forward( const int token )
 
   pass_end();
 
-  int next_token;
-  int* next_token_device;
-  CHECK_CUDA( cudaMalloc( &next_token_device, sizeof( int ) ) );
+  uint32_t next_token;
+  uint32_t* next_token_device;
+  CHECK_CUDA( cudaMalloc( &next_token_device, sizeof( uint32_t ) ) );
 
   if ( temperature_ == 0.0f ) {
     // greedy argmax sampling
     ops::argmax( this->state_.logits, this->config_.vocab_size, next_token_device );
   } else {
     // apply the temperature to the logits
-    for ( int q = 0; q < this->config_.vocab_size; q++ ) {
+    for ( auto q = 0; q < this->config_.vocab_size; q++ ) {
       this->state_.logits[q] /= temperature_;
     }
 
@@ -444,7 +379,7 @@ int Llama2<DType>::forward( const int token )
   }
 
   token_pos_++;
-  CHECK_CUDA( cudaMemcpy( &next_token, next_token_device, sizeof( int ), cudaMemcpyDeviceToHost ) );
+  CHECK_CUDA( cudaMemcpy( &next_token, next_token_device, sizeof( uint32_t ), cudaMemcpyDeviceToHost ) );
   return next_token;
 }
 
