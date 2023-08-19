@@ -35,5 +35,15 @@ void attention_0_gemm(const DType* q,
                             const int head_size,
                             const int n_heads,
                             const int n_tokens);
+template<typename DType>
+void attention_2_gemm(const DType* q,
+                       const DType* k,
+                       DType* att,
+                       const int n_layers,
+                       const int seq_len,
+                       const int head_size,
+                       const int n_heads,
+                       const int n_tokens);
+
 
 }
