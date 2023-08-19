@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <fcntl.h>
 #include <memory>
+#include <optional>
 #include <source_location>
 
 #include <cuda_fp16.h>
@@ -333,14 +334,82 @@ void Llama2<DType>::transformer_layer( const int32_t layer_num, const uint64_t t
 template<typename DType>
 void Llama2<DType>::pass_end()
 {
-  DType* x = this->state_.x;
-
   // final rmsnorm
   ops::rmsnorm( this->state_.x, this->state_.x, this->base_weights_.rms_final_weight, this->config_.dim );
 
   // classifier into logits
   ops::matmul(
     this->state_.logits, this->state_.x, this->base_weights_.wcls, this->config_.dim, this->config_.vocab_size );
+}
+
+template<typename DType>
+uint32_t extract_token( const RunState<DType>& state, const Config& config, const float temp )
+{
+  uint32_t next_token;
+
+  if ( temp == 0.0f ) {
+    // greedy argmax sampling
+    next_token = ops::argmax( state.logits, config.vocab_size );
+  } else {
+    // apply the temperature to the logits
+    for ( auto q = 0; q < config.vocab_size; q++ ) {
+      state.logits[q] /= temp;
+    }
+
+    // apply softmax to the logits to get the probabilities for next token
+    ops::softmax( state.logits, config.vocab_size );
+
+    // we now want to sample from this distribution to get the next token
+    next_token = ops::sample( state.logits, config.vocab_size );
+  }
+
+  return next_token;
+}
+
+template<typename DType>
+InferenceState<DType> Llama2<DType>::forward( const InferenceState<DType>& inference_state )
+{
+  CHECK_EQ( inference_state.next_layer(), this->start_layer_num_ ) << "next_layer must be the start layer";
+  token_pos_ = inference_state.token_pos();
+
+  if ( inference_state.next_layer() == 0 ) {
+    pass_begin( inference_state.token() );
+  } else {
+    // load the activations
+    CHECK_CUDA( cudaMemcpy( this->state_.x,
+                            inference_state.activations().ptr.get(),
+                            this->config_.dim * sizeof( DType ),
+                            cudaMemcpyHostToDevice ) );
+  }
+
+  for ( int layer_num = this->start_layer_num_; layer_num <= this->end_layer_num_; layer_num++ ) {
+    transformer_layer( layer_num, inference_state.token_pos() );
+  }
+
+  if ( this->end_layer_num_ == this->config_.n_layers - 1 ) {
+    pass_end();
+
+    return {
+      extract_token( this->state_, this->config_, inference_state.temperature() ), // token
+      inference_state.token_pos() + 1,                                             // token_pos
+      0,                                                                           // next_layer
+      inference_state.temperature(),                                               // temperature
+      DataBuffer<DType> {}                                                         // activations
+    };
+  }
+
+  DataBuffer<DType> activations { make_unique<DType[]>( this->config_.dim ), this->config_.dim };
+
+  CHECK_CUDA(
+    cudaMemcpy( activations.ptr.get(), this->state_.x, this->config_.dim * sizeof( DType ), cudaMemcpyDeviceToHost ) );
+
+  return {
+    inference_state.token(),                           // token
+    inference_state.token_pos(),                       // token_pos
+    static_cast<uint32_t>( this->end_layer_num_ ) + 1, // next_layer
+    inference_state.temperature(),                     // temperature
+    move( activations )                                // activations
+  };
 }
 
 template<typename DType>
@@ -358,29 +427,8 @@ uint32_t Llama2<DType>::forward( const uint32_t token )
 
   pass_end();
 
-  uint32_t next_token;
-  uint32_t* next_token_device;
-  CHECK_CUDA( cudaMalloc( &next_token_device, sizeof( uint32_t ) ) );
-
-  if ( temperature_ == 0.0f ) {
-    // greedy argmax sampling
-    ops::argmax( this->state_.logits, this->config_.vocab_size, next_token_device );
-  } else {
-    // apply the temperature to the logits
-    for ( auto q = 0; q < this->config_.vocab_size; q++ ) {
-      this->state_.logits[q] /= temperature_;
-    }
-
-    // apply softmax to the logits to get the probabilities for next token
-    ops::softmax( this->state_.logits, this->config_.vocab_size );
-
-    // we now want to sample from this distribution to get the next token
-    ops::sample( this->state_.logits, this->config_.vocab_size, next_token_device );
-  }
-
   token_pos_++;
-  CHECK_CUDA( cudaMemcpy( &next_token, next_token_device, sizeof( uint32_t ), cudaMemcpyDeviceToHost ) );
-  return next_token;
+  return extract_token( this->state_, this->config_, temperature_ );
 }
 
 template class Llama2<float>;

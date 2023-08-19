@@ -25,6 +25,8 @@ public:
 
   ~Llama2();
 
+  InferenceState<DType> forward( const InferenceState<DType>& inference_state ) override;
+
   uint32_t forward( const uint32_t token );
 };
 
