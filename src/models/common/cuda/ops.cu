@@ -37,8 +37,9 @@ __global__ void normalize_and_scale_full( float* output,
                                           const int size,
                                           const float ss )
 {
-  const int i = threadIdx.x;
-  output[i] = weight[i] * ss * x[i];
+  const int i = threadIdx.x + blockIdx.x * 1024;
+  if (i < size)
+    output[i] = weight[i] * ss * x[i];
 }
 
 __global__ void normalize_and_scale_half( __half* output,
@@ -47,8 +48,9 @@ __global__ void normalize_and_scale_half( __half* output,
                                           const int size,
                                           const float ss )
 {
-  const int i = threadIdx.x;
-  output[i] = weight[i] * __float2half( ss * __half2float( x[i] ) );
+  const int i = threadIdx.x + blockIdx.x * 1024;
+  if (i < size)
+    output[i] = weight[i] * __float2half( ss * __half2float( x[i] ) );
 }
 
 template<>
@@ -62,7 +64,7 @@ void rmsnorm<float>( float* output, const float* x, const float* weight, const i
   ss += 1e-5f;
   ss = 1.0f / sqrtf( ss );
 
-  normalize_and_scale_full<<<1, size>>>( output, x, weight, size, ss );
+  normalize_and_scale_full<<<(size+1023)/1024, 1024>>>( output, x, weight, size, ss );
 }
 
 template<>
@@ -72,13 +74,12 @@ void rmsnorm<__half>( __half* output, const __half* x, const __half* weight, con
   __half ss_half = __half();
 
   CHECK_CUBLAS(
-    cublasDotEx( cublas_handle, size, x, CUDA_R_16F, 1, x, CUDA_R_16F, 1, &ss_half, CUDA_R_16F, CUDA_R_32F ) );
-
-  float ss = __half2float( ss_half ) / size;
+    cublasNrm2Ex( cublas_handle, size, x, CUDA_R_16F, 1, &ss_half, CUDA_R_16F, CUDA_R_32F ) );
+  float ss = __half2float(ss_half) * __half2float(ss_half) / size;
   ss += 1e-5f;
   ss = 1.0f / sqrtf( ss );
 
-  normalize_and_scale_half<<<1, size>>>( output, x, weight, size, ss );
+  normalize_and_scale_half<<<(size+1023)/1024, 1024>>>( output, x, weight, size, ss );
 }
 
 template<>
@@ -154,8 +155,8 @@ void matmul<float>( float* xout, const float* x, const float* W, const int n, co
 template<>
 void matmul<__half>( __half* xout, const __half* x, const __half* W, const int s, const int r )
 {
-  __half alpha = 1.0f;
-  __half beta = 0.0f;
+  float alpha = 1.0f;
+  float beta = 0.0f;
 
   // W(r,s) @ x(s,) -> xout(r,)
   const int m = 1;
@@ -166,29 +167,35 @@ void matmul<__half>( __half* xout, const __half* x, const __half* W, const int s
   const int ldc = m;
 
   CHECK_CUBLAS(
-    cublasHgemm( cublas_handle, CUBLAS_OP_N, CUBLAS_OP_N, m, n, k, &alpha, x, lda, W, ldb, &beta, xout, ldc ) );
+    cublasGemmEx(cublas_handle, CUBLAS_OP_N, CUBLAS_OP_N, m, n, k, &alpha, x, CUDA_R_16F, lda, W, CUDA_R_16F, ldb, &beta, xout, CUDA_R_16F, ldc, CUDA_R_32F, CUBLAS_GEMM_DEFAULT ) );
+}
+
+__global__ void silu_direct(float* _hb, const float* _hb2, const int hidden_dim) {
+  const int i = threadIdx.x + blockIdx.x * 1024;
+  if (i < hidden_dim){
+    const float x = _hb[i];
+    _hb[i] = x / (1.0f + expf(-x)) * _hb2[i];
+  }
+}
+
+__global__ void silu_direct(__half* _hb, const __half* _hb2, const int hidden_dim) {
+  const int i = threadIdx.x + blockIdx.x * 1024;
+  if (i < hidden_dim){
+    const __half x = _hb[i];
+    _hb[i] = x / (__half(1.0f) + hexp(-x)) * _hb2[i];
+  }
 }
 
 template<>
 void silu<float>( float* _hb, float* _hb2, const int hidden_dim )
 {
-  thrust::device_ptr<float> hb { _hb };
-  thrust::device_ptr<float> hb2 { _hb2 };
-
-  thrust::transform( hb, hb + hidden_dim, hb, [] __device__( float x ) { return ( x / ( 1.0f + expf( -x ) ) ); } );
-  thrust::transform( hb, hb + hidden_dim, hb2, hb, thrust::multiplies<float>() );
+  silu_direct<<<(hidden_dim+1023)/1024, 1024>>>( _hb, _hb2, hidden_dim );
 }
 
 template<>
 void silu<__half>( __half* _hb, __half* _hb2, const int hidden_dim )
 {
-  thrust::device_ptr<__half> hb { _hb };
-  thrust::device_ptr<__half> hb2 { _hb2 };
-
-  thrust::transform(
-    hb, hb + hidden_dim, hb, [] __device__( __half x ) { return ( x / ( __float2half( 1.0f ) + hexp( -x ) ) ); } );
-
-  thrust::transform( hb, hb + hidden_dim, hb2, hb, thrust::multiplies<__half>() );
+  silu_direct<<<(hidden_dim+1023)/1024, 1024>>>( _hb, _hb2, hidden_dim );
 }
 
 template void matmul<float>( float* xout, const float* x, const float* w, const int n, const int d );

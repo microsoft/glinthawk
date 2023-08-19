@@ -156,11 +156,11 @@ LayerWeights<DType>::LayerWeights( const Config& config, const DType* model )
 
   // base pointers
   rms_att_weight = _advance_pointer( ptr, config.dim );
-  this->rms_ffn_weight = _advance_pointer( ptr, config.dim );
   this->wq = _advance_pointer( ptr, config.dim * config.dim );
   this->wk = _advance_pointer( ptr, config.dim * config.dim );
   this->wv = _advance_pointer( ptr, config.dim * config.dim );
   this->wo = _advance_pointer( ptr, config.dim * config.dim );
+  this->rms_ffn_weight = _advance_pointer( ptr, config.dim );
   this->w1 = _advance_pointer( ptr, config.dim * config.hidden_dim );
   this->w2 = _advance_pointer( ptr, config.dim * config.hidden_dim );
   this->w3 = _advance_pointer( ptr, config.dim * config.hidden_dim );
