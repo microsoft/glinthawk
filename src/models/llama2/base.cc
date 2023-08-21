@@ -207,7 +207,7 @@ size_t RunState<DType>::state_size( const Config& config )
 {
   return sizeof( DType ) * config.concurrency_limit
          * ( config.dim * 4 + config.kv_dim * 2 + config.hidden_dim * 2 + config.n_heads * config.seq_len + config.vocab_size
-             + config.n_heads);
+             + config.n_heads );
 }
 
 /* KV CACHE */
