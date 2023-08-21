@@ -390,6 +390,8 @@ InferenceState<DType> Llama2<DType>::forward( const InferenceState<DType>& infer
     pass_end();
 
     return {
+      inference_state.prompt_id(),                                                 // prompt id
+      inference_state.model_id(),                                                  // model id
       extract_token( this->state_, this->config_, inference_state.temperature() ), // token
       inference_state.token_pos() + 1,                                             // token_pos
       0,                                                                           // next_layer
@@ -404,6 +406,8 @@ InferenceState<DType> Llama2<DType>::forward( const InferenceState<DType>& infer
     cudaMemcpy( activations.ptr.get(), this->state_.x, this->config_.dim * sizeof( DType ), cudaMemcpyDeviceToHost ) );
 
   return {
+    inference_state.prompt_id(),                       // prompt id
+    inference_state.model_id(),                        // model id
     inference_state.token(),                           // token
     inference_state.token_pos(),                       // token_pos
     static_cast<uint32_t>( this->end_layer_num_ ) + 1, // next_layer

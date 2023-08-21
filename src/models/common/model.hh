@@ -1,6 +1,11 @@
 #pragma once
 
+#include "util/digest.hh"
+
 namespace glinthawk::models {
+
+using PromptID = glinthawk::util::digest::SHA256Hash;
+using ModelID = uint32_t;
 
 template<typename DType>
 struct DataBuffer
@@ -20,6 +25,9 @@ template<typename DType>
 class InferenceState
 {
 private:
+  PromptID prompt_id_ {};
+  ModelID model_id_ { 0 };
+
   uint32_t token_ { 1 };
   uint32_t token_pos_ { 0 };
   uint32_t next_layer_ { 0 };
@@ -27,12 +35,16 @@ private:
   DataBuffer<DType> activations_ {};
 
 public:
-  InferenceState( const uint32_t token,
+  InferenceState( const PromptID prompt_id,
+                  const ModelID model_id,
+                  const uint32_t token,
                   const uint32_t token_pos,
                   const uint32_t next_layer,
                   const float temperature,
                   DataBuffer<DType>&& activations )
-    : token_( token )
+    : prompt_id_( prompt_id )
+    , model_id_( model_id )
+    , token_( token )
     , token_pos_( token_pos )
     , next_layer_( next_layer )
     , temperature_( temperature )
@@ -40,8 +52,8 @@ public:
   {
   }
 
-  InferenceState( const std::string_view serialized );
-  std::string serialize();
+  PromptID prompt_id() const { return prompt_id_; }
+  ModelID model_id() const { return model_id_; }
 
   uint32_t token() const { return token_; }
   uint32_t token_pos() const { return token_pos_; }
