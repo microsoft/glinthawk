@@ -1,6 +1,7 @@
 #pragma once
 
 #include <memory>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 
@@ -17,29 +18,53 @@ namespace glinthawk::models {
 using PromptID = glinthawk::util::digest::SHA256Hash;
 using ModelID = uint32_t;
 
-enum class DataType : uint8_t
+class DataType
 {
-  Float16,
-  Float32
+public:
+  enum class Type : uint8_t
+  {
+    Float16,
+    Float32
+  };
+
+public:
+  DataType( const Type t )
+    : dtype( t )
+  {
+  }
+
+  size_t size() const
+  {
+    switch ( dtype ) {
+      case Type::Float16:
+        return 2;
+      case Type::Float32:
+        return 4;
+    }
+
+    throw std::runtime_error( "invalid dtype" );
+  }
+
+  Type dtype;
 };
 
-template<typename DType>
+static_assert( sizeof( DataType ) == sizeof( DataType::Type ) );
+
 struct DataBuffer
 {
-  static constexpr DataType dtype = std::is_same_v<DType, __half> ? DataType::Float16 : DataType::Float32;
-
-  std::unique_ptr<DType[]> ptr { nullptr };
+  DataType dtype { DataType::Type::Float32 };
+  std::unique_ptr<uint8_t[]> ptr { nullptr };
   uint64_t len { 0 };
 
   DataBuffer() = default;
-  DataBuffer( std::unique_ptr<DType[]>&& other_ptr, const uint64_t other_len )
-    : ptr( std::move( other_ptr ) )
+  DataBuffer( const DataType other_dtype, std::unique_ptr<uint8_t[]>&& other_ptr, const uint64_t other_len )
+    : dtype( other_dtype )
+    , ptr( std::move( other_ptr ) )
     , len( other_len )
   {
   }
 };
 
-template<typename DType>
 class InferenceState
 {
 private:
@@ -51,7 +76,7 @@ private:
   uint32_t next_layer_ { 0 };
   float temperature_ { 0.0f };
 
-  DataBuffer<DType> activations_ {};
+  DataBuffer activations_ {};
 
   size_t serialized_size() const;
 
@@ -62,7 +87,7 @@ public:
                   const uint32_t token_pos,
                   const uint32_t next_layer,
                   const float temperature,
-                  DataBuffer<DType>&& activations )
+                  DataBuffer&& activations )
     : prompt_id_( prompt_id )
     , model_id_( model_id )
     , token_( token )
@@ -85,15 +110,14 @@ public:
   uint32_t next_layer() const { return next_layer_; }
   float temperature() const { return temperature_; }
 
-  const DataBuffer<DType>& activations() const { return activations_; }
+  const DataBuffer& activations() const { return activations_; }
 };
 
-template<typename DType>
 class Model
 {
 public:
-  virtual ~Model() = default;
-  virtual InferenceState<DType> forward( const InferenceState<DType>& inference_state ) = 0;
+  virtual ~Model() {}
+  virtual InferenceState forward( const InferenceState& inference_state ) = 0;
 };
 
 } // namespace glinthawk::models

@@ -367,7 +367,7 @@ uint32_t extract_token( const RunState<DType>& state, const Config& config, cons
 }
 
 template<typename DType>
-InferenceState<DType> Llama2<DType>::forward( const InferenceState<DType>& inference_state )
+InferenceState Llama2<DType>::forward( const InferenceState& inference_state )
 {
   CHECK_EQ( inference_state.next_layer(), this->start_layer_num_ ) << "next_layer must be the start layer";
   token_pos_ = inference_state.token_pos();
@@ -396,11 +396,13 @@ InferenceState<DType> Llama2<DType>::forward( const InferenceState<DType>& infer
       inference_state.token_pos() + 1,                                             // token_pos
       0,                                                                           // next_layer
       inference_state.temperature(),                                               // temperature
-      DataBuffer<DType> {}                                                         // activations
+      DataBuffer {}                                                                // activations
     };
   }
 
-  DataBuffer<DType> activations { make_unique<DType[]>( this->config_.dim ), this->config_.dim };
+  DataBuffer activations { is_same_v<DType, float> ? DataType::Type::Float32 : DataType::Type::Float16,
+                           make_unique<uint8_t[]>( this->config_.dim * sizeof( DType ) ),
+                           this->config_.dim };
 
   CHECK_CUDA(
     cudaMemcpy( activations.ptr.get(), this->state_.x, this->config_.dim * sizeof( DType ), cudaMemcpyDeviceToHost ) );

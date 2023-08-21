@@ -132,7 +132,7 @@ struct KVCache
 };
 
 template<typename DType>
-class BaseLlama2 : public virtual glinthawk::models::Model<DType>
+class BaseLlama2 : public virtual glinthawk::models::Model
 {
 protected:
   std::unique_ptr<DType, void ( * )( DType* )> base_weights_buffer_;
