@@ -364,9 +364,13 @@ std::vector<InferenceState<DType>> Llama2<DType>::forward(
     std::vector<float> batch_temps;
     for ( size_t i = 0; i < inference_state_s.size(); i++ )
       batch_temps.push_back( inference_state_s[i].get().temperature() );
+
     std::vector<uint32_t> next_tokens = extract_batch_token( this->state_, this->config_, batch_temps );
+
     for ( size_t i = 0; i < inference_state_s.size(); i++ )
-      token_vector.emplace_back( next_tokens[i],                             // token
+      token_vector.emplace_back( inference_state[i].prompt_id(),             // prompt_id
+                                 inference_state[i].model_id(),              // model_id
+                                 next_tokens[i],                             // token
                                  inference_state_s[i].get().token_pos() + 1, // token_pos
                                  0,                                          // next_layer
                                  inference_state_s[i].get().temperature(),   // temperature
@@ -384,7 +388,9 @@ std::vector<InferenceState<DType>> Llama2<DType>::forward(
                                  this->config_.dim * sizeof( DType ),
                                  cudaMemcpyDeviceToHost ) );
 
-    token_vector.emplace_back( inference_state_s[i].get().token(),                // token
+    token_vector.emplace_back( inference_state_s[i].prompt_id(),                  // prompt_id
+                               inference_state_s[i].get().model_id(),             // model_id
+                               inference_state_s[i].get().token(),                // token
                                inference_state_s[i].get().token_pos(),            // token_pos
                                static_cast<uint32_t>( this->end_layer_num_ ) + 1, // next_layer
                                inference_state_s[i].get().temperature(),          // temperature
