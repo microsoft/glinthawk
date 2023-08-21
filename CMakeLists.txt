@@ -7,6 +7,9 @@ include ( etc/cflags.cmake )
 include ( etc/openmp.cmake )
 include ( etc/cuda.cmake )
 
+find_package ( OpenSSL REQUIRED )
+link_libraries ( OpenSSL::SSL )
+
 find_package ( Glog REQUIRED )
 link_libraries ( glog::glog )
 
