@@ -195,7 +195,7 @@ template<typename DType>
 size_t RunState<DType>::state_size( const Config& config )
 {
   return sizeof( DType )
-         * ( config.dim * 5 + config.hidden_dim * 2 + config.n_heads * config.seq_len + config.vocab_size
+         * ( config.dim * 6 + config.hidden_dim * 2 + config.n_heads * config.seq_len + config.vocab_size
              + config.n_heads );
 }
 
