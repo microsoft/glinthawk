@@ -6,11 +6,11 @@
 
 #include "queue.hh"
 
+#include "models/common/model.hh"
 #include "net/address.hh"
 #include "net/message.hh"
 #include "net/session.hh"
 #include "net/socket.hh"
-#include "nn/inference.hh"
 #include "util/eventloop.hh"
 #include "util/timerfd.hh"
 

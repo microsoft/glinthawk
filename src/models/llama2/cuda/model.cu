@@ -319,8 +319,8 @@ std::vector<uint32_t> extract_batch_token( const RunState<DType>& state,
 }
 
 template<typename DType>
-std::vector<InferenceState<DType>> Llama2<DType>::forward(
-  const std::vector<std::reference_wrapper<const InferenceState<DType>>>& inference_state_s,
+std::vector<InferenceState> Llama2<DType>::forward(
+  const std::vector<std::reference_wrapper<const InferenceState>>& inference_state_s,
   const std::vector<uint32_t>& prompt_id_s )
 {
   CHECK_GT( inference_state_s.size(), 0 ) << "batch size must be at least 1";
@@ -356,7 +356,7 @@ std::vector<InferenceState<DType>> Llama2<DType>::forward(
     transformer_layer( layer_num );
   }
 
-  std::vector<InferenceState<DType>> token_vector;
+  std::vector<InferenceState> token_vector;
 
   if ( this->end_layer_num_ == this->config_.n_layers - 1 ) {
     pass_end();
@@ -374,14 +374,16 @@ std::vector<InferenceState<DType>> Llama2<DType>::forward(
                                  inference_state_s[i].get().token_pos() + 1, // token_pos
                                  0,                                          // next_layer
                                  inference_state_s[i].get().temperature(),   // temperature
-                                 DataBuffer<DType> {}                        // activations
+                                 DataBuffer {}                               // activations
       );
 
     return token_vector;
   }
 
   for ( size_t i = 0; i < inference_state_s.size(); i++ ) {
-    DataBuffer<DType> activations { make_unique<DType[]>( this->config_.dim ), this->config_.dim };
+    DataBuffer activations { is_same_v<DType, float> ? DataType::Type::Float32 : DataType::Type::Float16,
+                             make_unique<uint8_t[]>( this->config_.dim * sizeof( DType ) ),
+                             this->config_.dim };
 
     ops::CHECK_CUDA( cudaMemcpy( activations.ptr.get(),
                                  this->state_.x + i * this->config_.dim * sizeof( DType ),
@@ -431,19 +433,19 @@ std::vector<uint32_t> Llama2<DType>::forward( const std::vector<uint32_t>& token
 }
 
 template<typename DType>
-std::vector<InferenceState<DType>> Llama2<DType>::forward( const std::vector<InferenceState<DType>>& inference_state_s,
+std::vector<InferenceState> Llama2<DType>::forward( const std::vector<InferenceState>& inference_state_s,
                                                            const std::vector<uint32_t>& prompt_id_s )
 {
-  std::vector<std::reference_wrapper<const InferenceState<DType>>> res;
+  std::vector<std::reference_wrapper<const InferenceState>> res;
   for ( auto& state : inference_state_s )
     res.push_back( std::ref( state ) );
   return forward( res, prompt_id_s );
 }
 
 template<typename DType>
-InferenceState<DType> Llama2<DType>::forward( const InferenceState<DType>& inference_state, const uint32_t& prompt_id )
+InferenceState Llama2<DType>::forward( const InferenceState& inference_state, const uint32_t& prompt_id )
 {
-  std::vector<std::reference_wrapper<const InferenceState<DType>>> token_vector;
+  std::vector<std::reference_wrapper<const InferenceState>> token_vector;
   token_vector.push_back( std::ref( inference_state ) );
   std::vector<uint32_t> prompt_id_vector = { prompt_id };
   return move( forward( token_vector, prompt_id_vector )[0] );

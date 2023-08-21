@@ -12,7 +12,7 @@ template<typename FieldType, typename PtrType>
 FieldType _get_and_advance( const PtrType*& ptr )
 {
   const auto result = reinterpret_cast<const FieldType*>( ptr );
-  ptr = reinterpret_cast<uint8_t*>( ptr ) + sizeof( FieldType );
+  ptr = reinterpret_cast<const PtrType*>( reinterpret_cast<const uint8_t*>( ptr ) + sizeof( FieldType ) );
   return *result;
 }
 
@@ -20,15 +20,14 @@ template<typename FieldType, typename PtrType>
 void _put_and_advance( PtrType*& ptr, const FieldType& field )
 {
   memcpy( ptr, &field, sizeof( FieldType ) );
-  ptr = reinterpret_cast<uint8_t*>( ptr ) + sizeof( FieldType );
+  ptr = reinterpret_cast<PtrType*>( reinterpret_cast<uint8_t*>( ptr ) + sizeof( FieldType ) );
 }
 
 } // namespace
 
-template<typename DType>
-InferenceState<DType>::InferenceState( const string_view serialized )
+InferenceState::InferenceState( const string_view serialized )
 {
-  const auto ptr = serialized.data();
+  auto ptr = serialized.data();
 
   prompt_id_ = _get_and_advance<decltype( prompt_id_ )>( ptr );
   model_id_ = _get_and_advance<decltype( model_id_ )>( ptr );
@@ -37,16 +36,14 @@ InferenceState<DType>::InferenceState( const string_view serialized )
   next_layer_ = _get_and_advance<decltype( next_layer_ )>( ptr );
   temperature_ = _get_and_advance<decltype( temperature_ )>( ptr );
 
+  activations_.dtype.dtype = static_cast<DataType::Type>( _get_and_advance<underlying_type_t<DataType::Type>>( ptr ) );
   activations_.len = _get_and_advance<decltype( activations_.len )>( ptr );
-  activations_.ptr = make_unique<DType[]>( activations_.len );
+  activations_.ptr = make_unique<uint8_t[]>( activations_.len * activations_.dtype.size() );
 
-  memcpy( activations_.ptr.get(),
-          _advance_pointer( ptr, activations_.len * sizeof( DType ) ),
-          activations_.len * sizeof( DType ) );
+  memcpy( activations_.ptr.get(), ptr, activations_.len * activations_.dtype.size() );
 }
 
-template<typename DType>
-string InferenceState<DType>::serialize() const
+string InferenceState::serialize() const
 {
   string result;
   result.resize( serialized_size() );
@@ -59,14 +56,15 @@ string InferenceState<DType>::serialize() const
   _put_and_advance( ptr, next_layer_ );
   _put_and_advance( ptr, temperature_ );
 
+  _put_and_advance( ptr, static_cast<underlying_type_t<DataType::Type>>( activations_.dtype.dtype ) );
   _put_and_advance( ptr, activations_.len );
-  memcpy( ptr, activations_.ptr.get(), activations_.len * sizeof( DType ) );
+
+  memcpy( ptr, activations_.ptr.get(), activations_.len * activations_.dtype.size() );
 
   return result;
 }
 
-template<typename DType>
-string InferenceState<DType>::to_string() const
+string InferenceState::to_string() const
 {
   ostringstream oss;
   oss << "InferenceState("
@@ -78,16 +76,16 @@ string InferenceState<DType>::to_string() const
   return oss.str();
 }
 
-template<typename DType>
-size_t InferenceState<DType>::serialized_size() const
+size_t InferenceState::serialized_size() const
 {
-  return sizeof( PromptID )                    /* prompt_id_ */
-         + sizeof( ModelID )                   /* model_id_ */
-         + sizeof( token_ )                    /* token_ */
-         + sizeof( token_pos_ )                /* token_pos_ */
-         + sizeof( next_layer_ )               /* next_layer_ */
-         + sizeof( temperature_ )              /* temperature_ */
-         + sizeof( activations_.len )          /* activations_.len */
-         + sizeof( DType ) * activations_.len; /* activations_ data */
+  return sizeof( PromptID )                              /* prompt_id_ */
+         + sizeof( ModelID )                             /* model_id_ */
+         + sizeof( token_ )                              /* token_ */
+         + sizeof( token_pos_ )                          /* token_pos_ */
+         + sizeof( next_layer_ )                         /* next_layer_ */
+         + sizeof( temperature_ )                        /* temperature_ */
+         + sizeof( activations_.len )                    /* activations_.len */
+         + activations_.dtype.size() * activations_.len; /* activations_ data */
 }
+
 }

@@ -29,9 +29,9 @@ public:
 
   ~Llama2();
 
-  InferenceState<DType> forward( const InferenceState<DType>& inference_state, const uint32_t& prompt_id ) override;
+  InferenceState forward( const InferenceState& inference_state, const uint32_t& prompt_id ) override;
 
-  std::vector<InferenceState<DType>> forward( const std::vector<InferenceState<DType>>& inference_state_s, const std::vector<uint32_t>& prompt_id_s ) override;
+  std::vector<InferenceState> forward( const std::vector<InferenceState>& inference_state_s, const std::vector<uint32_t>& prompt_id_s ) override;
 
   uint32_t forward( const uint32_t& token, const uint32_t& prompt_id, const uint32_t& token_pos );
 
