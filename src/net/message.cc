@@ -1,6 +1,6 @@
 #include "message.hh"
 
-#include "nn/inference.hh"
+#include "models/common/model.hh"
 #include "session.hh"
 
 using namespace std;
@@ -124,6 +124,6 @@ void MessageHandler<SessionType, OutgoingMessage, IncomingMessage>::install_rule
 
 namespace glinthawk {
 
-template class MessageHandler<TCPSession, InferenceState, InferenceState>;
+template class MessageHandler<TCPSession, models::InferenceState, models::InferenceState>;
 
 } // namespace glinthawk

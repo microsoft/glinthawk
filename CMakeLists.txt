@@ -32,9 +32,6 @@ list ( APPEND SOURCE ${MODELS_SOURCE} )
 add_library ( glinthawk STATIC ${SOURCE} )
 link_libraries ( glinthawk )
 
-add_executable ( infer src/frontend/infer.cc )
-add_executable ( infer-partial src/frontend/infer-partial.cc )
-
 if ( CUDA_ENABLED )
   add_executable ( infer-gpu src/frontend/infer-gpu.cc )
   add_executable ( infer-parallel-prompts src/frontend/infer-parallel-prompts.cc )
