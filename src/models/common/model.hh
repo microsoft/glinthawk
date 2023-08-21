@@ -1,5 +1,15 @@
 #pragma once
 
+#include <memory>
+#include <string>
+#include <string_view>
+
+#ifdef CUDA_ENABLED
+#include <cuda_fp16.h>
+#else
+#define __half uint16_t
+#endif
+
 #include "util/digest.hh"
 
 namespace glinthawk::models {
@@ -7,9 +17,17 @@ namespace glinthawk::models {
 using PromptID = glinthawk::util::digest::SHA256Hash;
 using ModelID = uint32_t;
 
+enum class DataType : uint8_t
+{
+  Float16,
+  Float32
+};
+
 template<typename DType>
 struct DataBuffer
 {
+  static constexpr DataType dtype = std::is_same_v<DType, __half> ? DataType::Float16 : DataType::Float32;
+
   std::unique_ptr<DType[]> ptr { nullptr };
   uint64_t len { 0 };
 
@@ -32,7 +50,10 @@ private:
   uint32_t token_pos_ { 0 };
   uint32_t next_layer_ { 0 };
   float temperature_ { 0.0f };
+
   DataBuffer<DType> activations_ {};
+
+  size_t serialized_size() const;
 
 public:
   InferenceState( const PromptID prompt_id,
@@ -52,6 +73,10 @@ public:
   {
   }
 
+  InferenceState( const std::string_view serialized_state );
+  std::string serialize() const;
+  std::string to_string() const;
+
   PromptID prompt_id() const { return prompt_id_; }
   ModelID model_id() const { return model_id_; }
 
@@ -59,6 +84,7 @@ public:
   uint32_t token_pos() const { return token_pos_; }
   uint32_t next_layer() const { return next_layer_; }
   float temperature() const { return temperature_; }
+
   const DataBuffer<DType>& activations() const { return activations_; }
 };
 
