@@ -59,7 +59,7 @@ def export(p, state_dict, dest_dir, dtype_text="FP16"):
     # next write out the embedding weights
     print("writing BASEWEIGHTS")
 
-    with open(os.path.join(dest_dir, f"BASEWEIGHTS_{dtype_txt}"), "wb") as fout:
+    with open(os.path.join(dest_dir, f"BASEWEIGHTS_{dtype_text}"), "wb") as fout:
         freqs_cos, freqs_sin = precompute_freqs_cis(
             p["dim"] // p["n_heads"], p["max_seq_len"] * 2
         )
@@ -73,7 +73,7 @@ def export(p, state_dict, dest_dir, dtype_text="FP16"):
         serialize(fout, "output.weight")
 
     for i in range(p["n_layers"]):
-        with open(os.path.join(dest_dir, f"LAYER{i}_{dtype_txt}"), "wb") as fout:
+        with open(os.path.join(dest_dir, f"LAYER{i}_{dtype_text}"), "wb") as fout:
             print(f"writing LAYER{i}")
             serialize(fout, f"layers.{i}.attention_norm.weight")
             serialize(fout, f"layers.{i}.attention.wq.weight")
@@ -118,7 +118,7 @@ def load_and_export(model_path, output_path, dtype_txt):
     export(params, state_dict, output_path, dtype_txt)
 
 
-if __name__ == "__main__":
+def main():
     if len(sys.argv) != 4:
         print("[Llama model folder path] [output folder path] [dtype=FP16|FP32]")
         exit()
@@ -127,3 +127,7 @@ if __name__ == "__main__":
     output_path = sys.argv[2]
     dtype_txt = sys.argv[3]
     load_and_export(model_path, output_path, dtype_txt)
+
+
+if __name__ == "__main__":
+    main()

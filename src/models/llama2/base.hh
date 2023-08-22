@@ -13,19 +13,20 @@ namespace glinthawk::models::llama2 {
 
 struct Config
 {
-  Config( const std::filesystem::path& config_file );
+  Config( const std::filesystem::path& config_file, uint64_t batch_size_ );
 
   std::string to_string() const;
 
   static size_t config_size() { return sizeof( int32_t ) * 7; }
 
-  uint64_t dim {};        // transformer dimension
-  uint64_t hidden_dim {}; // for ffn layers
-  uint64_t n_layers {};   // number of layers
-  uint64_t n_heads {};    // number of query heads
-  uint64_t n_kv_heads {}; // number of key/value heads (can be < query heads because of multiquery)
-  uint64_t vocab_size {}; // vocabulary size (byte-level)
-  uint64_t seq_len {};    // max sequence length
+  uint64_t dim {};          // transformer dimension
+  uint64_t hidden_dim {};   // for ffn layers
+  uint64_t n_layers {};     // number of layers
+  uint64_t n_heads {};      // number of query heads
+  uint64_t n_kv_heads {};   // number of key/value heads (can be < query heads because of multiquery)
+  uint64_t vocab_size {};   // vocabulary size (byte-level)
+  uint64_t seq_len {};      // max sequence length
+  uint64_t batch_size {1};  // batch size
 
   bool wcls_present { false };
 };
@@ -98,17 +99,17 @@ struct RunState
   static size_t state_size( const Config& config );
 
   DType* buffer_;         // we use this buffer for everything, including activations
-  DType* x {};            // activation at current time stamp (dim,)
-  DType* xb {};           // same, but inside a residual branch (dim,)
-  DType* xb2 {};          // an additional buffer just for convenience (dim,)
-  DType* q {};            // query (dim,)
-  DType* k {};            // key (dim,)
-  DType* v {};            // value (dim,)
-  DType* hb {};           // buffer for hidden dimension in the ffn (hidden_dim,)
-  DType* hb2 {};          // buffer for hidden dimension in the ffn (hidden_dim,)
-  DType* att {};          // buffer for scores/attention values (n_heads, seq_len)
-  DType* logits {};       // output logits
-  DType* temp_softmax {}; // temporary buffer for computing softmax (n_heads,)
+  DType* x {};            // activation at current time stamp (B, dim)
+  DType* xb {};           // same, but inside a residual branch (B, dim)
+  DType* xb2 {};          // an additional buffer just for convenience (B, dim)
+  DType* q {};            // query (B, dim)
+  DType* k {};            // key (B, dim)
+  DType* v {};            // value (B, dim)
+  DType* hb {};           // buffer for hidden dimension in the ffn (B, hidden_dim)
+  DType* hb2 {};          // buffer for hidden dimension in the ffn (B, hidden_dim)
+  DType* att {};          // buffer for scores/attention values (B, n_heads, seq_len)
+  DType* logits {};       // output logits (B, vocab_size)
+  DType* temp_softmax {}; // temporary buffer for computing softmax (B, n_heads)
 };
 
 template<typename DType>
@@ -126,9 +127,10 @@ struct KVCache
   const int dim_;
   const int n_layers_;
   const int head_size_;
+  const int batch_size_;
 
-  DType* key( int layer, const int step, const int head = 0 );
-  DType* value( int layer, const int step, const int head = 0 );
+  DType* key( int layer, const int step, const int batch = 0, const int head = 0);
+  DType* value( int layer, const int step, const int batch = 0, const int head = 0);
 };
 
 template<typename DType>

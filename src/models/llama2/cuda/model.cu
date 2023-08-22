@@ -56,7 +56,8 @@ Llama2<DType>::~Llama2()
 template<typename DType>
 Llama2<DType> Llama2<DType>::load( const filesystem::path& model_path,
                                    const int32_t start_layer,
-                                   const int32_t end_layer_raw )
+                                   const int32_t end_layer_raw,
+                                   const uint64_t batch_size )
 {
   ops::init();
 
@@ -64,7 +65,7 @@ Llama2<DType> Llama2<DType>::load( const filesystem::path& model_path,
   const auto config_path = model_path / "CONFIG";
   const auto base_path = model_path / ( "BASEWEIGHTS" + filename_suffix );
 
-  llama2::Config config { config_path };
+  llama2::Config config { config_path, batch_size };
 
   const int32_t end_layer = ( end_layer_raw == -1 ) ? ( config.n_layers - 1 ) : end_layer_raw;
   const int32_t layer_count = end_layer - start_layer + 1;
@@ -134,7 +135,6 @@ Llama2<DType> Llama2<DType>::load( const filesystem::path& model_path,
 
 template<typename DType>
 __global__ void do_rope( const uint64_t head_size,
-                         const uint64_t n_heads,
                          const DType* freq_cis_real_row,
                          const DType* freq_cis_imag_row,
                          DType* state_q,
@@ -165,7 +165,6 @@ template<typename DType>
 __global__ void find_max_for_rows( const DType* att,
                                    DType* output,
                                    const uint64_t token_pos,
-                                   const uint64_t n_heads,
                                    const uint64_t seq_len )
 {
   const uint64_t head_num = threadIdx.x;
@@ -184,7 +183,7 @@ __global__ void find_max_for_rows( const DType* att,
 }
 
 template<typename DType>
-__global__ void subtract_and_expf( const DType* values, DType* att, const uint64_t n_heads, const uint64_t seq_len )
+__global__ void subtract_and_expf( const DType* values, DType* att, const uint64_t seq_len )
 {
   const uint64_t head_num = threadIdx.x;
   const uint64_t token_pos = blockIdx.x;
@@ -197,7 +196,6 @@ template<typename DType>
 __global__ void sum_rows( DType* att,
                           DType* output,
                           const uint64_t token_pos,
-                          const uint64_t n_heads,
                           const uint64_t seq_len )
 {
   const uint64_t head_num = threadIdx.x;
@@ -212,7 +210,7 @@ __global__ void sum_rows( DType* att,
 }
 
 template<typename DType>
-__global__ void normalize_by_sum( DType* att, const DType* sums, const uint64_t n_heads, const uint64_t seq_len )
+__global__ void normalize_by_sum( DType* att, const DType* sums, const uint64_t seq_len )
 {
   const uint64_t head_num = threadIdx.x;
   const uint64_t token_pos = blockIdx.x;
@@ -226,30 +224,53 @@ void attention_softmax( DType* att,
                         const uint64_t token_pos,
                         const uint64_t seq_len,
                         const uint64_t n_heads,
-                        DType* temp_buffer )
+                        DType* temp_buffer,
+                        const uint64_t batch_size )
 {
-  DType* head_values = temp_buffer;
-
+  // TODO: fix thread and block assignments, threads might overflow
   // (1) find the max value for each head (each row)
-  find_max_for_rows<<<1, n_heads>>>( att, head_values, token_pos, n_heads, seq_len );
+  find_max_for_rows<<<1, n_heads * batch_size>>>( att, temp_buffer, token_pos, seq_len );
 
   // (2) exp(att - max)
-  subtract_and_expf<<<token_pos + 1, n_heads>>>( head_values, att, n_heads, seq_len );
+  subtract_and_expf<<<token_pos + 1, n_heads * batch_size>>>( temp_buffer, att, seq_len );
 
   // (3) sum each row
-  sum_rows<<<1, n_heads>>>( att, head_values, token_pos, n_heads, seq_len );
+  sum_rows<<<1, n_heads * batch_size>>>( att, temp_buffer, token_pos, seq_len );
 
   // (4) normalize each row by its sum
-  normalize_by_sum<<<token_pos + 1, n_heads>>>( att, head_values, n_heads, seq_len );
+  normalize_by_sum<<<token_pos + 1, n_heads * batch_size>>>( att, temp_buffer, seq_len );
 }
 
 template<typename DType>
-void Llama2<DType>::pass_begin( const uint32_t token )
+void Llama2<DType>::pass_begin( const std::vector<uint32_t>& token )
 {
   // copy the token embedding into the state
-  const DType* content_row = this->base_weights_.token_embedding_table + token * this->config_.dim;
-  CHECK_CUDA(
-    cudaMemcpy( this->state_.x, content_row, this->config_.dim * sizeof( DType ), cudaMemcpyDeviceToDevice ) );
+  for (size_t i = 0; i < token.size(); i++){
+    const DType* content_row = this->base_weights_.token_embedding_table + token[i] * this->config_.dim;
+    CHECK_CUDA(
+      cudaMemcpy( this->state_.x + i * this->config_.dim, content_row, this->config_.dim * sizeof( DType ), cudaMemcpyDeviceToDevice ) );
+  }
+}
+
+template<typename DType>
+__global__ void check_eq_cuda_arrs( const DType* x1,
+                          const DType* x2,
+                          const int size )
+{
+  DType eps_ = DType(1e-5);
+  bool differ = false;
+  for ( uint64_t i = 0; i < size; i++ ) {
+    if ( x1[i] < x2[i] && x2[i]-x1[i] > eps_){
+      differ = true;
+      printf("%f, %f, %" PRIu64 "\n", __half2float(x1[i]), __half2float(x2[i]), i);
+    }
+    if ( x1[i] > x2[i] && x1[i]-x2[i] > eps_){
+      differ = true;
+      printf("%f, %f, %" PRIu64 "\n", __half2float(x1[i]), __half2float(x2[i]), i);
+    }
+  }
+  if (differ)
+    printf("The two arrays differ\n");
 }
 
 template<typename DType>
@@ -260,6 +281,10 @@ void Llama2<DType>::transformer_layer( const int32_t layer_num, const uint64_t t
   const uint64_t hidden_dim = this->config_.hidden_dim;
   const uint64_t head_size = dim / this->config_.n_heads;
 
+//  printf("Input\n");
+//  check_eq_cuda_arrs<<<1, 1>>>(x, x + dim, dim);
+//  cudaDeviceSynchronize();
+
   // pluck out the "pos" row of freq_cis_real and freq_cis_imag
   const DType* freq_cis_real_row = this->base_weights_.freq_cis_real + token_pos * head_size / 2;
   const DType* freq_cis_imag_row = this->base_weights_.freq_cis_imag + token_pos * head_size / 2;
@@ -267,168 +292,240 @@ void Llama2<DType>::transformer_layer( const int32_t layer_num, const uint64_t t
   const auto& layer_weights = this->layer_weights_[layer_num];
 
   // attention rmsnorm
-  ops::rmsnorm( this->state_.xb, x, layer_weights.rms_att_weight, dim );
+  ops::rmsnorm( this->state_.xb, x, layer_weights.rms_att_weight, dim, this->curr_batch_size );
 
   // qkv matmuls for this position
-  ops::matmul( this->state_.q, this->state_.xb, layer_weights.wq, dim, dim );
-  ops::matmul( this->state_.k, this->state_.xb, layer_weights.wk, dim, dim );
-  ops::matmul( this->state_.v, this->state_.xb, layer_weights.wv, dim, dim );
+  ops::matmul( this->state_.q, this->state_.xb, layer_weights.wq, this->curr_batch_size, dim, dim );
+  ops::matmul( this->state_.k, this->state_.xb, layer_weights.wk, this->curr_batch_size, dim, dim );
+  ops::matmul( this->state_.v, this->state_.xb, layer_weights.wv, this->curr_batch_size, dim, dim );
 
-  do_rope<<<this->config_.n_heads, head_size / 2>>>(
-    head_size, this->config_.n_heads, freq_cis_real_row, freq_cis_imag_row, this->state_.q, this->state_.k );
+  do_rope<<<this->config_.n_heads * this->curr_batch_size, head_size / 2>>>(
+    head_size, freq_cis_real_row, freq_cis_imag_row, this->state_.q, this->state_.k );
 
   DType* k_cache_pos = this->kv_cache_.key( layer_num, token_pos );
   DType* v_cache_pos = this->kv_cache_.value( layer_num, token_pos );
 
   // save key,value at this time step (pos) to our kv cache
-  CHECK_CUDA( cudaMemcpy( k_cache_pos, this->state_.k, dim * sizeof( DType ), cudaMemcpyDeviceToDevice ) );
-  CHECK_CUDA( cudaMemcpy( v_cache_pos, this->state_.v, dim * sizeof( DType ), cudaMemcpyDeviceToDevice ) );
+  CHECK_CUDA( cudaMemcpy( k_cache_pos, this->state_.k, this->curr_batch_size * dim * sizeof( DType ), cudaMemcpyDeviceToDevice ) );
+  CHECK_CUDA( cudaMemcpy( v_cache_pos, this->state_.v, this->curr_batch_size * dim * sizeof( DType ), cudaMemcpyDeviceToDevice ) );
 
   // multihead attention. for each head and for each token up to and including the current one
   ops::attention_0_gemm( this->state_.q,
-                         this->kv_cache_.buffer_ + layer_num * ( dim * 2 ),
+                         this->kv_cache_.buffer_ + layer_num * this->config_.batch_size * ( dim * 2 ),
                          this->state_.att,
                          this->config_.n_layers,
                          this->config_.seq_len,
                          head_size,
                          this->config_.n_heads,
-                         token_pos + 1 );
-
+                         token_pos + 1,
+                         this->curr_batch_size,
+                         this->config_.batch_size);
+  
   // softmax
   attention_softmax(
-    this->state_.att, token_pos, this->config_.seq_len, this->config_.n_heads, this->state_.temp_softmax );
+    this->state_.att, token_pos, this->config_.seq_len, this->config_.n_heads, this->state_.temp_softmax, this->curr_batch_size );
 
   ops::attention_2_gemm( this->state_.att,
-                         this->kv_cache_.buffer_ + layer_num * ( dim * 2 ) + dim,
+                         this->kv_cache_.buffer_ + layer_num * this->config_.batch_size * ( dim * 2 ) + this->config_.batch_size * dim,
                          this->state_.xb,
                          this->config_.n_layers,
                          this->config_.seq_len,
                          head_size,
                          this->config_.n_heads,
-                         token_pos + 1 );
+                         token_pos + 1,
+                         this->curr_batch_size,
+                         this->config_.batch_size );
   // end of multihead attention
 
   // final matmul to get the output of the attention
-  ops::matmul( this->state_.xb2, this->state_.xb, layer_weights.wo, dim, dim );
+  ops::matmul( this->state_.xb2, this->state_.xb, layer_weights.wo, this->curr_batch_size, dim, dim );
 
   // residual connection back into x
-  ops::accum( x, this->state_.xb2, dim );
+  ops::accum( x, this->state_.xb2, dim, this->curr_batch_size );
 
   // ffn rmsnorm
-  ops::rmsnorm( this->state_.xb, x, layer_weights.rms_ffn_weight, dim );
+  ops::rmsnorm( this->state_.xb, x, layer_weights.rms_ffn_weight, dim, this->curr_batch_size );
 
   // now for ffn in we have: self.w2(F.silu(self.w1(x)) * self.w3(x))
   // first calculate self.w1(x) and self.w3(x)
-  ops::matmul( this->state_.hb, this->state_.xb, layer_weights.w1, dim, hidden_dim );
-  ops::matmul( this->state_.hb2, this->state_.xb, layer_weights.w3, dim, hidden_dim );
+  ops::matmul( this->state_.hb, this->state_.xb, layer_weights.w1, this->curr_batch_size, dim, hidden_dim );
+  ops::matmul( this->state_.hb2, this->state_.xb, layer_weights.w3, this->curr_batch_size, dim, hidden_dim );
 
-  ops::silu( this->state_.hb, this->state_.hb2, hidden_dim );
+  ops::silu( this->state_.hb, this->state_.hb2, hidden_dim, this->curr_batch_size );
 
   // final matmul to get the output of the ffn
-  ops::matmul( this->state_.xb, this->state_.hb, layer_weights.w2, hidden_dim, dim );
+  ops::matmul( this->state_.xb, this->state_.hb, layer_weights.w2, this->curr_batch_size, hidden_dim, dim );
 
   // residual connection
-  ops::accum( x, this->state_.xb, dim );
+  ops::accum( x, this->state_.xb, dim, this->curr_batch_size );
 }
 
 template<typename DType>
 void Llama2<DType>::pass_end()
 {
   // final rmsnorm
-  ops::rmsnorm( this->state_.x, this->state_.x, this->base_weights_.rms_final_weight, this->config_.dim );
+  ops::rmsnorm( this->state_.x, this->state_.x, this->base_weights_.rms_final_weight, this->config_.dim, this->curr_batch_size );
 
   // classifier into logits
   ops::matmul(
-    this->state_.logits, this->state_.x, this->base_weights_.wcls, this->config_.dim, this->config_.vocab_size );
+    this->state_.logits, this->state_.x, this->base_weights_.wcls, this->curr_batch_size, this->config_.dim, this->config_.vocab_size );
 }
 
 template<typename DType>
-uint32_t extract_token( const RunState<DType>& state, const Config& config, const float temp )
+uint32_t extract_token( const RunState<DType>& state, const Config& config, const float temp, const uint64_t batch_index = 0 )
 {
   uint32_t next_token;
 
   if ( temp == 0.0f ) {
     // greedy argmax sampling
-    next_token = ops::argmax( state.logits, config.vocab_size );
+    next_token = ops::argmax( state.logits + batch_index * config.vocab_size, config.vocab_size);
   } else {
     // apply the temperature to the logits
-    for ( auto q = 0; q < config.vocab_size; q++ ) {
+    for ( auto q = batch_index * config.vocab_size; q < ( batch_index + 1 ) * config.vocab_size; q++ ) {
       state.logits[q] /= temp;
     }
 
     // apply softmax to the logits to get the probabilities for next token
-    ops::softmax( state.logits, config.vocab_size );
+    ops::softmax( state.logits + batch_index * config.vocab_size, config.vocab_size );
 
     // we now want to sample from this distribution to get the next token
-    next_token = ops::sample( state.logits, config.vocab_size );
+    next_token = ops::sample( state.logits + batch_index * config.vocab_size, config.vocab_size );
   }
 
   return next_token;
 }
 
 template<typename DType>
-InferenceState<DType> Llama2<DType>::forward( const InferenceState<DType>& inference_state )
+std::vector<uint32_t> extract_batch_token( const RunState<DType>& state, const Config& config, const std::vector<float>& temp )
 {
-  CHECK_EQ( inference_state.next_layer(), this->start_layer_num_ ) << "next_layer must be the start layer";
-  token_pos_ = inference_state.token_pos();
-
-  if ( inference_state.next_layer() == 0 ) {
-    pass_begin( inference_state.token() );
-  } else {
-    // load the activations
-    CHECK_CUDA( cudaMemcpy( this->state_.x,
-                            inference_state.activations().ptr.get(),
-                            this->config_.dim * sizeof( DType ),
-                            cudaMemcpyHostToDevice ) );
-  }
-
-  for ( int layer_num = this->start_layer_num_; layer_num <= this->end_layer_num_; layer_num++ ) {
-    transformer_layer( layer_num, inference_state.token_pos() );
-  }
-
-  if ( this->end_layer_num_ == this->config_.n_layers - 1 ) {
-    pass_end();
-
-    return {
-      extract_token( this->state_, this->config_, inference_state.temperature() ), // token
-      inference_state.token_pos() + 1,                                             // token_pos
-      0,                                                                           // next_layer
-      inference_state.temperature(),                                               // temperature
-      DataBuffer<DType> {}                                                         // activations
-    };
-  }
-
-  DataBuffer<DType> activations { make_unique<DType[]>( this->config_.dim ), this->config_.dim };
-
-  CHECK_CUDA(
-    cudaMemcpy( activations.ptr.get(), this->state_.x, this->config_.dim * sizeof( DType ), cudaMemcpyDeviceToHost ) );
-
-  return {
-    inference_state.token(),                           // token
-    inference_state.token_pos(),                       // token_pos
-    static_cast<uint32_t>( this->end_layer_num_ ) + 1, // next_layer
-    inference_state.temperature(),                     // temperature
-    move( activations )                                // activations
-  };
+  // TODO: optimize batching
+  // Doing the dumbest batching possible and optimizing later
+  std::vector<uint32_t> next_tokens;
+  for (size_t i = 0; i < temp.size(); i++)
+    next_tokens.push_back(extract_token(state, config, temp[i], i));
+  return next_tokens;
 }
 
 template<typename DType>
-uint32_t Llama2<DType>::forward( const uint32_t token )
+std::vector<InferenceState<DType>> Llama2<DType>::forward( const std::vector<std::reference_wrapper<const InferenceState<DType>>>& inference_state_s )
 {
-  if ( token_pos_ >= this->config_.seq_len ) {
-    return 2; /* EOS */
+  CHECK_GT( inference_state_s.size(), 0 ) << "batch size must be at least 1";
+  token_pos_ = inference_state_s[0].get().token_pos();
+  for (auto & item : inference_state_s) {
+    CHECK_EQ( item.get().token_pos(), token_pos_ ) << "current implementation expects all inference states to be at the same token position";
+    CHECK_EQ( item.get().next_layer(), this->start_layer_num_ ) << "next_layer must be the start layer";
   }
 
-  pass_begin( token );
+  this->curr_batch_size = inference_state_s.size();
+
+  if ( inference_state_s[0].get().next_layer() == 0 ) {
+    std::vector<uint32_t> token_vector;
+    for (size_t i = 0; i < inference_state_s.size(); i++)
+      token_vector.push_back(inference_state_s[i].get().token());
+    pass_begin( token_vector );
+  } else {
+    for (size_t i = 0; i < inference_state_s.size(); i++)
+      // load the activations
+      CHECK_CUDA( cudaMemcpy( this->state_.x + i * this->config_.dim * sizeof( DType ),
+                              inference_state_s[i].get().activations().ptr.get(),
+                              this->config_.dim * sizeof( DType ),
+                              cudaMemcpyHostToDevice ) );
+  }
 
   for ( int layer_num = this->start_layer_num_; layer_num <= this->end_layer_num_; layer_num++ ) {
     transformer_layer( layer_num, token_pos_ );
   }
 
+  std::vector<InferenceState<DType>> token_vector;
+
+  if ( this->end_layer_num_ == this->config_.n_layers - 1 ) {
+    pass_end();
+
+    std::vector<float> batch_temps;
+    for (size_t i = 0; i < inference_state_s.size(); i++)
+      batch_temps.push_back(inference_state_s[i].get().temperature());
+    std::vector<uint32_t> next_tokens = extract_batch_token(this->state_, this->config_, batch_temps);
+    for (size_t i = 0; i < inference_state_s.size(); i++)
+      token_vector.emplace_back(
+        next_tokens[i],                                                                 // token
+        token_pos_ + 1,                                                                 // token_pos
+        0,                                                                              // next_layer
+        inference_state_s[i].get().temperature(),                                       // temperature
+        DataBuffer<DType> {}                                                            // activations
+      );
+
+    return token_vector;
+  }
+
+  for (size_t i = 0; i < inference_state_s.size(); i++){
+    DataBuffer<DType> activations { make_unique<DType[]>( this->config_.dim ), this->config_.dim };
+
+    CHECK_CUDA(
+      cudaMemcpy( activations.ptr.get(), this->state_.x + i * this->config_.dim * sizeof( DType ), this->config_.dim * sizeof( DType ), cudaMemcpyDeviceToHost ) );
+
+    token_vector.emplace_back(
+        inference_state_s[i].get().token(),                                             // token
+        token_pos_,                                                                     // token_pos
+        static_cast<uint32_t>( this->end_layer_num_ ) + 1,                              // next_layer
+        inference_state_s[i].get().temperature(),                                       // temperature
+        move( activations )                                                             // activations
+      );
+  }
+  
+
+  return token_vector;
+}
+
+template<typename DType>
+std::vector<uint32_t> Llama2<DType>::forward( const std::vector<uint32_t>& token_s )
+{
+  CHECK_GT( token_s.size(), 0 ) << "batch size must be at least 1";
+  if ( token_pos_ >= this->config_.seq_len ) {
+    return std::vector<uint32_t>(token_s.size(), 2); /* EOS */
+  }
+
+  this->curr_batch_size = token_s.size();
+
+  pass_begin( token_s );
+
+   for ( int layer_num = this->start_layer_num_; layer_num <= this->end_layer_num_; layer_num++ ) {
+     transformer_layer( layer_num, token_pos_ );
+   }
+
+   /////////////////////////////////////////////////////////// profile batching //////////////////////////////////////////////////////////////
+//  for ( int layer_num = 0; layer_num <= 31; layer_num++ ) {
+//    transformer_layer( 0, token_pos_ );
+//  }
+   /////////////////////////////////////////////////////////// profile batching //////////////////////////////////////////////////////////////
+
+
   pass_end();
 
   token_pos_++;
-  return extract_token( this->state_, this->config_, temperature_ );
+  return extract_batch_token( this->state_, this->config_, std::vector<float>(token_s.size(), temperature_) );
+}
+
+template<typename DType>
+std::vector<InferenceState<DType>> Llama2<DType>::forward( const std::vector<InferenceState<DType>>& inference_state_s ) {
+  std::vector<std::reference_wrapper<const InferenceState<DType>>> res;
+  for (auto & state : inference_state_s)
+    res.push_back(std::ref(state));
+  return forward(res);
+}
+
+template<typename DType>
+InferenceState<DType> Llama2<DType>::forward( const InferenceState<DType>& inference_state )
+{
+  std::vector<std::reference_wrapper<const InferenceState<DType>>> token_vector;
+  token_vector.push_back( std::ref( inference_state ) );
+  return move( forward(token_vector)[0] );
+}
+
+template<typename DType>
+uint32_t Llama2<DType>::forward( const uint32_t& token )
+{
+  std::vector<uint32_t> token_vector = {token};
+  return forward(token_vector)[0];
 }
 
 template class Llama2<float>;

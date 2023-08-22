@@ -25,10 +25,15 @@ int main( int argc, char* argv[] )
     abort();
   }
 
-  if ( argc != 3 ) {
+  if ( argc != 4 ) {
     usage( argv[0] );
     return EXIT_FAILURE;
   }
+
+  // TODO:
+  // 1. Figure out batch with non-contiguous prompts
+  // 2. Profile batches with 1 layer copied 32 times
+  // 3. Change 70B model to glint format
 
   signal( SIGINT, signal_handler );
 
@@ -42,21 +47,30 @@ int main( int argc, char* argv[] )
     const filesystem::path model_dir_path { argv[1] };
     const filesystem::path tokenizer_path { argv[2] };
 
-    auto llama = models::llama2::cuda::Llama2<__half>::load( model_dir_path );
+    const int batch_size = atoi(argv[3]);
+
+    auto llama = models::llama2::cuda::Llama2<__half>::load( model_dir_path, 0, -1, batch_size );
+   /////////////////////////////////////////////////////////// profile batching //////////////////////////////////////////////////////////////
+    // auto llama = models::llama2::cuda::Llama2<__half>::load( model_dir_path, 0, 0, batch_size );
+   /////////////////////////////////////////////////////////// profile batching //////////////////////////////////////////////////////////////
     models::llama2::Vocabulary vocabulary { tokenizer_path };
 
     vector<uint32_t> prompt_tokens { 1,   518,  25580, 29962, 25538, 2211,  25562, 363,  7952,
                                      292, 9045, 29891, 29889, 518,   29914, 25580, 29962 };
 
+    vector<vector<uint32_t>> prompt_tokens_batch;
+    for (size_t i = 0; i < prompt_tokens.size(); i++)
+      prompt_tokens_batch.push_back(vector<uint32_t>(batch_size, prompt_tokens[i]));
+
     size_t i = 0;
 
-    for ( uint32_t token = prompt_tokens[0] /* BOS */; token != 2 /* EOS */; ) {
-      if ( i < prompt_tokens.size() ) {
-        token = prompt_tokens[i];
+    for ( vector<uint32_t> token = prompt_tokens_batch[0] /* BOS */; token[0] != 2 /* EOS */; ) {
+      if ( i < prompt_tokens_batch.size() ) {
+        token = prompt_tokens_batch[i];
         i++;
       }
 
-      cout << vocabulary.get_word( token ) << flush;
+      cout << vocabulary.get_word( token[0] ) << flush;
       GlobalScopeTimer<Timer::Category::TokenGeneration> _;
       token = llama.forward( token );
     }
