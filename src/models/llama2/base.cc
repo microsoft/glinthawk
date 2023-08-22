@@ -26,7 +26,7 @@ DType* _advance_pointer( DType*& ptr, const size_t size )
 
 }
 
-Config::Config( const filesystem::path& config_file )
+Config::Config( const filesystem::path& config_file, uint64_t batch_size_ ): batch_size(batch_size_)
 {
   ifstream fin { config_file, ios::binary };
   CHECK( fin ) << "Failed to open config file: " << config_file;
@@ -64,6 +64,8 @@ Config::Config( const filesystem::path& config_file )
   CHECK_GT( n_kv_heads, 0 ) << "Number of key/value heads must be positive.";
   CHECK_GT( vocab_size, 0 ) << "Vocabulary size must be positive.";
   CHECK_GT( seq_len, 0 ) << "Sequence length must be positive.";
+  CHECK_GT( batch_size, 0 ) << "Batch size must be positive.";
+  CHECK_GT( 1025, batch_size * n_heads ) << "Attention softmax has batch_size x n_heads threads, and this cannot surpass 1024.";
 
   LOG( INFO ) << "Loaded config: " << to_string();
 }
@@ -79,6 +81,7 @@ string Config::to_string() const
   oss << "n_kv_heads: " << n_kv_heads << ", ";
   oss << "vocab_size: " << vocab_size << ", ";
   oss << "seq_len: " << seq_len << ", ";
+  oss << "batch_size: " << batch_size << ", ";
   oss << "wcls_present: " << wcls_present;
   oss << " }";
   return oss.str();
@@ -178,24 +181,24 @@ template<typename DType>
 RunState<DType>::RunState( const Config& config, DType* buffer )
   : buffer_( buffer )
   , x( buffer_ )
-  , xb( buffer_ + config.dim )
-  , xb2( xb + config.dim )
-  , q( xb2 + config.dim )
-  , k( q + config.dim )
-  , v( k + config.dim )
-  , hb( v + config.dim )
-  , hb2( hb + config.hidden_dim )
-  , att( hb2 + config.hidden_dim )
-  , logits( att + config.n_heads * config.seq_len )
-  , temp_softmax( logits + config.vocab_size )
+  , xb( buffer_ + config.dim * config.batch_size )
+  , xb2( xb + config.dim * config.batch_size )
+  , q( xb2 + config.dim * config.batch_size )
+  , k( q + config.dim * config.batch_size )
+  , v( k + config.dim * config.batch_size )
+  , hb( v + config.dim * config.batch_size )
+  , hb2( hb + config.hidden_dim * config.batch_size )
+  , att( hb2 + config.hidden_dim * config.batch_size )
+  , logits( att + config.n_heads * config.seq_len * config.batch_size )
+  , temp_softmax( logits + config.vocab_size * config.batch_size )
 {
 }
 
 template<typename DType>
 size_t RunState<DType>::state_size( const Config& config )
 {
-  return sizeof( DType )
-         * ( config.dim * 5 + config.hidden_dim * 2 + config.n_heads * config.seq_len + config.vocab_size
+  return sizeof( DType ) * config.batch_size
+         * ( config.dim * 6 + config.hidden_dim * 2 + config.n_heads * config.seq_len + config.vocab_size
              + config.n_heads );
 }
 
@@ -208,29 +211,40 @@ KVCache<DType>::KVCache( const Config& config, DType* buffer, const int32_t star
   , buffer_( buffer )
   , seq_len_( config.seq_len )
   , dim_( config.dim )
-  , n_layers_( end_layer_ - start_layer_ + 1 )
+   , n_layers_( end_layer_ - start_layer_ + 1 )
+   /////////////////////////////////////////////////////////// profile batching /////////////////////////////////////////////////////////////
+//  , n_layers_( 32 )
+   /////////////////////////////////////////////////////////// profile batching //////////////////////////////////////////////////////////////
   , head_size_( config.dim / config.n_heads )
+  , batch_size_ (config.batch_size)
 {
 }
 
 template<typename DType>
 size_t KVCache<DType>::cache_size( const Config& config, const int32_t start_layer, const int32_t end_layer )
 {
-  return sizeof( DType ) * config.seq_len * config.dim * 2 * ( end_layer - start_layer + 1 );
+   return sizeof( DType ) * config.seq_len * config.dim * 2 * ( end_layer - start_layer + 1 ) * config.batch_size;
+   /////////////////////////////////////////////////////////// profile batching //////////////////////////////////////////////////////////////
+//  if (end_layer == 0 && start_layer == 0) {
+//    return sizeof( DType ) * config.seq_len * config.dim * 2 * ( 32 ) * config.batch_size;
+//  } else {
+//    return 1;
+//  }
+   /////////////////////////////////////////////////////////// profile batching //////////////////////////////////////////////////////////////
 }
 
 template<typename DType>
-DType* KVCache<DType>::key( int layer, const int step, const int head )
+DType* KVCache<DType>::key( int layer, const int step, const int batch, const int head )
 {
   layer -= start_layer_;
-  return buffer_ + step * ( n_layers_ * dim_ * 2 ) + layer * ( dim_ * 2 ) + head * head_size_;
+  return buffer_ + step * ( n_layers_ * dim_ * batch_size_ * 2 ) + layer * ( dim_ * batch_size_ * 2 ) + batch * dim_ + head * head_size_;
 }
 
 template<typename DType>
-DType* KVCache<DType>::value( int layer, const int step, const int head )
+DType* KVCache<DType>::value( int layer, const int step, const int batch, const int head )
 {
   layer -= start_layer_;
-  return buffer_ + step * ( n_layers_ * dim_ * 2 ) + layer * ( dim_ * 2 ) + head * head_size_ + dim_;
+  return buffer_ + step * ( n_layers_ * dim_ * batch_size_ * 2 ) + layer * ( dim_ * batch_size_ * 2 ) + batch * dim_  + head * head_size_ + dim_ * batch_size_;
 }
 
 /* BaseLlama2 */
