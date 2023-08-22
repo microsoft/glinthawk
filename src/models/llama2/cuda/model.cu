@@ -67,6 +67,16 @@ Llama2<DType> Llama2<DType>::load( const filesystem::path& model_path,
 
   llama2::Config config { config_path, batch_size };
 
+  CHECK_GT( 1025, config.batch_size * config.n_heads ) << "Attention softmax has batch_size x n_heads threads, and this cannot surpass 1024.";
+  CHECK_GT( 1 << 16, config.batch_size * config.n_heads ) << "RoPE has batch_size x n_heads blocks, and this cannot surpass 2^16.";
+  CHECK_GT( 1025, config.dim / config.n_heads / 2 ) << "RoPE has head_size / 2 threads, and this cannot surpass 1024.";
+  CHECK_GT( 1 << 16, config.seq_len ) << "Attention softmax has seq_len blocks, and this cannot surpass 2^16.";
+  const size_t tpb = ops::TPB;
+  CHECK_GT( 1025, tpb ) << "Threads per block cannot surpass 1024.";
+  CHECK_GT( 1 << 16, ( config.dim + tpb - 1) / tpb ) << "RMS Norm blocks cannot surpass 2^16.";
+  CHECK_GT( 1 << 16, ( config.dim * config.batch_size + tpb - 1) / tpb ) << "Accum blocks cannot surpass 2^16.";
+  CHECK_GT( 1 << 16, ( config.hidden_dim * config.batch_size + tpb - 1) / tpb ) << "Silu blocks cannot surpass 2^16.";
+
   const int32_t end_layer = ( end_layer_raw == -1 ) ? ( config.n_layers - 1 ) : end_layer_raw;
   const int32_t layer_count = end_layer - start_layer + 1;
 
@@ -134,114 +144,6 @@ Llama2<DType> Llama2<DType>::load( const filesystem::path& model_path,
 }
 
 template<typename DType>
-__global__ void do_rope( const uint64_t head_size,
-                         const DType* freq_cis_real_row,
-                         const DType* freq_cis_imag_row,
-                         DType* state_q,
-                         DType* state_k )
-{
-  const uint64_t head_num = blockIdx.x;
-  const uint64_t elem_idx = 2 * threadIdx.x;
-
-  // apply RoPE rotation to the q and k vectors for each head
-  // get the q and k vectors for this head
-  DType* q = state_q + head_num * head_size;
-  DType* k = state_k + head_num * head_size;
-
-  // rotate q and k by the freq_cis_real and freq_cis_imag
-  const DType q0 = q[elem_idx];
-  const DType q1 = q[elem_idx + 1];
-  const DType k0 = k[elem_idx];
-  const DType k1 = k[elem_idx + 1];
-  const DType fcr = freq_cis_real_row[elem_idx / 2];
-  const DType fci = freq_cis_imag_row[elem_idx / 2];
-  q[elem_idx] = q0 * fcr - q1 * fci;
-  q[elem_idx + 1] = q0 * fci + q1 * fcr;
-  k[elem_idx] = k0 * fcr - k1 * fci;
-  k[elem_idx + 1] = k0 * fci + k1 * fcr;
-}
-
-template<typename DType>
-__global__ void find_max_for_rows( const DType* att,
-                                   DType* output,
-                                   const uint64_t token_pos,
-                                   const uint64_t seq_len )
-{
-  const uint64_t head_num = threadIdx.x;
-  att += head_num * seq_len;
-
-  DType max_value = att[0];
-  for ( uint64_t i = 1; i <= token_pos; i++ ) {
-    if constexpr ( is_same_v<DType, __half> ) {
-      max_value = __hmax( max_value, att[i] );
-    } else {
-      max_value = max( max_value, att[i] );
-    }
-  }
-
-  output[head_num] = max_value;
-}
-
-template<typename DType>
-__global__ void subtract_and_expf( const DType* values, DType* att, const uint64_t seq_len )
-{
-  const uint64_t head_num = threadIdx.x;
-  const uint64_t token_pos = blockIdx.x;
-
-  att += head_num * seq_len;
-  att[token_pos] = expf( att[token_pos] - values[head_num] );
-}
-
-template<typename DType>
-__global__ void sum_rows( DType* att,
-                          DType* output,
-                          const uint64_t token_pos,
-                          const uint64_t seq_len )
-{
-  const uint64_t head_num = threadIdx.x;
-  att += head_num * seq_len;
-
-  DType sum = 0.0;
-  for ( uint64_t i = 0; i <= token_pos; i++ ) {
-    sum += att[i];
-  }
-
-  output[head_num] = sum;
-}
-
-template<typename DType>
-__global__ void normalize_by_sum( DType* att, const DType* sums, const uint64_t seq_len )
-{
-  const uint64_t head_num = threadIdx.x;
-  const uint64_t token_pos = blockIdx.x;
-
-  att += head_num * seq_len;
-  att[token_pos] /= sums[head_num];
-}
-
-template<typename DType>
-void attention_softmax( DType* att,
-                        const uint64_t token_pos,
-                        const uint64_t seq_len,
-                        const uint64_t n_heads,
-                        DType* temp_buffer,
-                        const uint64_t batch_size )
-{
-  // TODO: fix thread and block assignments, threads might overflow
-  // (1) find the max value for each head (each row)
-  find_max_for_rows<<<1, n_heads * batch_size>>>( att, temp_buffer, token_pos, seq_len );
-
-  // (2) exp(att - max)
-  subtract_and_expf<<<token_pos + 1, n_heads * batch_size>>>( temp_buffer, att, seq_len );
-
-  // (3) sum each row
-  sum_rows<<<1, n_heads * batch_size>>>( att, temp_buffer, token_pos, seq_len );
-
-  // (4) normalize each row by its sum
-  normalize_by_sum<<<token_pos + 1, n_heads * batch_size>>>( att, temp_buffer, seq_len );
-}
-
-template<typename DType>
 void Llama2<DType>::pass_begin( const std::vector<uint32_t>& token )
 {
   // copy the token embedding into the state
@@ -299,8 +201,13 @@ void Llama2<DType>::transformer_layer( const int32_t layer_num, const uint64_t t
   ops::matmul( this->state_.k, this->state_.xb, layer_weights.wk, this->curr_batch_size, dim, dim );
   ops::matmul( this->state_.v, this->state_.xb, layer_weights.wv, this->curr_batch_size, dim, dim );
 
-  do_rope<<<this->config_.n_heads * this->curr_batch_size, head_size / 2>>>(
-    head_size, freq_cis_real_row, freq_cis_imag_row, this->state_.q, this->state_.k );
+  ops::apply_rope( head_size,
+                   this->config_.n_heads,
+                   this->curr_batch_size,
+                   freq_cis_real_row,
+                   freq_cis_imag_row,
+                   this->state_.q,
+                   this->state_.k );
 
   DType* k_cache_pos = this->kv_cache_.key( layer_num, token_pos );
   DType* v_cache_pos = this->kv_cache_.value( layer_num, token_pos );
@@ -322,7 +229,7 @@ void Llama2<DType>::transformer_layer( const int32_t layer_num, const uint64_t t
                          this->config_.batch_size);
   
   // softmax
-  attention_softmax(
+  ops::attention_softmax(
     this->state_.att, token_pos, this->config_.seq_len, this->config_.n_heads, this->state_.temp_softmax, this->curr_batch_size );
 
   ops::attention_2_gemm( this->state_.att,

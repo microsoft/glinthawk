@@ -20,7 +20,6 @@ namespace glinthawk::models::common::cuda::ops {
 namespace {
 
 cublasHandle_t cublas_handle;
-constexpr size_t TPB = 64; /* threads per block */
 
 template<std::unsigned_integral T>
 T div_ceil( const T x, const T y )
@@ -398,6 +397,132 @@ void silu( DType* _hb, DType* _hb2, const uint64_t hidden_dim, const uint64_t ba
   silu_direct<<<div_ceil( hidden_dim * batch_size, TPB ), TPB>>>( _hb, _hb2, hidden_dim * batch_size );
 }
 
+
+
+template<typename DType>
+__global__ void do_rope( const uint64_t head_size,
+                         const DType* freq_cis_real_row,
+                         const DType* freq_cis_imag_row,
+                         DType* state_q,
+                         DType* state_k )
+{
+  const uint64_t head_num = blockIdx.x;
+  const uint64_t elem_idx = 2 * threadIdx.x;
+
+  // apply RoPE rotation to the q and k vectors for each head
+  // get the q and k vectors for this head
+  DType* q = state_q + head_num * head_size;
+  DType* k = state_k + head_num * head_size;
+
+  // rotate q and k by the freq_cis_real and freq_cis_imag
+  const DType q0 = q[elem_idx];
+  const DType q1 = q[elem_idx + 1];
+  const DType k0 = k[elem_idx];
+  const DType k1 = k[elem_idx + 1];
+  const DType fcr = freq_cis_real_row[elem_idx / 2];
+  const DType fci = freq_cis_imag_row[elem_idx / 2];
+  q[elem_idx] = q0 * fcr - q1 * fci;
+  q[elem_idx + 1] = q0 * fci + q1 * fcr;
+  k[elem_idx] = k0 * fcr - k1 * fci;
+  k[elem_idx + 1] = k0 * fci + k1 * fcr;
+}
+
+template<typename DType>
+void apply_rope( const uint64_t head_size,
+                 const uint64_t n_heads,
+                 const uint64_t curr_batch_size,
+                 const DType* freq_cis_real_row,
+                 const DType* freq_cis_imag_row,
+                 DType* state_q,
+                 DType* state_k )
+{
+  do_rope<<<n_heads * curr_batch_size, head_size / 2>>>( head_size,
+                                                         freq_cis_real_row,
+                                                         freq_cis_imag_row,
+                                                         state_q,
+                                                         state_k );
+}
+
+template<typename DType>
+__global__ void find_max_for_rows( const DType* att,
+                                   DType* output,
+                                   const uint64_t token_pos,
+                                   const uint64_t seq_len )
+{
+  const uint64_t head_num = threadIdx.x;
+  att += head_num * seq_len;
+
+  DType max_value = att[0];
+  for ( uint64_t i = 1; i <= token_pos; i++ ) {
+    if constexpr ( is_same_v<DType, __half> ) {
+      max_value = __hmax( max_value, att[i] );
+    } else {
+      max_value = max( max_value, att[i] );
+    }
+  }
+
+  output[head_num] = max_value;
+}
+
+template<typename DType>
+__global__ void subtract_and_expf( const DType* values, DType* att, const uint64_t seq_len )
+{
+  const uint64_t head_num = threadIdx.x;
+  const uint64_t token_pos = blockIdx.x;
+
+  att += head_num * seq_len;
+  att[token_pos] = expf( att[token_pos] - values[head_num] );
+}
+
+template<typename DType>
+__global__ void sum_rows( DType* att,
+                          DType* output,
+                          const uint64_t token_pos,
+                          const uint64_t seq_len )
+{
+  const uint64_t head_num = threadIdx.x;
+  att += head_num * seq_len;
+
+  DType sum = 0.0;
+  for ( uint64_t i = 0; i <= token_pos; i++ ) {
+    sum += att[i];
+  }
+
+  output[head_num] = sum;
+}
+
+template<typename DType>
+__global__ void normalize_by_sum( DType* att, const DType* sums, const uint64_t seq_len )
+{
+  const uint64_t head_num = threadIdx.x;
+  const uint64_t token_pos = blockIdx.x;
+
+  att += head_num * seq_len;
+  att[token_pos] /= sums[head_num];
+}
+
+template<typename DType>
+void attention_softmax( DType* att,
+                        const uint64_t token_pos,
+                        const uint64_t seq_len,
+                        const uint64_t n_heads,
+                        DType* temp_buffer,
+                        const uint64_t batch_size )
+{
+  // TODO: fix thread and block assignments, threads might overflow
+  // (1) find the max value for each head (each row)
+  find_max_for_rows<<<1, n_heads * batch_size>>>( att, temp_buffer, token_pos, seq_len );
+
+  // (2) exp(att - max)
+  subtract_and_expf<<<token_pos + 1, n_heads * batch_size>>>( temp_buffer, att, seq_len );
+
+  // (3) sum each row
+  sum_rows<<<1, n_heads * batch_size>>>( att, temp_buffer, token_pos, seq_len );
+
+  // (4) normalize each row by its sum
+  normalize_by_sum<<<token_pos + 1, n_heads * batch_size>>>( att, temp_buffer, seq_len );
+}
+
 template void rmsnorm<float>( float* output, const float* x, const float* weight, const uint64_t size, const uint64_t batch_size );
 template void rmsnorm<__half>( __half* output, const __half* x, const __half* weight, const uint64_t size, const uint64_t batch_size );
 
@@ -471,5 +596,35 @@ template void attention_2_gemm<__half>( const __half* query,
                                         const uint64_t n_tokens, 
                                         const uint64_t batch_size,
                                         const uint64_t max_batch_size );
+
+template void attention_softmax<float>( float* att,
+                                        const uint64_t token_pos,
+                                        const uint64_t seq_len,
+                                        const uint64_t n_heads,
+                                        float* temp_buffer,
+                                        const uint64_t batch_size );
+
+template void attention_softmax<__half>( __half* att,
+                                         const uint64_t token_pos,
+                                         const uint64_t seq_len,
+                                         const uint64_t n_heads,
+                                         __half* temp_buffer,
+                                         const uint64_t batch_size );
+
+template void apply_rope<float>( const uint64_t head_size,
+                                 const uint64_t n_heads,
+                                 const uint64_t curr_batch_size,
+                                 const float* freq_cis_real_row,
+                                 const float* freq_cis_imag_row,
+                                 float* state_q,
+                                 float* state_k );
+
+template void apply_rope<__half>( const uint64_t head_size,
+                                  const uint64_t n_heads,
+                                  const uint64_t curr_batch_size,
+                                  const __half* freq_cis_real_row,
+                                  const __half* freq_cis_imag_row,
+                                  __half* state_q,
+                                  __half* state_k );
 
 } // namespace glinthawk::models::common::cuda
