@@ -19,11 +19,13 @@ protected:
   using BaseLlama2<DType>::BaseLlama2;
 
 public:
-  static Llama2 load( const std::filesystem::path& model_dir,
-                      const int32_t start_layer = 0,
-                      const int32_t end_layer = -1 );
+  static Llama2 load_model( const std::filesystem::path& model_dir,
+                            const int32_t start_layer = 0,
+                            const int32_t end_layer = -1 );
 
   ~Llama2();
+
+  Context create_context() const;
 
   InferenceState forward( const InferenceState& inference_state, Context& context ) override;
 

@@ -54,9 +54,9 @@ Llama2<DType>::~Llama2()
 }
 
 template<typename DType>
-Llama2<DType> Llama2<DType>::load( const filesystem::path& model_path,
-                                   const int32_t start_layer,
-                                   const int32_t end_layer )
+Llama2<DType> Llama2<DType>::load_model( const filesystem::path& model_path,
+                                         const int32_t start_layer,
+                                         const int32_t end_layer )
 {
   ops::init();
 
