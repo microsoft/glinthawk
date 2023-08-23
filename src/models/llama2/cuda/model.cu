@@ -56,7 +56,7 @@ Llama2<DType>::~Llama2()
 template<typename DType>
 Llama2<DType> Llama2<DType>::load( const filesystem::path& model_path,
                                    const int32_t start_layer,
-                                   const int32_t end_layer_raw )
+                                   const int32_t end_layer )
 {
   ops::init();
 
@@ -64,19 +64,14 @@ Llama2<DType> Llama2<DType>::load( const filesystem::path& model_path,
   const auto config_path = model_path / "CONFIG";
   const auto base_path = model_path / ( "BASEWEIGHTS" + filename_suffix );
 
-  llama2::Config config { config_path };
+  llama2::Config config { config_path, start_layer, end_layer };
 
-  const int32_t end_layer = ( end_layer_raw == -1 ) ? ( config.n_layers - 1 ) : end_layer_raw;
   const int32_t layer_count = end_layer - start_layer + 1;
-
-  CHECK_GE( start_layer, 0 ) << "Start layer must be non-negative.";
-  CHECK_LE( start_layer, end_layer ) << "Start layer must be less than or equal to end layer.";
-  CHECK_LT( end_layer, config.n_layers ) << "End layer must be less than the number of layers.";
 
   const auto run_state_size = RunState<DType>::state_size( config );
   const auto base_size = BaseWeights<DType>::base_size( config );
   const auto layer_size = LayerWeights<DType>::layer_size( config );
-  const auto kv_cache_size = KVCache<DType>::cache_size( config, start_layer, end_layer );
+  const auto kv_cache_size = KVCache<DType>::cache_size( config );
 
   DType* base_raw_ptr;
   DType* layers_raw_ptr;
@@ -129,7 +124,7 @@ Llama2<DType> Llama2<DType>::load( const filesystem::path& model_path,
     LOG( INFO ) << "Loaded layer " << i << " (" << layer_size << " bytes).";
   }
 
-  return { config, move( base ), move( layers ), move( run_state ), move( kv_cache ), start_layer, end_layer };
+  return { config, move( base ), move( layers ), move( run_state ), move( kv_cache ) };
 }
 
 template<typename DType>
@@ -369,7 +364,7 @@ uint32_t extract_token( const RunState<DType>& state, const Config& config, cons
 template<typename DType>
 InferenceState Llama2<DType>::forward( const InferenceState& inference_state )
 {
-  CHECK_EQ( inference_state.next_layer(), this->start_layer_num_ ) << "next_layer must be the start layer";
+  CHECK_EQ( inference_state.next_layer(), this->config_.start_layer_num ) << "next_layer must be the start layer";
   token_pos_ = inference_state.token_pos();
 
   if ( inference_state.next_layer() == 0 ) {
@@ -382,11 +377,11 @@ InferenceState Llama2<DType>::forward( const InferenceState& inference_state )
                             cudaMemcpyHostToDevice ) );
   }
 
-  for ( int layer_num = this->start_layer_num_; layer_num <= this->end_layer_num_; layer_num++ ) {
+  for ( int layer_num = this->config_.start_layer_num; layer_num <= this->config_.end_layer_num; layer_num++ ) {
     transformer_layer( layer_num, inference_state.token_pos() );
   }
 
-  if ( this->end_layer_num_ == this->config_.n_layers - 1 ) {
+  if ( this->config_.end_layer_num == this->config_.n_layers - 1 ) {
     pass_end();
 
     return {
@@ -408,13 +403,13 @@ InferenceState Llama2<DType>::forward( const InferenceState& inference_state )
     cudaMemcpy( activations.ptr.get(), this->state_.x, this->config_.dim * sizeof( DType ), cudaMemcpyDeviceToHost ) );
 
   return {
-    inference_state.prompt_id(),                       // prompt id
-    inference_state.model_id(),                        // model id
-    inference_state.token(),                           // token
-    inference_state.token_pos(),                       // token_pos
-    static_cast<uint32_t>( this->end_layer_num_ ) + 1, // next_layer
-    inference_state.temperature(),                     // temperature
-    move( activations )                                // activations
+    inference_state.prompt_id(),                              // prompt id
+    inference_state.model_id(),                               // model id
+    inference_state.token(),                                  // token
+    inference_state.token_pos(),                              // token_pos
+    static_cast<uint32_t>( this->config_.end_layer_num ) + 1, // next_layer
+    inference_state.temperature(),                            // temperature
+    move( activations )                                       // activations
   };
 }
 
@@ -427,7 +422,7 @@ uint32_t Llama2<DType>::forward( const uint32_t token )
 
   pass_begin( token );
 
-  for ( int layer_num = this->start_layer_num_; layer_num <= this->end_layer_num_; layer_num++ ) {
+  for ( int layer_num = this->config_.start_layer_num; layer_num <= this->config_.end_layer_num; layer_num++ ) {
     transformer_layer( layer_num, token_pos_ );
   }
 

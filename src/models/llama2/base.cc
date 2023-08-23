@@ -26,7 +26,7 @@ DType* _advance_pointer( DType*& ptr, const size_t size )
 
 }
 
-Config::Config( const filesystem::path& config_file )
+Config::Config( const filesystem::path& config_file, const int32_t start_layer, const int32_t end_layer )
 {
   ifstream fin { config_file, ios::binary };
   CHECK( fin ) << "Failed to open config file: " << config_file;
@@ -65,6 +65,13 @@ Config::Config( const filesystem::path& config_file )
   CHECK_GT( vocab_size, 0 ) << "Vocabulary size must be positive.";
   CHECK_GT( seq_len, 0 ) << "Sequence length must be positive.";
 
+  CHECK_GE( start_layer, 0 ) << "Start layer must be non-negative.";
+  CHECK_LT( end_layer, n_layers ) << "End layer must be less than the number of layers.";
+  CHECK_LE( start_layer, end_layer ) << "Start layer must be less than or equal to end layer.";
+
+  start_layer_num = start_layer;
+  end_layer_num = end_layer;
+
   LOG( INFO ) << "Loaded config: " << to_string();
 }
 
@@ -79,7 +86,9 @@ string Config::to_string() const
   oss << "n_kv_heads: " << n_kv_heads << ", ";
   oss << "vocab_size: " << vocab_size << ", ";
   oss << "seq_len: " << seq_len << ", ";
-  oss << "wcls_present: " << wcls_present;
+  oss << "wcls_present: " << wcls_present << ", ";
+  oss << "start_layer_num: " << start_layer_num << ", ";
+  oss << "end_layer_num: " << end_layer_num;
   oss << " }";
   return oss.str();
 }
@@ -202,9 +211,9 @@ size_t RunState<DType>::state_size( const Config& config )
 /* KV CACHE */
 
 template<typename DType>
-KVCache<DType>::KVCache( const Config& config, DType* buffer, const int32_t start_layer, const int32_t end_layer )
-  : start_layer_( start_layer )
-  , end_layer_( end_layer == -1 ? config.n_layers - 1 : end_layer )
+KVCache<DType>::KVCache( const Config& config, DType* buffer )
+  : start_layer_( config.start_layer_num )
+  , end_layer_( config.end_layer_num )
   , buffer_( buffer )
   , seq_len_( config.seq_len )
   , dim_( config.dim )
@@ -214,9 +223,9 @@ KVCache<DType>::KVCache( const Config& config, DType* buffer, const int32_t star
 }
 
 template<typename DType>
-size_t KVCache<DType>::cache_size( const Config& config, const int32_t start_layer, const int32_t end_layer )
+size_t KVCache<DType>::cache_size( const Config& config )
 {
-  return sizeof( DType ) * config.seq_len * config.dim * 2 * ( end_layer - start_layer + 1 );
+  return sizeof( DType ) * config.seq_len * config.dim * 2 * ( config.end_layer_num - config.start_layer_num + 1 );
 }
 
 template<typename DType>
@@ -240,34 +249,26 @@ BaseLlama2<DType>::BaseLlama2( const Config& config,
                                unique_ptr<DType, void ( * )( DType* )>&& base_weights,
                                unique_ptr<DType, void ( * )( DType* )>&& layers_weights,
                                unique_ptr<DType, void ( * )( DType* )>&& run_state,
-                               unique_ptr<DType, void ( * )( DType* )>&& kv_cache,
-                               const int32_t start_layer,
-                               const int32_t end_layer )
+                               unique_ptr<DType, void ( * )( DType* )>&& kv_cache )
   : base_weights_buffer_( move( base_weights ) )
   , layers_buffer_( move( layers_weights ) )
   , run_state_buffer_( move( run_state ) )
   , kv_cache_buffer_( move( kv_cache ) )
   , config_( config )
-  , start_layer_num_( start_layer )
-  , end_layer_num_( end_layer == -1 ? config_.n_layers - 1 : end_layer )
   , state_( config_, run_state_buffer_.get() )
-  , kv_cache_( config_, kv_cache_buffer_.get(), start_layer_num_, end_layer_num_ )
+  , kv_cache_( config_, kv_cache_buffer_.get() )
   , base_weights_( config_, base_weights_buffer_.get() )
   , layer_weights_( [&] {
-    CHECK_GE( start_layer_num_, 0 ) << "Start layer must be non-negative.";
-    CHECK_LT( end_layer_num_, config_.n_layers ) << "End layer must be less than the number of layers.";
-    CHECK_LE( start_layer_num_, end_layer_num_ ) << "Start layer must be less than or equal to end layer.";
-
     std::vector<LayerWeights<DType>> layers {};
     layers.resize( config_.n_layers );
 
     const size_t layer_size = LayerWeights<DType>::layer_size( config_ );
     auto ptr = layers_buffer_.get();
 
-    for ( int i = start_layer_num_; i <= end_layer_num_; i++ ) {
-      layers[i] = LayerWeights {
-        config_, reinterpret_cast<DType*>( reinterpret_cast<uint8_t*>( ptr ) + ( i - start_layer_num_ ) * layer_size )
-      };
+    for ( auto i = config_.start_layer_num; i <= config_.end_layer_num; i++ ) {
+      layers[i] = LayerWeights { config_,
+                                 reinterpret_cast<DType*>( reinterpret_cast<uint8_t*>( ptr )
+                                                           + ( i - config_.start_layer_num ) * layer_size ) };
     }
 
     return layers;

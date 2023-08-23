@@ -13,7 +13,7 @@ namespace glinthawk::models::llama2 {
 
 struct Config
 {
-  Config( const std::filesystem::path& config_file );
+  Config( const std::filesystem::path& config_file, const int32_t start_layer, const int32_t end_layer );
 
   std::string to_string() const;
 
@@ -26,6 +26,10 @@ struct Config
   uint64_t n_kv_heads {}; // number of key/value heads (can be < query heads because of multiquery)
   uint64_t vocab_size {}; // vocabulary size (byte-level)
   uint64_t seq_len {};    // max sequence length
+
+  // which layers to serve
+  uint64_t start_layer_num {};
+  uint64_t end_layer_num {};
 
   bool wcls_present { false };
 };
@@ -114,12 +118,12 @@ struct RunState
 template<typename DType>
 struct KVCache
 {
-  KVCache( const Config& config, DType* buffer, const int32_t start_layer, const int32_t end_layer );
+  KVCache( const Config& config, DType* buffer );
 
-  static size_t cache_size( const Config& config, const int32_t start_layer, const int32_t end_layer );
+  static size_t cache_size( const Config& config );
 
-  const int32_t start_layer_;
-  const int32_t end_layer_;
+  const uint64_t start_layer_;
+  const uint64_t end_layer_;
 
   DType* buffer_;
   const int seq_len_;
@@ -141,8 +145,6 @@ protected:
   std::unique_ptr<DType, void ( * )( DType* )> kv_cache_buffer_;
 
   const Config config_;
-  const int32_t start_layer_num_;
-  const int32_t end_layer_num_;
 
   RunState<DType> state_;
   KVCache<DType> kv_cache_;
@@ -154,9 +156,7 @@ protected:
               std::unique_ptr<DType, void ( * )( DType* )>&& base_weights,
               std::unique_ptr<DType, void ( * )( DType* )>&& layers_weights,
               std::unique_ptr<DType, void ( * )( DType* )>&& run_state,
-              std::unique_ptr<DType, void ( * )( DType* )>&& kv_cache,
-              const int32_t start_layer = 0,
-              const int32_t end_layer = -1 );
+              std::unique_ptr<DType, void ( * )( DType* )>&& kv_cache );
 
 public:
   ~BaseLlama2() override = default;
