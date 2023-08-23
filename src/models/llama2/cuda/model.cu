@@ -77,12 +77,10 @@ unique_ptr<Llama2<DType>> Llama2<DType>::load( const filesystem::path& model_pat
   const auto run_state_size = RunState<DType>::state_size( config );
   const auto base_size = BaseWeights<DType>::base_size( config );
   const auto layer_size = LayerWeights<DType>::layer_size( config );
-  const auto kv_cache_size = KVCache<DType>::cache_size( config );
 
   DType* base_raw_ptr;
   DType* layers_raw_ptr;
   DType* run_state_raw_ptr;
-  DType* kv_cache_raw_ptr;
 
   // Allocate memory for the base weights
   ops::CHECK_CUDA( cudaMalloc( &base_raw_ptr, base_size ) );
@@ -95,10 +93,6 @@ unique_ptr<Llama2<DType>> Llama2<DType>::load( const filesystem::path& model_pat
   // Allocate memory for the run state
   ops::CHECK_CUDA( cudaMalloc( &run_state_raw_ptr, run_state_size ) );
   unique_ptr<DType, void ( * )( DType* )> run_state { run_state_raw_ptr, cuda_deleter };
-
-  // Allocate memory for the kv cache
-  ops::CHECK_CUDA( cudaMalloc( &kv_cache_raw_ptr, kv_cache_size ) );
-  unique_ptr<DType, void ( * )( DType* )> kv_cache { kv_cache_raw_ptr, cuda_deleter };
 
   // Load the model
 
@@ -131,7 +125,7 @@ unique_ptr<Llama2<DType>> Llama2<DType>::load( const filesystem::path& model_pat
   }
 
   auto model = unique_ptr<Llama2<DType>>( new Llama2<DType> {
-    config, move( base ), move( layers ), move( run_state ), move( kv_cache ) } );
+    config, move( base ), move( layers ), move( run_state ) } );
 
   return model;
 }
@@ -151,7 +145,7 @@ void Llama2<DType>::pass_begin( const std::vector<uint32_t>& token )
 }
 
 template<typename DType>
-void Llama2<DType>::transformer_layer( const int32_t layer_num )
+void Llama2<DType>::transformer_layer( const int32_t layer_num ) // NEEDS CONTEXT
 {
   const uint64_t dim = this->config_.dim;
   const uint64_t kv_dim = this->config_.kv_dim;

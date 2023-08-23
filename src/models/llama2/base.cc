@@ -111,7 +111,7 @@ string Config::to_string() const
 
 /* VOCABULARY */
 
-Vocabulary::Vocabulary( const std::filesystem::path& vocabulary_path )
+Vocabulary::Vocabulary( const filesystem::path& vocabulary_path )
 {
   ifstream fin { vocabulary_path, ios::binary };
   int len = 0;
@@ -225,10 +225,10 @@ size_t RunState<DType>::state_size( const Config& config )
              + config.n_heads );
 }
 
-/* KV CACHE */
+/* InferenceContext */
 
 template<typename DType>
-KVCache<DType>::KVCache( const Config& config, DType* buffer )
+InferenceContext<DType>::InferenceContext( const Config& config, DType* buffer )
   : start_layer_( config.start_layer_num )
   , end_layer_( config.end_layer_num )
   , buffer_( buffer )
@@ -241,20 +241,20 @@ KVCache<DType>::KVCache( const Config& config, DType* buffer )
 }
 
 template<typename DType>
-size_t KVCache<DType>::cache_size( const Config& config )
+size_t InferenceContext<DType>::context_size( const Config& config )
 {
    return sizeof( DType ) * config.seq_len * config.kv_dim * 2 * ( config.end_layer_num - config.start_layer_num + 1 ) * config.kv_prompt_limit;
 }
 
 template<typename DType>
-DType* KVCache<DType>::key( int layer, const int step, const int batch, const int head )
+DType* InferenceContext<DType>::key( const Config& config, int layer, const int step, const int batch, const int head )
 {
   layer -= start_layer_;
   return buffer_ + step * ( n_layers_ * kv_dim_ * kv_prompt_limit_ * 2 ) + layer * ( kv_dim_ * kv_prompt_limit_ * 2 ) + batch * kv_dim_ + head * head_size_;
 }
 
 template<typename DType>
-DType* KVCache<DType>::value( int layer, const int step, const int batch, const int head )
+DType* InferenceContext<DType>::value( const Config& config, int layer, const int step, const int batch, const int head )
 {
   layer -= start_layer_;
   return buffer_ + step * ( n_layers_ * kv_dim_ * kv_prompt_limit_ * 2 ) + layer * ( kv_dim_ * kv_prompt_limit_ * 2 ) + batch * kv_dim_ + head * head_size_ + kv_dim_ * kv_prompt_limit_;
@@ -266,20 +266,17 @@ template<typename DType>
 BaseLlama2<DType>::BaseLlama2( const Config& config,
                                unique_ptr<DType, void ( * )( DType* )>&& base_weights,
                                unique_ptr<DType, void ( * )( DType* )>&& layers_weights,
-                               unique_ptr<DType, void ( * )( DType* )>&& run_state,
-                               unique_ptr<DType, void ( * )( DType* )>&& kv_cache )
+                               unique_ptr<DType, void ( * )( DType* )>&& run_state )
   : base_weights_buffer_( move( base_weights ) )
   , layers_buffer_( move( layers_weights ) )
   , run_state_buffer_( move( run_state ) )
-  , kv_cache_buffer_( move( kv_cache ) )
   , config_( config )
   , id_allocation_( std::vector<uint64_t>(config.concurrency_limit) )
   , token_pos_( std::vector<uint64_t>(config.concurrency_limit) )
   , state_( config_, run_state_buffer_.get() )
-  , kv_cache_( config_, kv_cache_buffer_.get() )
   , base_weights_( config_, base_weights_buffer_.get() )
   , layer_weights_( [&] {
-    std::vector<LayerWeights<DType>> layers {};
+    vector<LayerWeights<DType>> layers {};
     layers.resize( config_.n_layers );
 
     const size_t layer_size = LayerWeights<DType>::layer_size( config_ );
@@ -300,12 +297,12 @@ namespace glinthawk::models::llama2 {
 template class RunState<float>;
 template class BaseWeights<float>;
 template class LayerWeights<float>;
-template class KVCache<float>;
 template class BaseLlama2<float>;
+template class InferenceContext<float>;
 
 template class RunState<__half>;
 template class BaseWeights<__half>;
 template class LayerWeights<__half>;
-template class KVCache<__half>;
 template class BaseLlama2<__half>;
+template class InferenceContext<__half>;
 }

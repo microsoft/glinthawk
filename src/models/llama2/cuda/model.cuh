@@ -7,6 +7,9 @@ namespace glinthawk::models::llama2::cuda {
 template<typename DType>
 class Llama2 : public glinthawk::models::llama2::BaseLlama2<DType>
 {
+public:
+  using Context = glinthawk::models::llama2::InferenceContext<DType>;
+
 private:
   void pass_begin( const std::vector<uint32_t>& token );
   void transformer_layer( const int32_t layer_num );

@@ -113,6 +113,7 @@ public:
   const DataBuffer& activations() const { return activations_; }
 };
 
+template<typename ContextType>
 class Model
 {
 public:
