@@ -113,11 +113,12 @@ public:
   const DataBuffer& activations() const { return activations_; }
 };
 
+template<typename ContextType>
 class Model
 {
 public:
   virtual ~Model() {}
-  virtual InferenceState forward( const InferenceState& inference_state ) = 0;
+  virtual InferenceState forward( const InferenceState& inference_state, ContextType& context ) = 0;
 };
 
 } // namespace glinthawk::models

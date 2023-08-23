@@ -7,13 +7,13 @@ namespace glinthawk::models::llama2::cuda {
 template<typename DType>
 class Llama2 : public glinthawk::models::llama2::BaseLlama2<DType>
 {
+public:
+  using Context = glinthawk::models::llama2::InferenceContext<DType>;
+
 private:
   void pass_begin( const uint32_t token );
-  void transformer_layer( const int32_t layer_num, const uint64_t token_pos );
+  void transformer_layer( const int32_t layer_num, const uint64_t token_pos, Context& context );
   void pass_end();
-
-  uint64_t token_pos_ { 0 };
-  float temperature_ { 0.0f };
 
 protected:
   using BaseLlama2<DType>::BaseLlama2;
@@ -25,7 +25,8 @@ public:
 
   ~Llama2();
 
-  InferenceState forward( const InferenceState& inference_state ) override;
+  InferenceState forward( const InferenceState& inference_state, Context& context ) override;
+
   uint32_t forward( const uint32_t token );
 };
 

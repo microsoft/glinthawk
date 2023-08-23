@@ -92,6 +92,7 @@ struct LayerWeights
   const DType* w3 { nullptr }; // (hidden_dim, dim)
 };
 
+/// @brief This class acts as the scratchpad for the computations
 template<typename DType>
 struct RunState
 {
@@ -115,39 +116,30 @@ struct RunState
   DType* temp_softmax {}; // temporary buffer for computing softmax (n_heads,)
 };
 
+/// @brief InferenceContext for Llama2 model is the KV-cache
 template<typename DType>
-struct KVCache
+struct InferenceContext
 {
-  KVCache( const Config& config, DType* buffer );
+  InferenceContext( DType* buffer );
 
-  static size_t cache_size( const Config& config );
-
-  const uint64_t start_layer_;
-  const uint64_t end_layer_;
+  static size_t context_size( const Config& config );
 
   DType* buffer_;
-  const int seq_len_;
-  const int dim_;
-  const int n_layers_;
-  const int head_size_;
-
-  DType* key( int layer, const int step, const int head = 0 );
-  DType* value( int layer, const int step, const int head = 0 );
+  DType* key( const Config& config, const int32_t layer_num, const int32_t token_num, const int32_t head_num );
+  DType* value( const Config& config, const int32_t layer_num, const int32_t token_num, const int32_t head_num );
 };
 
 template<typename DType>
-class BaseLlama2 : public virtual glinthawk::models::Model
+class BaseLlama2 : public virtual glinthawk::models::Model<InferenceContext<DType>>
 {
 protected:
   std::unique_ptr<DType, void ( * )( DType* )> base_weights_buffer_;
   std::unique_ptr<DType, void ( * )( DType* )> layers_buffer_;
   std::unique_ptr<DType, void ( * )( DType* )> run_state_buffer_;
-  std::unique_ptr<DType, void ( * )( DType* )> kv_cache_buffer_;
 
   const Config config_;
 
   RunState<DType> state_;
-  KVCache<DType> kv_cache_;
   const BaseWeights<DType> base_weights_;
   const std::vector<LayerWeights<DType>> layer_weights_;
 
@@ -155,8 +147,7 @@ protected:
   BaseLlama2( const Config& config,
               std::unique_ptr<DType, void ( * )( DType* )>&& base_weights,
               std::unique_ptr<DType, void ( * )( DType* )>&& layers_weights,
-              std::unique_ptr<DType, void ( * )( DType* )>&& run_state,
-              std::unique_ptr<DType, void ( * )( DType* )>&& kv_cache );
+              std::unique_ptr<DType, void ( * )( DType* )>&& run_state );
 
 public:
   ~BaseLlama2() override = default;

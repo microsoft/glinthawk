@@ -71,12 +71,10 @@ Llama2<DType> Llama2<DType>::load( const filesystem::path& model_path,
   const auto run_state_size = RunState<DType>::state_size( config );
   const auto base_size = BaseWeights<DType>::base_size( config );
   const auto layer_size = LayerWeights<DType>::layer_size( config );
-  const auto kv_cache_size = KVCache<DType>::cache_size( config );
 
   DType* base_raw_ptr;
   DType* layers_raw_ptr;
   DType* run_state_raw_ptr;
-  DType* kv_cache_raw_ptr;
 
   // Allocate memory for the base weights
   CHECK_CUDA( cudaMalloc( &base_raw_ptr, base_size ) );
@@ -89,10 +87,6 @@ Llama2<DType> Llama2<DType>::load( const filesystem::path& model_path,
   // Allocate memory for the run state
   CHECK_CUDA( cudaMalloc( &run_state_raw_ptr, run_state_size ) );
   unique_ptr<DType, void ( * )( DType* )> run_state { run_state_raw_ptr, cuda_deleter };
-
-  // Allocate memory for the kv cache
-  CHECK_CUDA( cudaMalloc( &kv_cache_raw_ptr, kv_cache_size ) );
-  unique_ptr<DType, void ( * )( DType* )> kv_cache { kv_cache_raw_ptr, cuda_deleter };
 
   // Load the model
 
@@ -124,7 +118,7 @@ Llama2<DType> Llama2<DType>::load( const filesystem::path& model_path,
     LOG( INFO ) << "Loaded layer " << i << " (" << layer_size << " bytes).";
   }
 
-  return { config, move( base ), move( layers ), move( run_state ), move( kv_cache ) };
+  return { config, move( base ), move( layers ), move( run_state ) };
 }
 
 template<typename DType>
@@ -248,7 +242,7 @@ void Llama2<DType>::pass_begin( const uint32_t token )
 }
 
 template<typename DType>
-void Llama2<DType>::transformer_layer( const int32_t layer_num, const uint64_t token_pos )
+void Llama2<DType>::transformer_layer( const int32_t layer_num, const uint64_t token_pos, Context& context )
 {
   DType* const x = this->state_.x;
   const uint64_t dim = this->config_.dim;
@@ -272,8 +266,8 @@ void Llama2<DType>::transformer_layer( const int32_t layer_num, const uint64_t t
   do_rope<<<this->config_.n_heads, head_size / 2>>>(
     head_size, this->config_.n_heads, freq_cis_real_row, freq_cis_imag_row, this->state_.q, this->state_.k );
 
-  DType* k_cache_pos = this->kv_cache_.key( layer_num, token_pos );
-  DType* v_cache_pos = this->kv_cache_.value( layer_num, token_pos );
+  DType* k_cache_pos = context.key( this->config_, layer_num, token_pos, 0 );
+  DType* v_cache_pos = context.value( this->config_, layer_num, token_pos, 0 );
 
   // save key,value at this time step (pos) to our kv cache
   CHECK_CUDA( cudaMemcpy( k_cache_pos, this->state_.k, dim * sizeof( DType ), cudaMemcpyDeviceToDevice ) );
@@ -281,7 +275,7 @@ void Llama2<DType>::transformer_layer( const int32_t layer_num, const uint64_t t
 
   // multihead attention. for each head and for each token up to and including the current one
   ops::attention_0_gemm( this->state_.q,
-                         this->kv_cache_.buffer_ + layer_num * ( dim * 2 ),
+                         context.buffer_ + layer_num * ( dim * 2 ),
                          this->state_.att,
                          this->config_.n_layers,
                          this->config_.seq_len,
@@ -294,7 +288,7 @@ void Llama2<DType>::transformer_layer( const int32_t layer_num, const uint64_t t
     this->state_.att, token_pos, this->config_.seq_len, this->config_.n_heads, this->state_.temp_softmax );
 
   ops::attention_2_gemm( this->state_.att,
-                         this->kv_cache_.buffer_ + layer_num * ( dim * 2 ) + dim,
+                         context.buffer_ + layer_num * ( dim * 2 ) + dim,
                          this->state_.xb,
                          this->config_.n_layers,
                          this->config_.seq_len,
@@ -362,10 +356,9 @@ uint32_t extract_token( const RunState<DType>& state, const Config& config, cons
 }
 
 template<typename DType>
-InferenceState Llama2<DType>::forward( const InferenceState& inference_state )
+InferenceState Llama2<DType>::forward( const InferenceState& inference_state, Context& context )
 {
   CHECK_EQ( inference_state.next_layer(), this->config_.start_layer_num ) << "next_layer must be the start layer";
-  token_pos_ = inference_state.token_pos();
 
   if ( inference_state.next_layer() == 0 ) {
     pass_begin( inference_state.token() );
@@ -378,7 +371,7 @@ InferenceState Llama2<DType>::forward( const InferenceState& inference_state )
   }
 
   for ( int layer_num = this->config_.start_layer_num; layer_num <= this->config_.end_layer_num; layer_num++ ) {
-    transformer_layer( layer_num, inference_state.token_pos() );
+    transformer_layer( layer_num, inference_state.token_pos(), context );
   }
 
   if ( this->config_.end_layer_num == this->config_.n_layers - 1 ) {
@@ -416,20 +409,7 @@ InferenceState Llama2<DType>::forward( const InferenceState& inference_state )
 template<typename DType>
 uint32_t Llama2<DType>::forward( const uint32_t token )
 {
-  if ( token_pos_ >= this->config_.seq_len ) {
-    return 2; /* EOS */
-  }
-
-  pass_begin( token );
-
-  for ( int layer_num = this->config_.start_layer_num; layer_num <= this->config_.end_layer_num; layer_num++ ) {
-    transformer_layer( layer_num, token_pos_ );
-  }
-
-  pass_end();
-
-  token_pos_++;
-  return extract_token( this->state_, this->config_, temperature_ );
+  throw runtime_error( "not implemented" );
 }
 
 template class Llama2<float>;
