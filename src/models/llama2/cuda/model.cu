@@ -59,7 +59,7 @@ unique_ptr<Llama2<DType>> Llama2<DType>::load( const filesystem::path& model_pat
   const auto config_path = model_path / "CONFIG";
   const auto base_path = model_path / ( "BASEWEIGHTS" + filename_suffix );
 
-  llama2::Config config { config_path, kv_prompt_limit, concurrency_limit };
+  llama2::Config config { config_path, start_layer, end_layer, kv_prompt_limit, concurrency_limit };
 
   CHECK_GT( 1025, config.n_heads ) << "Attention softmax has n_heads threads, and this cannot surpass 1024.";
   CHECK_GT( 1 << 16, config.n_heads ) << "RoPE has n_heads blocks, and this cannot surpass 2^16.";
@@ -72,17 +72,12 @@ unique_ptr<Llama2<DType>> Llama2<DType>::load( const filesystem::path& model_pat
   CHECK_GT( 1 << 16, ( config.hidden_dim * config.concurrency_limit + tpb - 1 ) / tpb )
     << "Silu blocks cannot surpass 2^16.";
 
-  const int32_t end_layer = ( end_layer_raw == -1 ) ? ( config.n_layers - 1 ) : end_layer_raw;
   const int32_t layer_count = end_layer - start_layer + 1;
-
-  CHECK_GE( start_layer, 0 ) << "Start layer must be non-negative.";
-  CHECK_LE( start_layer, end_layer ) << "Start layer must be less than or equal to end layer.";
-  CHECK_LT( end_layer, config.n_layers ) << "End layer must be less than the number of layers.";
 
   const auto run_state_size = RunState<DType>::state_size( config );
   const auto base_size = BaseWeights<DType>::base_size( config );
   const auto layer_size = LayerWeights<DType>::layer_size( config );
-  const auto kv_cache_size = KVCache<DType>::cache_size( config, start_layer, end_layer );
+  const auto kv_cache_size = KVCache<DType>::cache_size( config );
 
   DType* base_raw_ptr;
   DType* layers_raw_ptr;
@@ -136,7 +131,7 @@ unique_ptr<Llama2<DType>> Llama2<DType>::load( const filesystem::path& model_pat
   }
 
   auto model = unique_ptr<Llama2<DType>>( new Llama2<DType> {
-    config, move( base ), move( layers ), move( run_state ), move( kv_cache ), start_layer, end_layer } );
+    config, move( base ), move( layers ), move( run_state ), move( kv_cache ) } );
 
   return model;
 }
@@ -352,13 +347,13 @@ std::vector<InferenceState> Llama2<DType>::forward(
                                         cudaMemcpyHostToDevice ) );
   }
 
-  for ( int layer_num = this->start_layer_num_; layer_num <= this->end_layer_num_; layer_num++ ) {
+  for ( int layer_num = this->config_.start_layer_num; layer_num <= this->config_.end_layer_num; layer_num++ ) {
     transformer_layer( layer_num );
   }
 
   std::vector<InferenceState> token_vector;
 
-  if ( this->end_layer_num_ == this->config_.n_layers - 1 ) {
+  if ( this->config_.end_layer_num == this->config_.n_layers - 1 ) {
     pass_end();
 
     std::vector<float> batch_temps;
@@ -390,13 +385,13 @@ std::vector<InferenceState> Llama2<DType>::forward(
                                  this->config_.dim * sizeof( DType ),
                                  cudaMemcpyDeviceToHost ) );
 
-    token_vector.emplace_back( inference_state_s[i].prompt_id(),                  // prompt_id
-                               inference_state_s[i].get().model_id(),             // model_id
-                               inference_state_s[i].get().token(),                // token
-                               inference_state_s[i].get().token_pos(),            // token_pos
-                               static_cast<uint32_t>( this->end_layer_num_ ) + 1, // next_layer
-                               inference_state_s[i].get().temperature(),          // temperature
-                               move( activations )                                // activations
+    token_vector.emplace_back( inference_state_s[i].prompt_id(),                         // prompt_id
+                               inference_state_s[i].get().model_id(),                    // model_id
+                               inference_state_s[i].get().token(),                       // token
+                               inference_state_s[i].get().token_pos(),                   // token_pos
+                               static_cast<uint32_t>( this->config_.end_layer_num ) + 1, // next_layer
+                               inference_state_s[i].get().temperature(),                 // temperature
+                               move( activations )                                       // activations
     );
   }
 
@@ -423,7 +418,7 @@ std::vector<uint32_t> Llama2<DType>::forward( const std::vector<uint32_t>& token
 
   pass_begin( token_s );
 
-  for ( int layer_num = this->start_layer_num_; layer_num <= this->end_layer_num_; layer_num++ ) {
+  for ( int layer_num = this->config_.start_layer_num; layer_num <= this->config_.end_layer_num; layer_num++ ) {
     transformer_layer( layer_num );
   }
 
