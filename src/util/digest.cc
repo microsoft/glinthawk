@@ -52,12 +52,12 @@ string sha256_base58( string_view input )
 {
   SHA256Hash hash;
   sha256( input, hash );
-  return encode_base_58( { reinterpret_cast<const char*>( hash.hash ), SHA256_DIGEST_LENGTH } );
+  return encode_base_58( { reinterpret_cast<const char*>( hash.hash.data() ), SHA256_DIGEST_LENGTH } );
 }
 
 void sha256( const std::string_view input, SHA256Hash& hash )
 {
-  SHA256( reinterpret_cast<const unsigned char*>( input.data() ), input.length(), hash.hash );
+  SHA256( reinterpret_cast<const unsigned char*>( input.data() ), input.length(), hash.hash.data() );
 }
 
 }
