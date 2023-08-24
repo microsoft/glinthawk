@@ -5,7 +5,7 @@
 #include <string>
 #include <string_view>
 
-#ifdef CUDA_ENABLED
+#ifdef GLINTHAWK_CUDA_ENABLED
 #include <cuda_fp16.h>
 #else
 #define __half uint16_t
@@ -13,10 +13,14 @@
 
 #include "util/digest.hh"
 
-namespace glinthawk::models {
+namespace glinthawk {
 
 using PromptID = glinthawk::util::digest::SHA256Hash;
 using ModelID = uint32_t;
+
+} // namespace glinthawk
+
+namespace glinthawk::models {
 
 class DataType
 {
@@ -113,7 +117,7 @@ public:
   const DataBuffer& activations() const { return activations_; }
 };
 
-template<typename ContextType>
+template<typename Context>
 class Model
 {
 public:

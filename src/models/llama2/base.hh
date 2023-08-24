@@ -139,8 +139,8 @@ struct InferenceContext
   DType* value( const Config& config, int layer, const int step, const int batch = 0, const int head = 0 );
 };
 
-template<typename DType>
-class BaseLlama2 : public virtual glinthawk::models::Model<InferenceContext<DType>>
+template<typename DType, typename ContextType>
+class BaseLlama2 : public virtual glinthawk::models::Model<ContextType>
 {
 protected:
   std::unique_ptr<DType, void ( * )( DType* )> base_weights_buffer_;

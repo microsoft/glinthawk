@@ -5,10 +5,20 @@
 namespace glinthawk::models::llama2::cuda {
 
 template<typename DType>
-class Llama2 : public glinthawk::models::llama2::BaseLlama2<DType>
+struct Context : public glinthawk::models::llama2::InferenceContext<DType>
+{
+private:
+  std::unique_ptr<DType, void ( * )( DType* )> storage_;
+
+public:
+  Context( const Config& config );
+};
+
+template<typename DType>
+class Llama2 : public glinthawk::models::llama2::BaseLlama2<DType, Context<DType>>
 {
 public:
-  using Context = glinthawk::models::llama2::InferenceContext<DType>;
+  using ContextType = Context<DType>;
 
 private:
   void pass_begin( const std::vector<uint32_t>& token );
@@ -21,7 +31,7 @@ private:
   std::vector<InferenceState<DType>> forward( const std::vector<std::reference_wrapper<const InferenceState<DType>>>& inference_state_s, const std::vector<uint32_t>& prompt_id_s );
 
 protected:
-  using BaseLlama2<DType>::BaseLlama2;
+  using BaseLlama2<DType, Context<DType>>::BaseLlama2;
 
 public:
   static std::unique_ptr<Llama2<DType>> load( const std::filesystem::path& model_dir,

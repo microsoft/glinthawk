@@ -41,6 +41,17 @@ std::string dtype_str()
 }
 
 template<typename DType>
+Context<DType>::Context( const Config& config )
+  : storage_( [&] {
+    DType* ptr;
+    CUDA_CHECK( cudaMalloc( &ptr, InferenceContext<DType>::context_size( config ) ) );
+    return { ptr, cuda_deleter };
+  }() )
+  , glinthawk::models::llama2::InferenceContext<DType>::buffer_( storage_.get() )
+{
+}
+
+template<typename DType>
 Llama2<DType>::~Llama2()
 {
   ops::destroy();
@@ -449,7 +460,6 @@ uint32_t Llama2<DType>::forward( const uint32_t& token, const uint32_t& prompt_i
   return forward( token_vector, prompt_id_vector, token_pos_vector )[0];
 }
 
-template class Llama2<float>;
 template class Llama2<__half>;
 
 } // namespace glinthawk::models::llama2::cuda
