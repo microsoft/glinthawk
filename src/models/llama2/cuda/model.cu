@@ -48,6 +48,17 @@ std::string dtype_str()
 }
 
 template<typename DType>
+Context<DType>::Context( const Config& config )
+  : storage_( [&] {
+    DType* ptr;
+    CUDA_CHECK( cudaMalloc( &ptr, InferenceContext<DType>::context_size( config ) ) );
+    return { ptr, cuda_deleter };
+  }() )
+  , glinthawk::models::llama2::InferenceContext<DType>::buffer_( storage_.get() )
+{
+}
+
+template<typename DType>
 Llama2<DType>::~Llama2()
 {
   ops::destroy();
@@ -242,7 +253,7 @@ void Llama2<DType>::pass_begin( const uint32_t token )
 }
 
 template<typename DType>
-void Llama2<DType>::transformer_layer( const int32_t layer_num, const uint64_t token_pos, Context& context )
+void Llama2<DType>::transformer_layer( const int32_t layer_num, const uint64_t token_pos, ContextType& context )
 {
   DType* const x = this->state_.x;
   const uint64_t dim = this->config_.dim;
@@ -356,7 +367,7 @@ uint32_t extract_token( const RunState<DType>& state, const Config& config, cons
 }
 
 template<typename DType>
-InferenceState Llama2<DType>::forward( const InferenceState& inference_state, Context& context )
+InferenceState Llama2<DType>::forward( const InferenceState& inference_state, ContextType& context )
 {
   CHECK_EQ( inference_state.next_layer(), this->config_.start_layer_num ) << "next_layer must be the start layer";
 
@@ -412,7 +423,6 @@ uint32_t Llama2<DType>::forward( const uint32_t token )
   throw runtime_error( "not implemented" );
 }
 
-template class Llama2<float>;
 template class Llama2<__half>;
 
 } // namespace glinthawk::models::llama2::cuda

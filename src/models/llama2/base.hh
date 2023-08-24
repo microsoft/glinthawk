@@ -120,17 +120,15 @@ struct RunState
 template<typename DType>
 struct InferenceContext
 {
-  InferenceContext( DType* buffer );
-
   static size_t context_size( const Config& config );
 
-  DType* buffer_;
+  DType* buffer_ { nullptr };
   DType* key( const Config& config, const int32_t layer_num, const int32_t token_num, const int32_t head_num );
   DType* value( const Config& config, const int32_t layer_num, const int32_t token_num, const int32_t head_num );
 };
 
-template<typename DType>
-class BaseLlama2 : public virtual glinthawk::models::Model<InferenceContext<DType>>
+template<typename DType, typename ContextType>
+class BaseLlama2 : public virtual glinthawk::models::Model<ContextType>
 {
 protected:
   std::unique_ptr<DType, void ( * )( DType* )> base_weights_buffer_;

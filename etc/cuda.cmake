@@ -6,7 +6,7 @@ find_package ( CUDAToolkit REQUIRED )
 
 if ( CMAKE_CUDA_COMPILER )
   message ( "CUDA compiler found: ${CMAKE_CUDA_COMPILER}" )
-  add_definitions ( -DCUDA_ENABLED )
+  add_definitions ( -DGLINTHAWK_CUDA_ENABLED )
   set ( CMAKE_CUDA_ARCHITECTURES 75 )
   set ( CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS}" )
   set ( CUDA_ENABLED ON )

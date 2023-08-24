@@ -5,7 +5,9 @@
 #include <sstream>
 #include <string>
 
+#ifdef GLINTHAWK_CUDA_ENABLED
 #include <cuda_fp16.h>
+#endif
 
 #include <glog/logging.h>
 
@@ -238,11 +240,11 @@ DType* InferenceContext<DType>::value( const Config& config,
 
 /* BaseLlama2 */
 
-template<typename DType>
-BaseLlama2<DType>::BaseLlama2( const Config& config,
-                               unique_ptr<DType, void ( * )( DType* )>&& base_weights,
-                               unique_ptr<DType, void ( * )( DType* )>&& layers_weights,
-                               unique_ptr<DType, void ( * )( DType* )>&& run_state )
+template<typename DType, typename Context>
+BaseLlama2<DType, Context>::BaseLlama2( const Config& config,
+                                        unique_ptr<DType, void ( * )( DType* )>&& base_weights,
+                                        unique_ptr<DType, void ( * )( DType* )>&& layers_weights,
+                                        unique_ptr<DType, void ( * )( DType* )>&& run_state )
   : base_weights_buffer_( move( base_weights ) )
   , layers_buffer_( move( layers_weights ) )
   , run_state_buffer_( move( run_state ) )
@@ -271,12 +273,20 @@ namespace glinthawk::models::llama2 {
 template class RunState<float>;
 template class BaseWeights<float>;
 template class LayerWeights<float>;
-template class BaseLlama2<float>;
 template class InferenceContext<float>;
 
+#ifdef GLINTHAWK_CUDA_ENABLED
 template class RunState<__half>;
 template class BaseWeights<__half>;
 template class LayerWeights<__half>;
-template class BaseLlama2<__half>;
 template class InferenceContext<__half>;
+
+// forward declare Context
+namespace cuda {
+template<typename DType>
+class Context;
+}
+
+template class BaseLlama2<__half, cuda::Context<__half>>;
+#endif
 }
