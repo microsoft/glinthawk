@@ -55,8 +55,8 @@ class Model
 {
 public:
   virtual ~Model() = default;
-  virtual InferenceState<DType> forward( const InferenceState<DType>& inference_state ) = 0;
-  virtual std::vector<InferenceState<DType>> forward( const std::vector<InferenceState<DType>>& inference_state_s ) = 0;
+  virtual InferenceState<DType> forward( const InferenceState<DType>& inference_state, const uint32_t& prompt_id ) = 0;
+  virtual std::vector<InferenceState<DType>> forward( const std::vector<InferenceState<DType>>& inference_state_s, const std::vector<uint32_t>& prompt_id_s ) = 0;
 };
 
 } // namespace glinthawk::models

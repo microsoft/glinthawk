@@ -14,28 +14,28 @@ private:
 
   uint64_t token_pos_ { 0 };
   float temperature_ { 0.0f };
-  uint64_t curr_batch_size { 1 };
+  std::vector<DType*> pointer_scratchpad { };
 
-  std::vector<InferenceState<DType>> forward( const std::vector<std::reference_wrapper<const InferenceState<DType>>>& inference_state_s );
+  std::vector<InferenceState<DType>> forward( const std::vector<std::reference_wrapper<const InferenceState<DType>>>& inference_state_s, const std::vector<uint32_t>& prompt_id_s );
 
 protected:
   using BaseLlama2<DType>::BaseLlama2;
 
 public:
-  static Llama2 load( const std::filesystem::path& model_dir,
+  static std::unique_ptr<Llama2<DType>> load( const std::filesystem::path& model_dir,
                       const int32_t start_layer = 0,
                       const int32_t end_layer = -1,
                       const uint64_t batch_size = 1 );
 
   ~Llama2();
 
-  InferenceState<DType> forward( const InferenceState<DType>& inference_state ) override;
+  InferenceState<DType> forward( const InferenceState<DType>& inference_state, const uint32_t& prompt_id ) override;
 
-  std::vector<InferenceState<DType>> forward( const std::vector<InferenceState<DType>>& inference_state_s ) override;
+  std::vector<InferenceState<DType>> forward( const std::vector<InferenceState<DType>>& inference_state_s, const std::vector<uint32_t>& prompt_id_s ) override;
 
-  uint32_t forward( const uint32_t& token );
+  uint32_t forward( const uint32_t& token, const uint32_t& prompt_id );
 
-  std::vector<uint32_t> forward( const std::vector<uint32_t>& token_s );
+  std::vector<uint32_t> forward( const std::vector<uint32_t>& token_s, const std::vector<uint32_t>& prompt_id_s );
 };
 
 } // namespace glinthawk::models::llama2::cuda

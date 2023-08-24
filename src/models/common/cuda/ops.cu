@@ -37,6 +37,14 @@ void CHECK_CUBLAS( const cublasStatus_t err, const source_location location = so
   }
 }
 
+void CHECK_CUDA( const cudaError_t err, const source_location location )
+{
+  if ( err != cudaSuccess ) {
+    throw runtime_error( "CUDA error " + string( cudaGetErrorName( err ) ) + ": " + string( cudaGetErrorString( err ) )
+                         + " (" + location.file_name() + ":" + to_string( location.line() ) + ")" );
+  }
+}
+
 void init() { cublasCreate( &cublas_handle ); }
 void destroy() { cublasDestroy( cublas_handle ); }
 
@@ -167,9 +175,47 @@ void softmax( __half* _x, const uint64_t size )
 }
 
 template<typename DType>
-void attention_0_gemm( const DType* query,
-                       const DType* key,
-                       DType* att,
+void fill_pointers_init( DType** q_p,
+                         std::vector<DType*> query_p_cpu,
+                         DType* query,
+                         DType* att,
+                         DType* xb,
+                         const uint64_t seq_len,
+                         const uint64_t head_size,
+                         const uint64_t n_heads,
+                         const uint64_t max_batch_size )
+{
+  for (size_t i = 0; i < max_batch_size * n_heads; i++) {
+    query_p_cpu[i] = query + head_size * i;
+    query_p_cpu[i + max_batch_size * n_heads] = att + seq_len * i;
+    query_p_cpu[i + 2 * max_batch_size * n_heads] = xb + head_size * i;
+  }
+  CHECK_CUDA( cudaMemcpy( q_p, query_p_cpu.data(), 3 * max_batch_size * n_heads * sizeof(DType*), cudaMemcpyHostToDevice ) );
+}
+
+template<typename DType>
+void fill_pointers_kv( DType** k_p,
+                       std::vector<DType*> key_p_cpu,
+                       DType* key,
+                       DType* value,
+                       const uint64_t* id_allocation,
+                       const uint64_t head_size,
+                       const uint64_t n_heads,
+                       const uint64_t batch_size,
+                       const uint64_t max_batch_size )
+{
+  for (size_t i = 0; i < batch_size; i++)
+    for (size_t j = 0; j < n_heads; j++) {
+      key_p_cpu[i * n_heads + j] = key + head_size * (id_allocation[i] * n_heads + j);
+      key_p_cpu[i * n_heads + j + max_batch_size * n_heads] = value + head_size * (id_allocation[i] * n_heads + j);
+    }
+  CHECK_CUDA( cudaMemcpy( k_p, key_p_cpu.data(), 2 * max_batch_size * n_heads * sizeof(DType*), cudaMemcpyHostToDevice ) );
+}
+
+template<typename DType>
+void attention_0_gemm( const DType* const* query_p,
+                       const DType* const* key_p,
+                       DType** att_p,
                        const uint64_t n_layers,
                        const uint64_t seq_len,
                        const uint64_t head_size,
@@ -191,41 +237,34 @@ void attention_0_gemm( const DType* query,
   const uint64_t ldb = n_layers * max_batch_size * n_heads * head_size * 2;
   const uint64_t ldc = m;
 
-  const uint64_t strideA = head_size;
-  const uint64_t strideB = head_size;
-  const uint64_t strideC = seq_len;
-
   const uint64_t batchCount = n_heads * batch_size;
-
-  CHECK_CUBLAS( cublasGemmStridedBatchedEx( cublas_handle,
-                                            CUBLAS_OP_N,
-                                            CUBLAS_OP_N,
-                                            m,
-                                            n,
-                                            k,
-                                            &alpha,
-                                            query,
-                                            cuda_arg_type,
-                                            lda,
-                                            strideA,
-                                            key,
-                                            cuda_arg_type,
-                                            ldb,
-                                            strideB,
-                                            &beta,
-                                            att,
-                                            cuda_arg_type,
-                                            ldc,
-                                            strideC,
-                                            batchCount,
-                                            CUDA_R_32F,
-                                            CUBLAS_GEMM_DEFAULT ) );
+  
+  CHECK_CUBLAS( cublasGemmBatchedEx( cublas_handle,
+                                     CUBLAS_OP_N,
+                                     CUBLAS_OP_N,
+                                     m,
+                                     n,
+                                     k,
+                                     &alpha,
+                                     reinterpret_cast<const void* const*>(query_p),
+                                     cuda_arg_type,
+                                     lda,
+                                     reinterpret_cast<const void* const*>(key_p),
+                                     cuda_arg_type,
+                                     ldb,
+                                     &beta,
+                                     reinterpret_cast<void**>(att_p),
+                                     cuda_arg_type,
+                                     ldc,
+                                     batchCount,
+                                     CUBLAS_COMPUTE_32F,
+                                     CUBLAS_GEMM_DEFAULT ) );
 }
 
 template<typename DType>
-void attention_2_gemm( const DType* att,
-                       const DType* value,
-                       DType* xb,
+void attention_2_gemm( const DType* const* att_p,
+                       const DType* const* value_p,
+                       DType** xb_p,
                        const uint64_t n_layers,
                        const uint64_t seq_len,
                        const uint64_t head_size,
@@ -247,35 +286,28 @@ void attention_2_gemm( const DType* att,
   const uint64_t ldb = k;
   const uint64_t ldc = m;
 
-  const uint64_t strideA = head_size;
-  const uint64_t strideB = seq_len;
-  const uint64_t strideC = head_size;
-
   const uint64_t batchCount = n_heads * batch_size;
 
-  CHECK_CUBLAS( cublasGemmStridedBatchedEx( cublas_handle,
-                                            CUBLAS_OP_N,
-                                            CUBLAS_OP_N,
-                                            m,
-                                            n,
-                                            k,
-                                            &alpha,
-                                            value,
-                                            cuda_arg_type,
-                                            lda,
-                                            strideA,
-                                            att,
-                                            cuda_arg_type,
-                                            ldb,
-                                            strideB,
-                                            &beta,
-                                            xb,
-                                            cuda_arg_type,
-                                            ldc,
-                                            strideC,
-                                            batchCount,
-                                            CUDA_R_32F,
-                                            CUBLAS_GEMM_DEFAULT ) );
+  CHECK_CUBLAS( cublasGemmBatchedEx( cublas_handle,
+                                     CUBLAS_OP_N,
+                                     CUBLAS_OP_N,
+                                     m,
+                                     n,
+                                     k,
+                                     &alpha,
+                                     reinterpret_cast<const void* const*>(value_p),
+                                     cuda_arg_type,
+                                     lda,
+                                     reinterpret_cast<const void* const*>(att_p),
+                                     cuda_arg_type,
+                                     ldb,
+                                     &beta,
+                                     reinterpret_cast<void**>(xb_p),
+                                     cuda_arg_type,
+                                     ldc,
+                                     batchCount,
+                                     CUBLAS_COMPUTE_32F,
+                                     CUBLAS_GEMM_DEFAULT ) );
 }
 
 template<typename DType>
@@ -553,9 +585,9 @@ template void matmul<__half>( __half* xout, const __half* x, const __half* w, co
 template void silu<float>( float* _hb, float* _hb2, const uint64_t hidden_dim, const uint64_t batch_size );
 template void silu<__half>( __half* _hb, __half* _hb2, const uint64_t hidden_dim, const uint64_t batch_size );
 
-template void attention_0_gemm<float>( const float* query,
-                                       const float* key,
-                                       float* att,
+template void attention_0_gemm<float>( const float* const* query_p,
+                                       const float* const* key_p,
+                                       float** att_p,
                                        const uint64_t n_layers,
                                        const uint64_t seq_len,
                                        const uint64_t head_size,
@@ -564,9 +596,9 @@ template void attention_0_gemm<float>( const float* query,
                                        const uint64_t batch_size,
                                        const uint64_t max_batch_size );
 
-template void attention_0_gemm<__half>( const __half* query,
-                                        const __half* key,
-                                        __half* att,
+template void attention_0_gemm<__half>( const __half* const* query_p,
+                                        const __half* const* key_p,
+                                        __half** att_p,
                                         const uint64_t n_layers,
                                         const uint64_t seq_len,
                                         const uint64_t head_size,
@@ -575,9 +607,9 @@ template void attention_0_gemm<__half>( const __half* query,
                                         const uint64_t batch_size,
                                         const uint64_t max_batch_size );
 
-template void attention_2_gemm<float>( const float* query,
-                                       const float* key,
-                                       float* att,
+template void attention_2_gemm<float>( const float* const* att_p,
+                                       const float* const* value_p,
+                                       float** xb_p,
                                        const uint64_t n_layers,
                                        const uint64_t seq_len,
                                        const uint64_t head_size,
@@ -586,9 +618,9 @@ template void attention_2_gemm<float>( const float* query,
                                        const uint64_t batch_size,
                                        const uint64_t max_batch_size );
 
-template void attention_2_gemm<__half>( const __half* query,
-                                        const __half* key,
-                                        __half* att,
+template void attention_2_gemm<__half>( const __half* const* att_p,
+                                        const __half* const* value_p,
+                                        __half** xb_p,
                                         const uint64_t n_layers,
                                         const uint64_t seq_len,
                                         const uint64_t head_size,
@@ -626,5 +658,45 @@ template void apply_rope<__half>( const uint64_t head_size,
                                   const __half* freq_cis_imag_row,
                                   __half* state_q,
                                   __half* state_k );
+
+template void fill_pointers_init<float>( float** q_p,
+                                         std::vector<float*> query_p_cpu,
+                                         float* query,
+                                         float* att,
+                                         float* xb,
+                                         const uint64_t seq_len,
+                                         const uint64_t head_size,
+                                         const uint64_t n_heads,
+                                         const uint64_t max_batch_size );
+
+template void fill_pointers_init<__half>( __half** q_p,
+                                          std::vector<__half*> query_p_cpu,
+                                          __half* query,
+                                          __half* att,
+                                          __half* xb,
+                                          const uint64_t seq_len,
+                                          const uint64_t head_size,
+                                          const uint64_t n_heads,
+                                          const uint64_t max_batch_size );
+
+template void fill_pointers_kv<float>( float** k_p,
+                                       std::vector<float*> key_p_cpu,
+                                       float* key,
+                                       float* value,
+                                       const uint64_t* id_allocation,
+                                       const uint64_t head_size,
+                                       const uint64_t n_heads,
+                                       const uint64_t batch_size,
+                                       const uint64_t max_batch_size );
+
+template void fill_pointers_kv<__half>( __half** k_p,
+                                        std::vector<__half*> key_p_cpu,
+                                        __half* key,
+                                        __half* value,
+                                        const uint64_t* id_allocation,
+                                        const uint64_t head_size,
+                                        const uint64_t n_heads,
+                                        const uint64_t batch_size,
+                                        const uint64_t max_batch_size );
 
 } // namespace glinthawk::models::common::cuda
