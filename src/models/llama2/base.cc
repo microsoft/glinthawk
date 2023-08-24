@@ -177,6 +177,7 @@ size_t LayerWeights<DType>::layer_size( const Config& config )
 
 /* RUN STATE */
 
+// TODO: optimize run state memory usage
 template<typename DType>
 RunState<DType>::RunState( const Config& config, DType* buffer )
   : buffer_( buffer )
@@ -191,6 +192,11 @@ RunState<DType>::RunState( const Config& config, DType* buffer )
   , att( hb2 + config.hidden_dim * config.batch_size )
   , logits( att + config.n_heads * config.seq_len * config.batch_size )
   , temp_softmax( logits + config.vocab_size * config.batch_size )
+  , q_p( reinterpret_cast<DType**>( temp_softmax + config.n_heads * config.batch_size ) )
+  , att_p( q_p + config.batch_size * config.n_heads )
+  , xb_p( att_p + config.batch_size * config.n_heads )
+  , k_p( xb_p + config.batch_size * config.n_heads )
+  , v_p( k_p + config.batch_size * config.n_heads )
 {
 }
 
@@ -199,7 +205,7 @@ size_t RunState<DType>::state_size( const Config& config )
 {
   return sizeof( DType ) * config.batch_size
          * ( config.dim * 6 + config.hidden_dim * 2 + config.n_heads * config.seq_len + config.vocab_size
-             + config.n_heads );
+             + config.n_heads ) + sizeof(DType*) * 5 * config.batch_size * config.n_heads;
 }
 
 /* KV CACHE */
@@ -264,6 +270,7 @@ BaseLlama2<DType>::BaseLlama2( const Config& config,
   , config_( config )
   , start_layer_num_( start_layer )
   , end_layer_num_( end_layer == -1 ? config_.n_layers - 1 : end_layer )
+  , id_allocation_( std::vector<uint64_t>(config.batch_size) )
   , state_( config_, run_state_buffer_.get() )
   , kv_cache_( config_, kv_cache_buffer_.get(), start_layer_num_, end_layer_num_ )
   , base_weights_( config_, base_weights_buffer_.get() )

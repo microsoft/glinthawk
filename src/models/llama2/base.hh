@@ -98,18 +98,23 @@ struct RunState
 
   static size_t state_size( const Config& config );
 
-  DType* buffer_;         // we use this buffer for everything, including activations
-  DType* x {};            // activation at current time stamp (B, dim)
-  DType* xb {};           // same, but inside a residual branch (B, dim)
-  DType* xb2 {};          // an additional buffer just for convenience (B, dim)
-  DType* q {};            // query (B, dim)
-  DType* k {};            // key (B, dim)
-  DType* v {};            // value (B, dim)
-  DType* hb {};           // buffer for hidden dimension in the ffn (B, hidden_dim)
-  DType* hb2 {};          // buffer for hidden dimension in the ffn (B, hidden_dim)
-  DType* att {};          // buffer for scores/attention values (B, n_heads, seq_len)
-  DType* logits {};       // output logits (B, vocab_size)
-  DType* temp_softmax {}; // temporary buffer for computing softmax (B, n_heads)
+  DType* buffer_;               // we use this buffer for everything, including activations
+  DType* x {};                  // activation at current time stamp (B, dim)
+  DType* xb {};                 // same, but inside a residual branch (B, dim)
+  DType* xb2 {};                // an additional buffer just for convenience (B, dim)
+  DType* q {};                  // query (B, dim)
+  DType* k {};                  // key (B, dim)
+  DType* v {};                  // value (B, dim)
+  DType* hb {};                 // buffer for hidden dimension in the ffn (B, hidden_dim)
+  DType* hb2 {};                // buffer for hidden dimension in the ffn (B, hidden_dim)
+  DType* att {};                // buffer for scores/attention values (B, n_heads, seq_len)
+  DType* logits {};             // output logits (B, vocab_size)
+  DType* temp_softmax {};       // temporary buffer for computing softmax (B, n_heads)
+  DType** q_p {};               // pointer to query heads (B, n_heads)
+  DType** att_p {};             // pointer to attention heads (B, n_heads)
+  DType** xb_p {};              // pointer to xb heads (B, n_heads)
+  DType** k_p {};               // pointer to key heads (B, n_heads)
+  DType** v_p {};               // pointer to value heads (B, n_heads)
 };
 
 template<typename DType>
@@ -145,6 +150,8 @@ protected:
   const Config config_;
   const int32_t start_layer_num_;
   const int32_t end_layer_num_;
+  uint64_t curr_batch_size { 1 };
+  std::vector<uint64_t> id_allocation_ { };
 
   RunState<DType> state_;
   KVCache<DType> kv_cache_;
@@ -162,6 +169,9 @@ protected:
 
 public:
   ~BaseLlama2() override = default;
+
+  BaseLlama2( BaseLlama2&& ) = default;
+  BaseLlama2& operator=( BaseLlama2 && ) = default;
 };
 
 } // namespace glinthawk::models::llama2

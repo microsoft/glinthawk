@@ -25,7 +25,7 @@ int main( int argc, char* argv[] )
     abort();
   }
 
-  if ( argc != 4 ) {
+  if ( argc != 5 ) {
     usage( argv[0] );
     return EXIT_FAILURE;
   }
@@ -47,9 +47,10 @@ int main( int argc, char* argv[] )
     const filesystem::path model_dir_path { argv[1] };
     const filesystem::path tokenizer_path { argv[2] };
 
-    const int batch_size = atoi(argv[3]);
+    const int max_batch_size = atoi(argv[3]);
+    const int batch_size = atoi(argv[4]);
 
-    auto llama = models::llama2::cuda::Llama2<__half>::load( model_dir_path, 0, -1, batch_size );
+    auto llama = models::llama2::cuda::Llama2<__half>::load( model_dir_path, 0, -1, max_batch_size );
    /////////////////////////////////////////////////////////// profile batching //////////////////////////////////////////////////////////////
     // auto llama = models::llama2::cuda::Llama2<__half>::load( model_dir_path, 0, 0, batch_size );
    /////////////////////////////////////////////////////////// profile batching //////////////////////////////////////////////////////////////
@@ -62,6 +63,10 @@ int main( int argc, char* argv[] )
     for (size_t i = 0; i < prompt_tokens.size(); i++)
       prompt_tokens_batch.push_back(vector<uint32_t>(batch_size, prompt_tokens[i]));
 
+    vector<uint32_t> prompt_ids_batch;
+    for (int i = 0; i < batch_size; i++)
+      prompt_ids_batch.push_back((i * max_batch_size) / batch_size);
+
     size_t i = 0;
 
     for ( vector<uint32_t> token = prompt_tokens_batch[0] /* BOS */; token[0] != 2 /* EOS */; ) {
@@ -72,7 +77,7 @@ int main( int argc, char* argv[] )
 
       cout << vocabulary.get_word( token[0] ) << flush;
       GlobalScopeTimer<Timer::Category::TokenGeneration> _;
-      token = llama.forward( token );
+      token = llama -> forward( token, prompt_ids_batch );
     }
 
     cerr << endl << global_timer().summary() << endl;

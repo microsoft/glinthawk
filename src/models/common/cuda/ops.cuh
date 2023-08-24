@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <source_location>
 
 namespace glinthawk::models::common::cuda::ops {
 
@@ -8,6 +9,8 @@ constexpr size_t TPB = 64; /* threads per block */
 
 void init();
 void destroy();
+
+void CHECK_CUDA( const cudaError_t err, const std::source_location location = std::source_location::current() );
 
 template<typename DType>
 void accum( DType* a, const DType* b, const uint64_t size, const uint64_t batch_size );
@@ -40,9 +43,9 @@ template<typename DType>
 void silu( DType* hb, DType* hb2, const uint64_t hidden_dim, const uint64_t batch_size );
 
 template<typename DType>
-void attention_0_gemm( const DType* q,
-                       const DType* k,
-                       DType* att,
+void attention_0_gemm( const DType* const* query_p,
+                       const DType* const* key_p,
+                       DType** att_p,
                        const uint64_t n_layers,
                        const uint64_t seq_len,
                        const uint64_t head_size,
@@ -52,9 +55,9 @@ void attention_0_gemm( const DType* q,
                        const uint64_t max_batch_size );
 
 template<typename DType>
-void attention_2_gemm( const DType* q,
-                       const DType* k,
-                       DType* att,
+void attention_2_gemm( const DType* const* att_p,
+                       const DType* const* value_p,
+                       DType** xb_p,
                        const uint64_t n_layers,
                        const uint64_t seq_len,
                        const uint64_t head_size,
@@ -79,5 +82,27 @@ void apply_rope( const uint64_t head_size,
                  const DType* freq_cis_imag_row,
                  DType* state_q,
                  DType* state_k );
+
+template<typename DType>
+void fill_pointers_init( DType** q_p,
+                         std::vector<DType*> query_p_cpu,
+                         DType* query,
+                         DType* att,
+                         DType* xb,
+                         const uint64_t seq_len,
+                         const uint64_t head_size,
+                         const uint64_t n_heads,
+                         const uint64_t max_batch_size );
+
+template<typename DType>
+void fill_pointers_kv( DType** k_p,
+                       std::vector<DType*> key_p_cpu,
+                       DType* key,
+                       DType* value,
+                       const uint64_t* id_allocation,
+                       const uint64_t head_size,
+                       const uint64_t n_heads,
+                       const uint64_t batch_size,
+                       const uint64_t max_batch_size );
 
 }
