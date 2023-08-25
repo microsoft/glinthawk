@@ -30,11 +30,6 @@ int main( int argc, char* argv[] )
     return EXIT_FAILURE;
   }
 
-  // TODO:
-  // 1. Figure out batch with non-contiguous prompts
-  // 2. Profile batches with 1 layer copied 32 times
-  // 3. Change 70B model to glint format
-
   signal( SIGINT, signal_handler );
 
   FLAGS_logtostderr = true;
@@ -51,9 +46,6 @@ int main( int argc, char* argv[] )
     const int batch_size = atoi(argv[4]);
 
     auto llama = models::llama2::cuda::Llama2<__half>::load( model_dir_path, 0, -1, max_batch_size );
-   /////////////////////////////////////////////////////////// profile batching //////////////////////////////////////////////////////////////
-    // auto llama = models::llama2::cuda::Llama2<__half>::load( model_dir_path, 0, 0, batch_size );
-   /////////////////////////////////////////////////////////// profile batching //////////////////////////////////////////////////////////////
     models::llama2::Vocabulary vocabulary { tokenizer_path };
 
     vector<uint32_t> prompt_tokens { 1,   518,  25580, 29962, 25538, 2211,  25562, 363,  7952,
