@@ -217,10 +217,7 @@ KVCache<DType>::KVCache( const Config& config, DType* buffer, const int32_t star
   , buffer_( buffer )
   , seq_len_( config.seq_len )
   , dim_( config.dim )
-   , n_layers_( end_layer_ - start_layer_ + 1 )
-   /////////////////////////////////////////////////////////// profile batching /////////////////////////////////////////////////////////////
-//  , n_layers_( 32 )
-   /////////////////////////////////////////////////////////// profile batching //////////////////////////////////////////////////////////////
+  , n_layers_( end_layer_ - start_layer_ + 1 )
   , head_size_( config.dim / config.n_heads )
   , batch_size_ (config.batch_size)
 {
@@ -230,13 +227,6 @@ template<typename DType>
 size_t KVCache<DType>::cache_size( const Config& config, const int32_t start_layer, const int32_t end_layer )
 {
    return sizeof( DType ) * config.seq_len * config.dim * 2 * ( end_layer - start_layer + 1 ) * config.batch_size;
-   /////////////////////////////////////////////////////////// profile batching //////////////////////////////////////////////////////////////
-//  if (end_layer == 0 && start_layer == 0) {
-//    return sizeof( DType ) * config.seq_len * config.dim * 2 * ( 32 ) * config.batch_size;
-//  } else {
-//    return 1;
-//  }
-   /////////////////////////////////////////////////////////// profile batching //////////////////////////////////////////////////////////////
 }
 
 template<typename DType>

@@ -163,37 +163,12 @@ void Llama2<DType>::pass_begin( const std::vector<uint32_t>& token )
 }
 
 template<typename DType>
-__global__ void check_eq_cuda_arrs( const DType* x1,
-                          const DType* x2,
-                          const int size )
-{
-  DType eps_ = DType(1e-5);
-  bool differ = false;
-  for ( uint64_t i = 0; i < size; i++ ) {
-    if ( x1[i] < x2[i] && x2[i]-x1[i] > eps_){
-      differ = true;
-      printf("%f, %f, %" PRIu64 "\n", __half2float(x1[i]), __half2float(x2[i]), i);
-    }
-    if ( x1[i] > x2[i] && x1[i]-x2[i] > eps_){
-      differ = true;
-      printf("%f, %f, %" PRIu64 "\n", __half2float(x1[i]), __half2float(x2[i]), i);
-    }
-  }
-  if (differ)
-    printf("The two arrays differ\n");
-}
-
-template<typename DType>
 void Llama2<DType>::transformer_layer( const int32_t layer_num, const uint64_t token_pos )
 {
   DType* const x = this->state_.x;
   const uint64_t dim = this->config_.dim;
   const uint64_t hidden_dim = this->config_.hidden_dim;
   const uint64_t head_size = dim / this->config_.n_heads;
-
-//  printf("Input\n");
-//  check_eq_cuda_arrs<<<1, 1>>>(x, x + dim, dim);
-//  cudaDeviceSynchronize();
 
   // pluck out the "pos" row of freq_cis_real and freq_cis_imag
   const DType* freq_cis_real_row = this->base_weights_.freq_cis_real + token_pos * head_size / 2;
@@ -204,26 +179,11 @@ void Llama2<DType>::transformer_layer( const int32_t layer_num, const uint64_t t
   // attention rmsnorm
   ops::rmsnorm( this->state_.xb, x, layer_weights.rms_att_weight, dim, this->curr_batch_size );
 
-//  printf("RMS Norm\n");
-//  check_eq_cuda_arrs<<<1, 1>>>(this->state_.xb, this->state_.xb + dim, dim);
-//  cudaDeviceSynchronize();
-
   // qkv matmuls for this position
   ops::matmul( this->state_.q, this->state_.xb, layer_weights.wq, this->curr_batch_size, dim, dim );
   ops::matmul( this->state_.k, this->state_.xb, layer_weights.wk, this->curr_batch_size, dim, dim );
   ops::matmul( this->state_.v, this->state_.xb, layer_weights.wv, this->curr_batch_size, dim, dim );
 
-//  printf("Q\n");
-//  check_eq_cuda_arrs<<<1, 1>>>(this->state_.q, this->state_.q + dim, dim);
-//  cudaDeviceSynchronize();
-
-//  printf("K\n");
-//  check_eq_cuda_arrs<<<1, 1>>>(this->state_.k, this->state_.k + dim, dim);
-//  cudaDeviceSynchronize();
-
-//  printf("V\n");
-//  check_eq_cuda_arrs<<<1, 1>>>(this->state_.v, this->state_.v + dim, dim);
-//  cudaDeviceSynchronize();
 
   ops::apply_rope( head_size,
                    this->config_.n_heads,
@@ -233,13 +193,6 @@ void Llama2<DType>::transformer_layer( const int32_t layer_num, const uint64_t t
                    this->state_.q,
                    this->state_.k );
 
-//  printf("Q-rope\n");
-//  check_eq_cuda_arrs<<<1, 1>>>(this->state_.q, this->state_.q + dim, dim);
-//  cudaDeviceSynchronize();
-
-//  printf("K-rope\n");
-//  check_eq_cuda_arrs<<<1, 1>>>(this->state_.k, this->state_.k + dim, dim);
-//  cudaDeviceSynchronize();
 
   // save key,value at this time step (pos) to our kv cache
   for (size_t i = 0; i < this->curr_batch_size; i++){
@@ -263,7 +216,7 @@ void Llama2<DType>::transformer_layer( const int32_t layer_num, const uint64_t t
   ops::attention_0_gemm( this->state_.q_p,
                          this->state_.k_p,
                          this->state_.att_p,
-                         this->config_.n_layers,
+                         this->kv_cache_.n_layers_,
                          this->config_.seq_len,
                          head_size,
                          this->config_.n_heads,
@@ -271,22 +224,14 @@ void Llama2<DType>::transformer_layer( const int32_t layer_num, const uint64_t t
                          this->curr_batch_size,
                          this->config_.batch_size);
 
-//  printf("Post att_0\n");
-//  check_eq_cuda_arrs<<<1, 1>>>(this->state_.att, this->state_.att + this->config_.seq_len * this->config_.n_heads, this->config_.seq_len * this->config_.n_heads);
-//  cudaDeviceSynchronize();
-  
   // softmax
   ops::attention_softmax(
     this->state_.att, token_pos, this->config_.seq_len, this->config_.n_heads, this->state_.temp_softmax, this->curr_batch_size );
 
-//  printf("Post softmax\n");
-//  check_eq_cuda_arrs<<<1, 1>>>(this->state_.att, this->state_.att + this->config_.seq_len * this->config_.n_heads, this->config_.seq_len * this->config_.n_heads);
-//  cudaDeviceSynchronize();
-
   ops::attention_2_gemm( this->state_.att_p,
                          this->state_.v_p,
                          this->state_.xb_p,
-                         this->config_.n_layers,
+                         this->kv_cache_.n_layers_,
                          this->config_.seq_len,
                          head_size,
                          this->config_.n_heads,
@@ -295,63 +240,27 @@ void Llama2<DType>::transformer_layer( const int32_t layer_num, const uint64_t t
                          this->config_.batch_size );
   // end of multihead attention
 
-//  printf("Post att_2\n");
-//  check_eq_cuda_arrs<<<1, 1>>>(this->state_.xb, this->state_.xb + dim, dim);
-//  cudaDeviceSynchronize();
-
   // final matmul to get the output of the attention
   ops::matmul( this->state_.xb2, this->state_.xb, layer_weights.wo, this->curr_batch_size, dim, dim );
-
-//  printf("Post wo\n");
-//  check_eq_cuda_arrs<<<1, 1>>>(this->state_.xb2, this->state_.xb2 + dim, dim);
-//  cudaDeviceSynchronize();
 
   // residual connection back into x
   ops::accum( x, this->state_.xb2, dim, this->curr_batch_size );
 
-//  printf("Post accum\n");
-//  check_eq_cuda_arrs<<<1, 1>>>(x, x + dim, dim);
-//  cudaDeviceSynchronize();
-
   // ffn rmsnorm
   ops::rmsnorm( this->state_.xb, x, layer_weights.rms_ffn_weight, dim, this->curr_batch_size );
-
-//  printf("2nd RMS Norm\n");
-//  check_eq_cuda_arrs<<<1, 1>>>(this->state_.xb, this->state_.xb + dim, dim);
-//  cudaDeviceSynchronize();
 
   // now for ffn in we have: self.w2(F.silu(self.w1(x)) * self.w3(x))
   // first calculate self.w1(x) and self.w3(x)
   ops::matmul( this->state_.hb, this->state_.xb, layer_weights.w1, this->curr_batch_size, dim, hidden_dim );
   ops::matmul( this->state_.hb2, this->state_.xb, layer_weights.w3, this->curr_batch_size, dim, hidden_dim );
 
-//  printf("Post w1\n");
-//  check_eq_cuda_arrs<<<1, 1>>>(this->state_.hb, this->state_.hb + hidden_dim, hidden_dim);
-//  cudaDeviceSynchronize();
-
-//  printf("Post w3\n");
-//  check_eq_cuda_arrs<<<1, 1>>>(this->state_.hb2, this->state_.hb2 + hidden_dim, hidden_dim);
-//  cudaDeviceSynchronize();
-
   ops::silu( this->state_.hb, this->state_.hb2, hidden_dim, this->curr_batch_size );
-
-//  printf("Post silu\n");
-//  check_eq_cuda_arrs<<<1, 1>>>(this->state_.hb, this->state_.hb + hidden_dim, hidden_dim);
-//  cudaDeviceSynchronize();
 
   // final matmul to get the output of the ffn
   ops::matmul( this->state_.xb, this->state_.hb, layer_weights.w2, this->curr_batch_size, hidden_dim, dim );
 
-//  printf("Post w2\n");
-//  check_eq_cuda_arrs<<<1, 1>>>(this->state_.xb, this->state_.xb + dim, dim);
-//  cudaDeviceSynchronize();
-
   // residual connection
   ops::accum( x, this->state_.xb, dim, this->curr_batch_size );
-
-//  printf("Post last accum\n");
-//  check_eq_cuda_arrs<<<1, 1>>>(x, x + dim, dim);
-//  cudaDeviceSynchronize();
 
 }
 
@@ -498,13 +407,6 @@ std::vector<uint32_t> Llama2<DType>::forward( const std::vector<uint32_t>& token
    for ( int layer_num = this->start_layer_num_; layer_num <= this->end_layer_num_; layer_num++ ) {
      transformer_layer( layer_num, token_pos_ );
    }
-
-   /////////////////////////////////////////////////////////// profile batching //////////////////////////////////////////////////////////////
-//  for ( int layer_num = 0; layer_num <= 31; layer_num++ ) {
-//    transformer_layer( 0, token_pos_ );
-//  }
-   /////////////////////////////////////////////////////////// profile batching //////////////////////////////////////////////////////////////
-
 
   pass_end();
 
