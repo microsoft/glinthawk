@@ -75,7 +75,7 @@ std::string Timer::pp_ns( const uint64_t duration_ns )
 {
   ostringstream out;
 
-  out << fixed << setprecision( 1 ) << setw( 5 );
+  out << fixed << setprecision( 2 ) << setw( 5 );
 
   if ( duration_ns < THOUSAND ) {
     out << duration_ns << " ns";
