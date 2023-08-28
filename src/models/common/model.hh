@@ -85,6 +85,8 @@ private:
   size_t serialized_size() const;
 
 public:
+  InferenceState() {}
+
   InferenceState( const PromptID prompt_id,
                   const ModelID model_id,
                   const uint32_t token,
