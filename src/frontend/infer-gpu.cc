@@ -42,23 +42,32 @@ int main( int argc, char* argv[] )
     const filesystem::path model_dir_path { argv[1] };
     const filesystem::path tokenizer_path { argv[2] };
 
-    auto llama = models::llama2::cuda::Llama2<__half>::load( model_dir_path );
     models::llama2::Vocabulary vocabulary { tokenizer_path };
 
-    vector<uint32_t> prompt_tokens { 1,   518,  25580, 29962, 25538, 2211,  25562, 363,  7952,
-                                     292, 9045, 29891, 29889, 518,   29914, 25580, 29962 };
+    using Llama2 = models::llama2::cuda::Llama2<__half>;
 
-    size_t i = 0;
+    models::InferenceState state;
+    vector<unique_ptr<Llama2::ContextType>> contexts; // each layer needs a different context
 
-    for ( uint32_t token = prompt_tokens[0] /* BOS */; token != 2 /* EOS */; ) {
-      if ( i < prompt_tokens.size() ) {
-        token = prompt_tokens[i];
-        i++;
+    while ( state.token() != 2 /* EOS */ ) {
+      const auto current_layer = state.next_layer();
+      auto llama = Llama2::load_model( model_dir_path, current_layer, current_layer );
+
+      if ( contexts.empty() ) {
+        contexts.resize( llama.config().n_layers );
       }
 
-      cout << vocabulary.get_word( token ) << flush;
-      GlobalScopeTimer<Timer::Category::TokenGeneration> _;
-      token = llama.forward( token );
+      // create context for this layer if it doesn't exist yet
+      if ( contexts[current_layer] == nullptr ) {
+        contexts[current_layer] = make_unique<Llama2::ContextType>( llama.config() );
+      }
+
+      // forward the current token
+      state = llama.forward( state, *contexts[current_layer] );
+
+      if ( state.next_layer() == 0 ) {
+        cout << vocabulary.get_word( state.token() ) << flush;
+      }
     }
 
     cerr << endl << global_timer().summary() << endl;
