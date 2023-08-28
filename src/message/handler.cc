@@ -1,7 +1,7 @@
-#include "message.hh"
+#include "handler.hh"
 
 #include "models/common/model.hh"
-#include "session.hh"
+#include "net/session.hh"
 
 using namespace std;
 using namespace glinthawk;
