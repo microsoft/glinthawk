@@ -51,8 +51,7 @@ int main( int argc, char* argv[] )
     auto llama = models::llama2::cuda::Llama2<__half>::load( model_dir_path, 0, -1, max_batch_size, conc_size );
     models::llama2::Vocabulary vocabulary { tokenizer_path };
 
-    vector<uint32_t> prompt_tokens { 1,   518,  25580, 29962, 25538, 2211,  25562, 363,  7952,
-                                     292, 9045, 29891, 29889, 518,   29914, 25580, 29962 };
+    using Llama2 = models::llama2::cuda::Llama2<__half>;
 
     vector<vector<uint32_t>> prompt_tokens_batch;
     for (size_t i = 0; i < prompt_tokens.size(); i++)
