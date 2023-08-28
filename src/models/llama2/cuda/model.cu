@@ -49,13 +49,13 @@ std::string dtype_str()
 
 template<typename DType>
 Context<DType>::Context( const Config& config )
-  : storage_( [&] {
+  : storage_( [&]() -> decltype( storage_ ) {
     DType* ptr;
-    CUDA_CHECK( cudaMalloc( &ptr, InferenceContext<DType>::context_size( config ) ) );
+    CHECK_CUDA( cudaMalloc( &ptr, InferenceContext<DType>::context_size( config ) ) );
     return { ptr, cuda_deleter };
   }() )
-  , glinthawk::models::llama2::InferenceContext<DType>::buffer_( storage_.get() )
 {
+  this->buffer_ = storage_.get();
 }
 
 template<typename DType>
@@ -286,9 +286,9 @@ void Llama2<DType>::transformer_layer( const int32_t layer_num, const uint64_t t
 
   // multihead attention. for each head and for each token up to and including the current one
   ops::attention_0_gemm( this->state_.q,
-                         context.buffer_ + layer_num * ( dim * 2 ),
+                         context.buffer_ + ( layer_num - this->config_.start_layer_num ) * ( dim * 2 ),
                          this->state_.att,
-                         this->config_.n_layers,
+                         this->config_.end_layer_num - this->config_.start_layer_num + 1,
                          this->config_.seq_len,
                          head_size,
                          this->config_.n_heads,
@@ -299,9 +299,9 @@ void Llama2<DType>::transformer_layer( const int32_t layer_num, const uint64_t t
     this->state_.att, token_pos, this->config_.seq_len, this->config_.n_heads, this->state_.temp_softmax );
 
   ops::attention_2_gemm( this->state_.att,
-                         context.buffer_ + layer_num * ( dim * 2 ) + dim,
+                         context.buffer_ + ( layer_num - this->config_.start_layer_num ) * ( dim * 2 ) + dim,
                          this->state_.xb,
-                         this->config_.n_layers,
+                         this->config_.end_layer_num - this->config_.start_layer_num + 1,
                          this->config_.seq_len,
                          head_size,
                          this->config_.n_heads,
@@ -351,55 +351,45 @@ uint32_t extract_token( const RunState<DType>& state, const Config& config, cons
     // greedy argmax sampling
     next_token = ops::argmax( state.logits, config.vocab_size );
   } else {
-    // apply the temperature to the logits
-    for ( auto q = 0; q < config.vocab_size; q++ ) {
-      state.logits[q] /= temp;
-    }
-
-    // apply softmax to the logits to get the probabilities for next token
-    ops::softmax( state.logits, config.vocab_size );
-
-    // we now want to sample from this distribution to get the next token
-    next_token = ops::sample( state.logits, config.vocab_size );
+    throw runtime_error( "not implemented" );
   }
 
   return next_token;
 }
 
 template<typename DType>
-InferenceState Llama2<DType>::forward( const InferenceState& inference_state, ContextType& context )
+InferenceState Llama2<DType>::forward( const InferenceState& state, ContextType& context )
 {
-  CHECK_EQ( inference_state.next_layer(), this->config_.start_layer_num ) << "next_layer must be the start layer";
+  CHECK_EQ( state.next_layer(), this->config_.start_layer_num ) << "next_layer must be the start layer";
 
-  if ( inference_state.next_layer() == 0 ) {
-    pass_begin( inference_state.token() );
+  if ( state.next_layer() == 0 ) {
+    pass_begin( state.token() );
   } else {
     // load the activations
-    CHECK_CUDA( cudaMemcpy( this->state_.x,
-                            inference_state.activations().ptr.get(),
-                            this->config_.dim * sizeof( DType ),
-                            cudaMemcpyHostToDevice ) );
+    CHECK_CUDA( cudaMemcpy(
+      this->state_.x, state.activations().ptr.get(), this->config_.dim * sizeof( DType ), cudaMemcpyHostToDevice ) );
   }
 
   for ( int layer_num = this->config_.start_layer_num; layer_num <= this->config_.end_layer_num; layer_num++ ) {
-    transformer_layer( layer_num, inference_state.token_pos(), context );
+    transformer_layer( layer_num, state.token_pos(), context );
   }
 
   if ( this->config_.end_layer_num == this->config_.n_layers - 1 ) {
     pass_end();
 
     return {
-      inference_state.prompt_id(),                                                 // prompt id
-      inference_state.model_id(),                                                  // model id
-      extract_token( this->state_, this->config_, inference_state.temperature() ), // token
-      inference_state.token_pos() + 1,                                             // token_pos
-      0,                                                                           // next_layer
-      inference_state.temperature(),                                               // temperature
-      DataBuffer {}                                                                // activations
+      state.prompt_id(),                                                 // prompt id
+      state.model_id(),                                                  // model id
+      extract_token( this->state_, this->config_, state.temperature() ), // token
+      state.token_pos() + 1,                                             // token_pos
+      0,                                                                 // next_layer
+      state.temperature(),                                               // temperature
+      DataBuffer {}                                                      // activations
     };
   }
 
-  DataBuffer activations { is_same_v<DType, float> ? DataType::Type::Float32 : DataType::Type::Float16,
+  DataBuffer activations { is_same_v<DType, float> ? glinthawk::models::DataType::Type::Float32
+                                                   : glinthawk::models::DataType::Type::Float16,
                            make_unique<uint8_t[]>( this->config_.dim * sizeof( DType ) ),
                            this->config_.dim };
 
@@ -407,12 +397,12 @@ InferenceState Llama2<DType>::forward( const InferenceState& inference_state, Co
     cudaMemcpy( activations.ptr.get(), this->state_.x, this->config_.dim * sizeof( DType ), cudaMemcpyDeviceToHost ) );
 
   return {
-    inference_state.prompt_id(),                              // prompt id
-    inference_state.model_id(),                               // model id
-    inference_state.token(),                                  // token
-    inference_state.token_pos(),                              // token_pos
+    state.prompt_id(),                                        // prompt id
+    state.model_id(),                                         // model id
+    state.token(),                                            // token
+    state.token_pos(),                                        // token_pos
     static_cast<uint32_t>( this->config_.end_layer_num ) + 1, // next_layer
-    inference_state.temperature(),                            // temperature
+    state.temperature(),                                      // temperature
     move( activations )                                       // activations
   };
 }
@@ -423,6 +413,7 @@ uint32_t Llama2<DType>::forward( const uint32_t token )
   throw runtime_error( "not implemented" );
 }
 
+template class Context<__half>;
 template class Llama2<__half>;
 
 } // namespace glinthawk::models::llama2::cuda
