@@ -46,14 +46,17 @@ int main( int argc, char* argv[] )
     const filesystem::path model_dir_path { argv[1] };
     const filesystem::path tokenizer_path { argv[2] };
 
-    models::llama2::Vocabulary vocabulary { tokenizer_path };
-
     using Llama2 = models::llama2::cuda::Llama2<__half>;
 
-    models::InferenceState state;
+    models::llama2::Vocabulary vocabulary { tokenizer_path };
     vector<unique_ptr<Llama2::ContextType>> contexts; // each layer needs a different context
+    string serialized_state = models::InferenceState {}.serialize();
 
-    while ( state.token() != 2 /* EOS */ ) {
+    while ( true ) {
+      // first, let's deserialize the state
+      models::InferenceState state { serialized_state };
+
+      // load the model for the next layer
       const auto current_layer = state.next_layer();
       auto llama = Llama2::load_model( model_dir_path, current_layer, current_layer );
 
@@ -69,9 +72,15 @@ int main( int argc, char* argv[] )
       // forward the current token
       state = llama.forward( state, *contexts[current_layer] );
 
+      if ( state.token() == 2 /* EOS */ ) {
+        break;
+      }
+
       if ( state.next_layer() == 0 ) {
         cout << vocabulary.get_word( state.token() ) << flush;
       }
+
+      serialized_state = state.serialize();
     }
 
     cerr << endl << global_timer().summary() << endl;
