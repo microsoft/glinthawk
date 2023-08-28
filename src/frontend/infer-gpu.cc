@@ -8,6 +8,10 @@
 #include "models/llama2/cuda/model.cuh"
 #include "util/timer.hh"
 
+#ifndef GLINTHAWK_CUDA_ENABLED
+#error "This file should only be compiled when CUDA is enabled."
+#endif
+
 using namespace std;
 using namespace glinthawk;
 
