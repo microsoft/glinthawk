@@ -19,6 +19,7 @@ file ( GLOB SOURCE
   src/util/*.cc
   src/net/*.cc
   src/compute/*.cc
+  src/message/*.cc
   src/worker/*.cc
 )
 
