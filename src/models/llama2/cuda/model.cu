@@ -42,13 +42,13 @@ std::string dtype_str()
 
 template<typename DType>
 Context<DType>::Context( const Config& config )
-  : storage_( [&] {
+  : storage_( [&]() -> decltype( storage_ ) {
     DType* ptr;
-    CUDA_CHECK( cudaMalloc( &ptr, InferenceContext<DType>::context_size( config ) ) );
+    CHECK_CUDA( cudaMalloc( &ptr, InferenceContext<DType>::context_size( config ) ) );
     return { ptr, cuda_deleter };
   }() )
-  , glinthawk::models::llama2::InferenceContext<DType>::buffer_( storage_.get() )
 {
+  this->buffer_ = storage_.get();
 }
 
 template<typename DType>
@@ -204,10 +204,24 @@ void Llama2<DType>::transformer_layer( const int32_t layer_num ) // NEEDS CONTEX
 
   // multihead attention. for each head and for each token up to and including the current one
   ops::attention_0_gemm( this->state_.q,
+<<<<<<< HEAD
                          this->kv_cache_.key( layer_num, 0, 0, 0 ),
+||||||| parent of 6e644b8 (llama2/model.cu: Fix a bug triggered when partial models are loaded.)
+                         context.buffer_ + layer_num * ( dim * 2 ),
+=======
+                         context.buffer_ + ( layer_num - this->config_.start_layer_num ) * ( dim * 2 ),
+>>>>>>> 6e644b8 (llama2/model.cu: Fix a bug triggered when partial models are loaded.)
                          this->state_.att,
+<<<<<<< HEAD
                          n_layers_loaded,
                          seq_len,
+||||||| parent of 6e644b8 (llama2/model.cu: Fix a bug triggered when partial models are loaded.)
+                         this->config_.n_layers,
+                         this->config_.seq_len,
+=======
+                         this->config_.end_layer_num - this->config_.start_layer_num + 1,
+                         this->config_.seq_len,
+>>>>>>> 6e644b8 (llama2/model.cu: Fix a bug triggered when partial models are loaded.)
                          head_size,
                          n_kv_heads,
                          gqa_size,
@@ -225,10 +239,24 @@ void Llama2<DType>::transformer_layer( const int32_t layer_num ) // NEEDS CONTEX
                           curr_conc_lvl );
 
   ops::attention_2_gemm( this->state_.att,
+<<<<<<< HEAD
                          this->kv_cache_.value( layer_num, 0, 0, 0 ),
+||||||| parent of 6e644b8 (llama2/model.cu: Fix a bug triggered when partial models are loaded.)
+                         context.buffer_ + layer_num * ( dim * 2 ) + dim,
+=======
+                         context.buffer_ + ( layer_num - this->config_.start_layer_num ) * ( dim * 2 ) + dim,
+>>>>>>> 6e644b8 (llama2/model.cu: Fix a bug triggered when partial models are loaded.)
                          this->state_.xb,
+<<<<<<< HEAD
                          n_layers_loaded,
                          seq_len,
+||||||| parent of 6e644b8 (llama2/model.cu: Fix a bug triggered when partial models are loaded.)
+                         this->config_.n_layers,
+                         this->config_.seq_len,
+=======
+                         this->config_.end_layer_num - this->config_.start_layer_num + 1,
+                         this->config_.seq_len,
+>>>>>>> 6e644b8 (llama2/model.cu: Fix a bug triggered when partial models are loaded.)
                          head_size,
                          n_kv_heads,
                          gqa_size,
@@ -460,6 +488,7 @@ uint32_t Llama2<DType>::forward( const uint32_t& token, const uint32_t& prompt_i
   return forward( token_vector, prompt_id_vector, token_pos_vector )[0];
 }
 
+template class Context<__half>;
 template class Llama2<__half>;
 
 } // namespace glinthawk::models::llama2::cuda
