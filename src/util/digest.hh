@@ -1,9 +1,11 @@
 #pragma once
 
 #include <array>
+#include <compare>
 #include <cstring>
 #include <functional>
 #include <openssl/sha.h>
+#include <sstream>
 #include <string>
 #include <string_view>
 
@@ -27,6 +29,19 @@ struct SHA256Hash
   auto operator<=>( const SHA256Hash& other ) const
   {
     return std::memcmp( hash.data(), other.hash.data(), SHA256_DIGEST_LENGTH );
+  }
+
+  bool operator==( const SHA256Hash& other ) const = default;
+
+  std::string to_string() const
+  {
+    std::ostringstream result;
+
+    for ( const auto& byte : hash ) {
+      result << std::hex << static_cast<int>( byte );
+    }
+
+    return result.str();
   }
 };
 
