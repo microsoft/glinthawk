@@ -225,7 +225,7 @@ DType* InferenceContext<DType>::key( const Config& config,
                                      const int32_t head_num )
 {
   return buffer_ + token_num * ( ( config.end_layer_num - config.start_layer_num + 1 ) * config.dim * 2 )
-         + layer_num * ( config.dim * 2 ) + head_num * ( config.dim / config.n_heads );
+         + ( layer_num - config.start_layer_num ) * ( config.dim * 2 ) + head_num * ( config.dim / config.n_heads );
 }
 
 template<typename DType>
@@ -234,8 +234,7 @@ DType* InferenceContext<DType>::value( const Config& config,
                                        const int32_t token_num,
                                        const int32_t head_num )
 {
-  return buffer_ + token_num * ( ( config.end_layer_num - config.start_layer_num + 1 ) * config.dim * 2 )
-         + layer_num * ( config.dim * 2 ) + head_num * ( config.dim / config.n_heads ) + config.dim;
+  return key( config, layer_num, token_num, head_num ) + config.dim;
 }
 
 /* BaseLlama2 */
