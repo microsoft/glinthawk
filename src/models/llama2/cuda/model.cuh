@@ -18,7 +18,9 @@ template<typename DType>
 class Llama2 : public glinthawk::models::llama2::BaseLlama2<DType, Context<DType>>
 {
 public:
-  using ContextType = Context<DType>;
+  using ContextType = glinthawk::models::llama2::BaseLlama2<DType, Context<DType>>::ContextType;
+  using ConfigType = glinthawk::models::llama2::BaseLlama2<DType, Context<DType>>::ConfigType;
+  using DataType = glinthawk::models::llama2::BaseLlama2<DType, Context<DType>>::DataType;
 
 private:
   void pass_begin( const std::vector<uint32_t>& token );
