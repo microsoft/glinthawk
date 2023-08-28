@@ -18,7 +18,7 @@ include_directories ( src )
 file ( GLOB SOURCE
   src/util/*.cc
   src/net/*.cc
-  src/nn/*.cc
+  src/compute/*.cc
   src/worker/*.cc
 )
 
