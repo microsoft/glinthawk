@@ -127,8 +127,8 @@ struct InferenceContext
   DType* value( const Config& config, const int32_t layer_num, const int32_t token_num, const int32_t head_num );
 };
 
-template<typename DType, typename ContextType>
-class BaseLlama2 : public virtual glinthawk::models::Model<ContextType>
+template<typename DType, typename Context>
+class BaseLlama2 : public virtual glinthawk::models::Model<Context>
 {
 protected:
   std::unique_ptr<DType, void ( * )( DType* )> base_weights_buffer_;
@@ -149,6 +149,12 @@ protected:
 
 public:
   ~BaseLlama2() override = default;
+
+  using ConfigType = Config;
+  using ContextType = Context;
+  using DataType = DType;
+
+  Config config() const { return config_; }
 };
 
 } // namespace glinthawk::models::llama2
