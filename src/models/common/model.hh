@@ -116,6 +116,12 @@ public:
   uint32_t next_layer() const { return next_layer_; }
   float temperature() const { return temperature_; }
 
+  void set_token( const uint32_t token ) { token_ = token; }
+  void set_token_pos( const uint32_t token_pos ) { token_pos_ = token_pos; }
+  void set_next_layer( const uint32_t next_layer ) { next_layer_ = next_layer; }
+  void set_temperature( const float temperature ) { temperature_ = temperature; }
+  void set_activations( DataBuffer&& activations ) { activations_ = std::move( activations ); }
+
   const DataBuffer& activations() const { return activations_; }
 };
 
@@ -123,9 +129,17 @@ template<typename Context>
 class Model
 {
 public:
+<<<<<<< HEAD
   virtual ~Model() = default;
   virtual InferenceState forward( const InferenceState& inference_state, const uint32_t& prompt_id ) = 0;
   virtual std::vector<InferenceState> forward( const std::vector<InferenceState>& inference_state_s, const std::vector<uint32_t>& prompt_id_s ) = 0;
+||||||| parent of d22c38f (model.hh: Pass an R-value reference to the state in forward().)
+  virtual ~Model() {}
+  virtual InferenceState forward( const InferenceState& inference_state, Context& context ) = 0;
+=======
+  virtual ~Model() {}
+  virtual InferenceState forward( InferenceState&& inference_state, Context& context ) = 0;
+>>>>>>> d22c38f (model.hh: Pass an R-value reference to the state in forward().)
 };
 
 } // namespace glinthawk::models

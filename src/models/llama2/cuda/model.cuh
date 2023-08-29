@@ -44,7 +44,13 @@ public:
 
   ~Llama2();
 
+<<<<<<< HEAD
   InferenceState forward( const InferenceState& inference_state, const uint32_t& prompt_id ) override;
+||||||| parent of d22c38f (model.hh: Pass an R-value reference to the state in forward().)
+  InferenceState forward( const InferenceState& inference_state, ContextType& context ) override;
+=======
+  InferenceState forward( InferenceState&& inference_state, ContextType& context ) override;
+>>>>>>> d22c38f (model.hh: Pass an R-value reference to the state in forward().)
 
   std::vector<InferenceState> forward( const std::vector<InferenceState>& inference_state_s, const std::vector<uint32_t>& prompt_id_s ) override;
 
