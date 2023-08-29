@@ -37,7 +37,7 @@ public:
 
   ~Llama2();
 
-  InferenceState forward( const InferenceState& inference_state, ContextType& context ) override;
+  InferenceState forward( InferenceState&& inference_state, ContextType& context ) override;
 
   uint32_t forward( const uint32_t token );
 };

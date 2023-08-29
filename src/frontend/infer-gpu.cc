@@ -70,7 +70,7 @@ int main( int argc, char* argv[] )
       }
 
       // forward the current token
-      state = llama.forward( state, *contexts[current_layer] );
+      state = llama.forward( move( state ), *contexts[current_layer] );
 
       if ( state.token() == 2 /* EOS */ ) {
         break;

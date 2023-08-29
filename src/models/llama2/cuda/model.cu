@@ -358,7 +358,7 @@ uint32_t extract_token( const RunState<DType>& state, const Config& config, cons
 }
 
 template<typename DType>
-InferenceState Llama2<DType>::forward( const InferenceState& state, ContextType& context )
+InferenceState Llama2<DType>::forward( InferenceState&& state, ContextType& context )
 {
   CHECK_EQ( state.next_layer(), this->config_.start_layer_num ) << "next_layer must be the start layer";
 
@@ -377,15 +377,12 @@ InferenceState Llama2<DType>::forward( const InferenceState& state, ContextType&
   if ( this->config_.end_layer_num == this->config_.n_layers - 1 ) {
     pass_end();
 
-    return {
-      state.prompt_id(),                                                 // prompt id
-      state.model_id(),                                                  // model id
-      extract_token( this->state_, this->config_, state.temperature() ), // token
-      state.token_pos() + 1,                                             // token_pos
-      0,                                                                 // next_layer
-      state.temperature(),                                               // temperature
-      DataBuffer {}                                                      // activations
-    };
+    InferenceState result { move( state ) };
+    result.set_token( extract_token( this->state_, this->config_, result.temperature() ) );
+    result.set_token_pos( result.token_pos() + 1 );
+    result.set_next_layer( 0 );
+    result.set_activations( {} );
+    return result;
   }
 
   DataBuffer activations { is_same_v<DType, float> ? glinthawk::models::DataType::Type::Float32
@@ -396,15 +393,10 @@ InferenceState Llama2<DType>::forward( const InferenceState& state, ContextType&
   CHECK_CUDA(
     cudaMemcpy( activations.ptr.get(), this->state_.x, this->config_.dim * sizeof( DType ), cudaMemcpyDeviceToHost ) );
 
-  return {
-    state.prompt_id(),                                        // prompt id
-    state.model_id(),                                         // model id
-    state.token(),                                            // token
-    state.token_pos(),                                        // token_pos
-    static_cast<uint32_t>( this->config_.end_layer_num ) + 1, // next_layer
-    state.temperature(),                                      // temperature
-    move( activations )                                       // activations
-  };
+  InferenceState result { move( state ) };
+  result.set_next_layer( static_cast<uint32_t>( this->config_.end_layer_num ) + 1 );
+  result.set_activations( move( activations ) );
+  return result;
 }
 
 template<typename DType>
