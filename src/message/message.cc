@@ -20,8 +20,8 @@ Message::Message( const string_view& header, string&& payload )
     throw out_of_range( "incomplete header" );
   }
 
-  payload_length_ = get_field<uint32_t>( header.substr( 8 ) );
-  opcode_ = static_cast<OpCode>( header[12] );
+  payload_length_ = get_field<uint32_t>( header );
+  opcode_ = static_cast<OpCode>( header[4] );
 }
 
 Message::Message( const OpCode opcode, string&& payload )
@@ -33,7 +33,7 @@ Message::Message( const OpCode opcode, string&& payload )
 
 uint32_t Message::expected_payload_length( const string_view header )
 {
-  return ( header.length() < HEADER_LENGTH ) ? 0 : get_field<uint32_t>( header.substr( 8, 4 ) );
+  return ( header.length() < HEADER_LENGTH ) ? 0 : get_field<uint32_t>( header );
 }
 
 void Message::serialize_header( std::string& output )
