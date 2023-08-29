@@ -5,6 +5,7 @@
 
 using namespace std;
 using namespace glinthawk;
+using namespace glinthawk::net;
 
 template<class SessionType, class OutgoingMessage, class IncomingMessage>
 MessageHandler<SessionType, OutgoingMessage, IncomingMessage>::MessageHandler( SessionType&& session )

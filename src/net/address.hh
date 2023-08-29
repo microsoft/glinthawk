@@ -9,7 +9,7 @@
 #include <sys/socket.h>
 #include <utility>
 
-namespace glinthawk {
+namespace glinthawk::net {
 
 //! Wrapper around [IPv4 addresses](@ref man7::ip) and DNS operations.
 class Address

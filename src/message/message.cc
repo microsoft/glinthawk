@@ -146,4 +146,4 @@ void MessageHandler<SessionType>::write( RingBuffer& out )
   }
 }
 
-template class glinthawk::core::MessageHandler<glinthawk::TCPSession>;
+template class glinthawk::core::MessageHandler<glinthawk::net::TCPSession>;
