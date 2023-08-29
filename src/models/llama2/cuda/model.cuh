@@ -35,6 +35,12 @@ public:
                             const int32_t start_layer = 0,
                             const int32_t end_layer = -1 );
 
+
+  Llama2( const Llama2& ) = delete;
+  Llama2& operator=( const Llama2& ) = delete;
+  Llama2( Llama2&& ) = default;
+  Llama2& operator=( Llama2&& ) = default;
+
   ~Llama2();
 
   InferenceState forward( InferenceState&& inference_state, ContextType& context ) override;
