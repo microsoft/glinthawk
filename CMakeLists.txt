@@ -35,4 +35,5 @@ link_libraries ( glinthawk )
 
 if ( CUDA_ENABLED )
   add_executable ( infer-gpu src/frontend/infer-gpu.cc )
+  add_executable ( worker-gpu src/frontend/worker-gpu.cc )
 endif ()
