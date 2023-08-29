@@ -42,6 +42,12 @@ public:
                       const uint64_t kv_prompt_limit = 1,
                       const uint64_t concurrency_limit = 1 );
 
+
+  Llama2( const Llama2& ) = delete;
+  Llama2& operator=( const Llama2& ) = delete;
+  Llama2( Llama2&& ) = default;
+  Llama2& operator=( Llama2&& ) = default;
+
   ~Llama2();
 
 <<<<<<< HEAD

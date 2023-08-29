@@ -56,8 +56,11 @@ template<typename DType>
 struct BaseWeights
 {
   BaseWeights( const Config& config, const DType* base_weights );
+
   BaseWeights( const BaseWeights& ) = delete;
   BaseWeights operator=( const BaseWeights& ) = delete;
+  BaseWeights( BaseWeights&& ) = default;
+  BaseWeights& operator=( BaseWeights&& ) = default;
 
   static size_t base_size( const Config& config );
 
@@ -77,6 +80,11 @@ struct LayerWeights
 {
   LayerWeights() = default;
   LayerWeights( const Config& config, const DType* model );
+
+  LayerWeights( const LayerWeights& ) = delete;
+  LayerWeights operator=( const LayerWeights& ) = delete;
+  LayerWeights( LayerWeights&& ) = default;
+  LayerWeights& operator=( LayerWeights&& ) = default;
 
   static size_t layer_size( const Config& config );
 
@@ -103,6 +111,9 @@ struct RunState
   RunState( const Config& config, DType* buffer );
   RunState( const RunState& ) = delete;
   RunState operator=( const RunState& ) = delete;
+
+  RunState( RunState&& ) = default;
+  RunState& operator=( RunState&& ) = default;
 
   static size_t state_size( const Config& config );
 
@@ -153,8 +164,8 @@ protected:
   std::vector<uint64_t> token_pos_ { };
 
   RunState<DType> state_;
-  const BaseWeights<DType> base_weights_;
-  const std::vector<LayerWeights<DType>> layer_weights_;
+  BaseWeights<DType> base_weights_;
+  std::vector<LayerWeights<DType>> layer_weights_;
 
 protected:
   BaseLlama2( const Config& config,
@@ -167,6 +178,8 @@ public:
 
   BaseLlama2( BaseLlama2&& ) = default;
   BaseLlama2& operator=( BaseLlama2 && ) = default;
+  BaseLlama2( const BaseLlama2& ) = delete;
+  BaseLlama2& operator=( const BaseLlama2& ) = delete;
 
   using ConfigType = Config;
   using ContextType = Context;
