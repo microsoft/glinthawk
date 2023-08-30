@@ -32,7 +32,23 @@ Worker<Model>::Worker( const Address& address, Model&& model )
     listen_socket_,
     [this] {
       TCPSocket socket = listen_socket_.accept();
-      LOG( INFO ) << "GOT A CONNECTION FROM " << socket.peer_address().to_string();
+      auto addr = socket.peer_address();
+
+      LOG( INFO ) << "Accepted connection from " << addr.to_string();
+
+      auto [peer_it, peer_new]
+        = peers_.emplace( piecewise_construct, forward_as_tuple( addr ), forward_as_tuple( addr, move( socket ) ) );
+
+      CHECK( peer_new ) << "A peer with this address already exists.";
+
+      peer_it->second.message_handler.install_rules(
+        this->event_loop_,
+        this->rule_categories_,
+        []( Message&& msg ) {
+          LOG( INFO ) << "Incoming message: " << msg.info();
+          return true;
+        },
+        [] { LOG( INFO ) << "Connection to peer closed."; } );
     },
     [] { return true; },
     [] { LOG( INFO ) << "STOPPED LISTENING"; } );
