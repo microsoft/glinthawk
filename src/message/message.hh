@@ -97,6 +97,8 @@ private:
 public:
   using glinthawk::MessageHandler<SessionType, Message, Message>::MessageHandler;
 
+  ~MessageHandler() {}
+
   void push_message( Message&& msg ) override;
 };
 
