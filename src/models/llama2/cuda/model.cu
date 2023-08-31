@@ -204,24 +204,10 @@ void Llama2<DType>::transformer_layer( const int32_t layer_num ) // NEEDS CONTEX
 
   // multihead attention. for each head and for each token up to and including the current one
   ops::attention_0_gemm( this->state_.q,
-<<<<<<< HEAD
-                         this->kv_cache_.key( layer_num, 0, 0, 0 ),
-||||||| parent of 6e644b8 (llama2/model.cu: Fix a bug triggered when partial models are loaded.)
-                         context.buffer_ + layer_num * ( dim * 2 ),
-=======
                          context.buffer_ + ( layer_num - this->config_.start_layer_num ) * ( dim * 2 ),
->>>>>>> 6e644b8 (llama2/model.cu: Fix a bug triggered when partial models are loaded.)
                          this->state_.att,
-<<<<<<< HEAD
                          n_layers_loaded,
                          seq_len,
-||||||| parent of 6e644b8 (llama2/model.cu: Fix a bug triggered when partial models are loaded.)
-                         this->config_.n_layers,
-                         this->config_.seq_len,
-=======
-                         this->config_.end_layer_num - this->config_.start_layer_num + 1,
-                         this->config_.seq_len,
->>>>>>> 6e644b8 (llama2/model.cu: Fix a bug triggered when partial models are loaded.)
                          head_size,
                          n_kv_heads,
                          gqa_size,
@@ -239,24 +225,10 @@ void Llama2<DType>::transformer_layer( const int32_t layer_num ) // NEEDS CONTEX
                           curr_conc_lvl );
 
   ops::attention_2_gemm( this->state_.att,
-<<<<<<< HEAD
-                         this->kv_cache_.value( layer_num, 0, 0, 0 ),
-||||||| parent of 6e644b8 (llama2/model.cu: Fix a bug triggered when partial models are loaded.)
-                         context.buffer_ + layer_num * ( dim * 2 ) + dim,
-=======
                          context.buffer_ + ( layer_num - this->config_.start_layer_num ) * ( dim * 2 ) + dim,
->>>>>>> 6e644b8 (llama2/model.cu: Fix a bug triggered when partial models are loaded.)
                          this->state_.xb,
-<<<<<<< HEAD
                          n_layers_loaded,
                          seq_len,
-||||||| parent of 6e644b8 (llama2/model.cu: Fix a bug triggered when partial models are loaded.)
-                         this->config_.n_layers,
-                         this->config_.seq_len,
-=======
-                         this->config_.end_layer_num - this->config_.start_layer_num + 1,
-                         this->config_.seq_len,
->>>>>>> 6e644b8 (llama2/model.cu: Fix a bug triggered when partial models are loaded.)
                          head_size,
                          n_kv_heads,
                          gqa_size,
@@ -336,15 +308,9 @@ uint32_t extract_token( const RunState<DType>& state,
 }
 
 template<typename DType>
-<<<<<<< HEAD
 std::vector<uint32_t> extract_batch_token( const RunState<DType>& state,
                                            const Config& config,
                                            const std::vector<float>& temp )
-||||||| parent of d22c38f (model.hh: Pass an R-value reference to the state in forward().)
-InferenceState Llama2<DType>::forward( const InferenceState& state, ContextType& context )
-=======
-InferenceState Llama2<DType>::forward( InferenceState&& state, ContextType& context )
->>>>>>> d22c38f (model.hh: Pass an R-value reference to the state in forward().)
 {
   std::vector<uint32_t> next_tokens;
   for ( size_t i = 0; i < temp.size(); i++ )
@@ -395,7 +361,6 @@ std::vector<InferenceState> Llama2<DType>::forward(
   if ( this->config_.end_layer_num == this->config_.n_layers - 1 ) {
     pass_end();
 
-<<<<<<< HEAD
     std::vector<float> batch_temps;
     for ( size_t i = 0; i < inference_state_s.size(); i++ )
       batch_temps.push_back( inference_state_s[i].get().temperature() );
@@ -413,24 +378,6 @@ std::vector<InferenceState> Llama2<DType>::forward(
       );
 
     return token_vector;
-||||||| parent of d22c38f (model.hh: Pass an R-value reference to the state in forward().)
-    return {
-      state.prompt_id(),                                                 // prompt id
-      state.model_id(),                                                  // model id
-      extract_token( this->state_, this->config_, state.temperature() ), // token
-      state.token_pos() + 1,                                             // token_pos
-      0,                                                                 // next_layer
-      state.temperature(),                                               // temperature
-      DataBuffer {}                                                      // activations
-    };
-=======
-    InferenceState result { move( state ) };
-    result.set_token( extract_token( this->state_, this->config_, result.temperature() ) );
-    result.set_token_pos( result.token_pos() + 1 );
-    result.set_next_layer( 0 );
-    result.set_activations( {} );
-    return result;
->>>>>>> d22c38f (model.hh: Pass an R-value reference to the state in forward().)
   }
 
   for ( size_t i = 0; i < inference_state_s.size(); i++ ) {
@@ -443,7 +390,6 @@ std::vector<InferenceState> Llama2<DType>::forward(
                                  this->config_.dim * sizeof( DType ),
                                  cudaMemcpyDeviceToHost ) );
 
-<<<<<<< HEAD
     token_vector.emplace_back( inference_state_s[i].prompt_id(),                         // prompt_id
                                inference_state_s[i].get().model_id(),                    // model_id
                                inference_state_s[i].get().token(),                       // token
@@ -455,22 +401,6 @@ std::vector<InferenceState> Llama2<DType>::forward(
   }
 
   return token_vector;
-||||||| parent of d22c38f (model.hh: Pass an R-value reference to the state in forward().)
-  return {
-    state.prompt_id(),                                        // prompt id
-    state.model_id(),                                         // model id
-    state.token(),                                            // token
-    state.token_pos(),                                        // token_pos
-    static_cast<uint32_t>( this->config_.end_layer_num ) + 1, // next_layer
-    state.temperature(),                                      // temperature
-    move( activations )                                       // activations
-  };
-=======
-  InferenceState result { move( state ) };
-  result.set_next_layer( static_cast<uint32_t>( this->config_.end_layer_num ) + 1 );
-  result.set_activations( move( activations ) );
-  return result;
->>>>>>> d22c38f (model.hh: Pass an R-value reference to the state in forward().)
 }
 
 template<typename DType>
