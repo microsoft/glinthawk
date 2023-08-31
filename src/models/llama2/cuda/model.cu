@@ -286,7 +286,7 @@ void Llama2<DType>::transformer_layer( const int32_t layer_num, const uint64_t t
 
   // multihead attention. for each head and for each token up to and including the current one
   ops::attention_0_gemm( this->state_.q,
-                         context.buffer_ + ( layer_num - this->config_.start_layer_num ) * ( dim * 2 ),
+                         context.key( this->config_, layer_num, 0, 0 ),
                          this->state_.att,
                          this->config_.end_layer_num - this->config_.start_layer_num + 1,
                          this->config_.seq_len,
@@ -299,7 +299,7 @@ void Llama2<DType>::transformer_layer( const int32_t layer_num, const uint64_t t
     this->state_.att, token_pos, this->config_.seq_len, this->config_.n_heads, this->state_.temp_softmax );
 
   ops::attention_2_gemm( this->state_.att,
-                         context.buffer_ + ( layer_num - this->config_.start_layer_num ) * ( dim * 2 ) + dim,
+                         context.value( this->config_, layer_num, 0, 0 ),
                          this->state_.xb,
                          this->config_.end_layer_num - this->config_.start_layer_num + 1,
                          this->config_.seq_len,
