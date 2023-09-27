@@ -3,5 +3,5 @@
 .DS_Store
 .idea
 cmake-build-debug
-.ipynb_checkpoints/
+.ipynb_checkpoints
 .jupyter_ystore.db
