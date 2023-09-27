@@ -26,7 +26,7 @@ DType* _advance_pointer( DType*& ptr, const size_t size )
 
 }
 
-Config::Config( const filesystem::path& config_file, uint64_t batch_size_ ): batch_size(batch_size_)
+Config::Config( const filesystem::path& config_file, uint64_t kv_prompt_limit_, uint64_t concurrency_limit_ ): kv_prompt_limit(kv_prompt_limit_), concurrency_limit(concurrency_limit_)
 {
   ifstream fin { config_file, ios::binary };
   CHECK( fin ) << "Failed to open config file: " << config_file;
@@ -64,8 +64,8 @@ Config::Config( const filesystem::path& config_file, uint64_t batch_size_ ): bat
   CHECK_GT( n_kv_heads, 0 ) << "Number of key/value heads must be positive.";
   CHECK_GT( vocab_size, 0 ) << "Vocabulary size must be positive.";
   CHECK_GT( seq_len, 0 ) << "Sequence length must be positive.";
-  CHECK_GT( batch_size, 0 ) << "Batch size must be positive.";
-  CHECK_GT( 1025, batch_size * n_heads ) << "Attention softmax has batch_size x n_heads threads, and this cannot surpass 1024.";
+  CHECK_GT( kv_prompt_limit, 0 ) << "Max KV prompt size must be positive.";
+  CHECK_GT( concurrency_limit, 0 ) << "Max concurrent inference size must be positive.";
 
   LOG( INFO ) << "Loaded config: " << to_string();
 }
@@ -81,7 +81,8 @@ string Config::to_string() const
   oss << "n_kv_heads: " << n_kv_heads << ", ";
   oss << "vocab_size: " << vocab_size << ", ";
   oss << "seq_len: " << seq_len << ", ";
-  oss << "batch_size: " << batch_size << ", ";
+  oss << "kv_prompt_limit: " << kv_prompt_limit << ", ";
+  oss << "concurrency_limit: " << concurrency_limit << ", ";
   oss << "wcls_present: " << wcls_present;
   oss << " }";
   return oss.str();
@@ -182,30 +183,25 @@ template<typename DType>
 RunState<DType>::RunState( const Config& config, DType* buffer )
   : buffer_( buffer )
   , x( buffer_ )
-  , xb( buffer_ + config.dim * config.batch_size )
-  , xb2( xb + config.dim * config.batch_size )
-  , q( xb2 + config.dim * config.batch_size )
-  , k( q + config.dim * config.batch_size )
-  , v( k + config.dim * config.batch_size )
-  , hb( v + config.dim * config.batch_size )
-  , hb2( hb + config.hidden_dim * config.batch_size )
-  , att( hb2 + config.hidden_dim * config.batch_size )
-  , logits( att + config.n_heads * config.seq_len * config.batch_size )
-  , temp_softmax( logits + config.vocab_size * config.batch_size )
-  , q_p( reinterpret_cast<DType**>( temp_softmax + config.n_heads * config.batch_size ) )
-  , att_p( q_p + config.batch_size * config.n_heads )
-  , xb_p( att_p + config.batch_size * config.n_heads )
-  , k_p( xb_p + config.batch_size * config.n_heads )
-  , v_p( k_p + config.batch_size * config.n_heads )
+  , xb( buffer_ + config.dim * config.concurrency_limit )
+  , xb2( xb + config.dim * config.concurrency_limit )
+  , q( xb2 + config.dim * config.concurrency_limit )
+  , k( q + config.dim * config.concurrency_limit )
+  , v( k + config.dim * config.concurrency_limit )
+  , hb( v + config.dim * config.concurrency_limit )
+  , hb2( hb + config.hidden_dim * config.concurrency_limit )
+  , att( hb2 + config.hidden_dim * config.concurrency_limit )
+  , logits( att + config.n_heads * config.seq_len * config.concurrency_limit )
+  , temp_softmax( logits + config.vocab_size * config.concurrency_limit )
 {
 }
 
 template<typename DType>
 size_t RunState<DType>::state_size( const Config& config )
 {
-  return sizeof( DType ) * config.batch_size
+  return sizeof( DType ) * config.concurrency_limit
          * ( config.dim * 6 + config.hidden_dim * 2 + config.n_heads * config.seq_len + config.vocab_size
-             + config.n_heads ) + sizeof(DType*) * 5 * config.batch_size * config.n_heads;
+             + config.n_heads);
 }
 
 /* KV CACHE */
@@ -219,28 +215,28 @@ KVCache<DType>::KVCache( const Config& config, DType* buffer, const int32_t star
   , dim_( config.dim )
   , n_layers_( end_layer_ - start_layer_ + 1 )
   , head_size_( config.dim / config.n_heads )
-  , batch_size_ (config.batch_size)
+  , kv_prompt_limit_ (config.kv_prompt_limit)
 {
 }
 
 template<typename DType>
 size_t KVCache<DType>::cache_size( const Config& config, const int32_t start_layer, const int32_t end_layer )
 {
-   return sizeof( DType ) * config.seq_len * config.dim * 2 * ( end_layer - start_layer + 1 ) * config.batch_size;
+   return sizeof( DType ) * config.seq_len * config.dim * 2 * ( end_layer - start_layer + 1 ) * config.kv_prompt_limit;
 }
 
 template<typename DType>
 DType* KVCache<DType>::key( int layer, const int step, const int batch, const int head )
 {
   layer -= start_layer_;
-  return buffer_ + step * ( n_layers_ * dim_ * batch_size_ * 2 ) + layer * ( dim_ * batch_size_ * 2 ) + batch * dim_ + head * head_size_;
+  return buffer_ + step * ( n_layers_ * dim_ * kv_prompt_limit_ * 2 ) + layer * ( dim_ * kv_prompt_limit_ * 2 ) + batch * dim_ + head * head_size_;
 }
 
 template<typename DType>
 DType* KVCache<DType>::value( int layer, const int step, const int batch, const int head )
 {
   layer -= start_layer_;
-  return buffer_ + step * ( n_layers_ * dim_ * batch_size_ * 2 ) + layer * ( dim_ * batch_size_ * 2 ) + batch * dim_  + head * head_size_ + dim_ * batch_size_;
+  return buffer_ + step * ( n_layers_ * dim_ * kv_prompt_limit_ * 2 ) + layer * ( dim_ * kv_prompt_limit_ * 2 ) + batch * dim_ + head * head_size_ + dim_ * kv_prompt_limit_;
 }
 
 /* BaseLlama2 */
@@ -260,7 +256,8 @@ BaseLlama2<DType>::BaseLlama2( const Config& config,
   , config_( config )
   , start_layer_num_( start_layer )
   , end_layer_num_( end_layer == -1 ? config_.n_layers - 1 : end_layer )
-  , id_allocation_( std::vector<uint64_t>(config.batch_size) )
+  , id_allocation_( std::vector<uint64_t>(config.concurrency_limit) )
+  , token_pos_( std::vector<uint64_t>(config.concurrency_limit) )
   , state_( config_, run_state_buffer_.get() )
   , kv_cache_( config_, kv_cache_buffer_.get(), start_layer_num_, end_layer_num_ )
   , base_weights_( config_, base_weights_buffer_.get() )

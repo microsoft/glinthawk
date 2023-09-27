@@ -1,5 +1,5 @@
 rm $4
-for slices in 1
+for slices in 1 4
 do
 	for batch in {1..32}
 	do
