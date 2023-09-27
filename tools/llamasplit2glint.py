@@ -68,6 +68,8 @@ def export(p: Dict[str, int], state_dict_map: Dict[str, List[Path,]], dest_dir: 
     with open(os.path.join(dest_dir, "CONFIG"), "wb") as fout:
         fout.write(header)
 
+    exit(0)
+
     # next write out the embedding weights
     print("writing BASEWEIGHTS")
 
@@ -130,7 +132,7 @@ def form_dict(model_paths: List[Path]) -> Tuple[Dict[str, List[Path]], int]:
                 pickle.dump(state_dict_piece[name], f)
             state_dict_map[name].append(f"{p}_{name}_{n}")
         if 'layers.0.feed_forward.w1.weight' in state_dict_piece:
-            hidden_dim = state_dict_piece["layers.0.feed_forward.w1.weight"].shape[0]
+            hidden_dim += state_dict_piece["layers.0.feed_forward.w1.weight"].shape[0]
         del state_dict_piece
         gc.collect()
     return state_dict_map, hidden_dim
