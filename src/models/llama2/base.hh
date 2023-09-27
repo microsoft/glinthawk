@@ -6,27 +6,28 @@
 #include <string>
 #include <unordered_map>
 #include <vector>
-
+#include "cuda_runtime.h"
 #include "models/common/model.hh"
 
 namespace glinthawk::models::llama2 {
 
 struct Config
 {
-  Config( const std::filesystem::path& config_file, uint64_t batch_size_ );
+  Config( const std::filesystem::path& config_file, uint64_t kv_prompt_limit_, uint64_t concurrency_limit_ );
 
   std::string to_string() const;
 
   static size_t config_size() { return sizeof( int32_t ) * 7; }
 
-  uint64_t dim {};          // transformer dimension
-  uint64_t hidden_dim {};   // for ffn layers
-  uint64_t n_layers {};     // number of layers
-  uint64_t n_heads {};      // number of query heads
-  uint64_t n_kv_heads {};   // number of key/value heads (can be < query heads because of multiquery)
-  uint64_t vocab_size {};   // vocabulary size (byte-level)
-  uint64_t seq_len {};      // max sequence length
-  uint64_t batch_size {1};  // batch size
+  uint64_t dim {};                  // transformer dimension
+  uint64_t hidden_dim {};           // for ffn layers
+  uint64_t n_layers {};             // number of layers
+  uint64_t n_heads {};              // number of query heads
+  uint64_t n_kv_heads {};           // number of key/value heads (can be < query heads because of multiquery)
+  uint64_t vocab_size {};           // vocabulary size (byte-level)
+  uint64_t seq_len {};              // max sequence length
+  uint64_t kv_prompt_limit {1};     // max prompt K/V size
+  uint64_t concurrency_limit {1};   // max concurrent inference size
 
   bool wcls_present { false };
 };
@@ -110,11 +111,6 @@ struct RunState
   DType* att {};                // buffer for scores/attention values (B, n_heads, seq_len)
   DType* logits {};             // output logits (B, vocab_size)
   DType* temp_softmax {};       // temporary buffer for computing softmax (B, n_heads)
-  DType** q_p {};               // pointer to query heads (B, n_heads)
-  DType** att_p {};             // pointer to attention heads (B, n_heads)
-  DType** xb_p {};              // pointer to xb heads (B, n_heads)
-  DType** k_p {};               // pointer to key heads (B, n_heads)
-  DType** v_p {};               // pointer to value heads (B, n_heads)
 };
 
 template<typename DType>
@@ -132,7 +128,7 @@ struct KVCache
   const int dim_;
   const int n_layers_;
   const int head_size_;
-  const int batch_size_;
+  const int kv_prompt_limit_;
 
   DType* key( int layer, const int step, const int batch = 0, const int head = 0);
   DType* value( int layer, const int step, const int batch = 0, const int head = 0);
@@ -150,8 +146,9 @@ protected:
   const Config config_;
   const int32_t start_layer_num_;
   const int32_t end_layer_num_;
-  uint64_t curr_batch_size { 1 };
+  uint64_t curr_concurrency_size { 1 };
   std::vector<uint64_t> id_allocation_ { };
+  std::vector<uint64_t> token_pos_ { };
 
   RunState<DType> state_;
   KVCache<DType> kv_cache_;
