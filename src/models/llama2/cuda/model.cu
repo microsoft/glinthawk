@@ -142,33 +142,6 @@ unique_ptr<Llama2<DType>> Llama2<DType>::load( const filesystem::path& model_pat
 }
 
 template<typename DType>
-__global__ void print_arr_point( const DType* const* x_mega, const int i, const int size, const int stride )
-{
-  const DType* x1 = x_mega[i];
-  for ( uint64_t i = 0; i < size; i++ ) {
-    if constexpr ( is_same_v<DType, __half> ) {
-      printf( "%.9f, ", __half2float( x1[i * stride] ) );
-    } else {
-      printf( "%.9f, ", x1[i * stride] );
-    }
-  }
-  printf( "\n" );
-}
-
-template<typename DType>
-__global__ void print_arr( const DType* x1, const int size, const int stride )
-{
-  for ( uint64_t i = 0; i < size; i++ ) {
-    if constexpr ( is_same_v<DType, __half> ) {
-      printf( "%.9f, ", __half2float( x1[i * stride] ) );
-    } else {
-      printf( "%.9f, ", x1[i * stride] );
-    }
-  }
-  printf( "\n" );
-}
-
-template<typename DType>
 void Llama2<DType>::pass_begin( const std::vector<uint32_t>& token )
 {
   // copy the token embedding into the state
@@ -191,53 +164,14 @@ void Llama2<DType>::transformer_layer( const int32_t layer_num )
   const uint64_t head_size = dim / this->config_.n_heads;
 
   const auto& layer_weights = this->layer_weights_[layer_num];
-//  if (layer_num == 0)
-//  for (size_t i = 0; i < 2; i++){
-//    if (this->token_pos_[i] == 772){
-//      std::cout << "\nLayer " << layer_num << "\n" << std::endl;
-//    }
-//  }
-
-  //  std::cout << "Pre attention" << std::endl;
-  //  print_arr<<<1, 1>>>(x, 768, 1);
-  //  cudaDeviceSynchronize();
 
   // attention rmsnorm
   ops::rmsnorm( this->state_.xb, x, layer_weights.rms_att_weight, dim, this->curr_concurrency_size );
-//  if (layer_num == 0)
-//  for (size_t i = 0; i < 2; i++){
-//    if (this->token_pos_[i] == 772){
-//      std::cout << "Post First RMS Norm, token " << this->token_pos_[i] << std::endl << std::flush;
-//      print_arr<<<1, 1>>>( this->state_.xb+i*dim, 12, 1 );
-//      cudaDeviceSynchronize();
-//    }
-//  }
 
   // qkv matmuls for this position
   ops::matmul( this->state_.q, this->state_.xb, layer_weights.wq, this->curr_concurrency_size, dim, dim );
   ops::matmul( this->state_.k, this->state_.xb, layer_weights.wk, this->curr_concurrency_size, dim, dim );
   ops::matmul( this->state_.v, this->state_.xb, layer_weights.wv, this->curr_concurrency_size, dim, dim );
-
-  //  std::cout << "Queries" << std::endl;
-  //  print_arr<<<1, 1>>>(this->state_.q+64+62, 1, 1);
-  //  cudaDeviceSynchronize();
-  //
-  //  std::cout << "Keys" << std::endl;
-  //  print_arr<<<1, 1>>>(this->state_.k, 8, 1);
-  //  cudaDeviceSynchronize();
-  //
-  //  std::cout << "Values" << std::endl;
-  //  print_arr<<<1, 1>>>(this->state_.v, 8, 1);
-  //  cudaDeviceSynchronize();
-
-//  if (layer_num == 0)
-//  for (size_t i = 0; i < this->curr_concurrency_size; i++){
-//    if (this->token_pos_[i] == 9){
-//      std::cout << "Post att0, batch " << i << ", token " << this->token_pos_[i] << std::endl << std::flush;
-//      print_arr<<<1, 1>>>( this->state_.k + i * dim, 11, 1 );
-//      cudaDeviceSynchronize();
-//    }
-//  }
 
   ops::apply_rope( head_size,
                    this->config_.n_heads,
@@ -260,38 +194,6 @@ void Llama2<DType>::transformer_layer( const int32_t layer_num )
                       this->id_allocation_,
                       this->token_pos_ );
 
-//  cudaDeviceSynchronize();
-//  if (layer_num == 0)
-//  for (size_t i = 0; i < this->curr_concurrency_size; i++){
-//    if (this->token_pos_[i] == 9){
-//            std::cout << "Post att0, batch " << i << ", token " << this->token_pos_[i] << std::endl << std::flush;
-//      //      print_arr<<<1, 1>>>( this->state_.q+i*dim, head_size, 1 );
-//      //      cudaDeviceSynchronize();
-////      std::cout << "" << this->token_pos_[i] << std::endl << std::flush;
-//            print_arr<<<1, 1>>>( this->state_.k + i * dim, 11, 1 );
-//      print_arr<<<1, 1>>>( this->kv_cache_.key( layer_num, 9, this->id_allocation_[i], 0 ), 11, 1 );
-//      cudaDeviceSynchronize();
-//      //      std::cout << "" << this->token_pos_[i] << std::endl << std::flush;
-//      //      print_arr<<<1, 1>>>( this->state_.att+i*this->config_.n_heads*this->config_.seq_len, 10, 1 );
-//      //      cudaDeviceSynchronize();
-//    }
-//  }
-
-//  if (layer_num == 0)
-//  for (size_t i = 0; i < 2; i++){
-//    if (this->token_pos_[i] == 772){
-//            std::cout << "Post att0, batch " << i << ", token " << this->token_pos_[i] << std::endl << std::flush;
-//      //      print_arr<<<1, 1>>>( this->state_.q+i*dim, head_size, 1 );
-//      //      cudaDeviceSynchronize();
-////      std::cout << "" << this->token_pos_[i] << std::endl << std::flush;
-//      print_arr<<<1, 1>>>( this->kv_cache_.key( layer_num, 9, this->id_allocation_[i], 0 ), 11, 1 );
-//      cudaDeviceSynchronize();
-//      //      std::cout << "" << this->token_pos_[i] << std::endl << std::flush;
-//      //      print_arr<<<1, 1>>>( this->state_.att+i*this->config_.n_heads*this->config_.seq_len, 10, 1 );
-//      //      cudaDeviceSynchronize();
-//    }
-//  }
-
   // multihead attention. for each head and for each token up to and including the current one
   ops::attention_0_gemm( this->state_.q,
                          this->kv_cache_.key( layer_num, 0, 0, 0 ),
@@ -307,33 +209,6 @@ void Llama2<DType>::transformer_layer( const int32_t layer_num )
 
   ops::matmul( this->state_.xb2, this->state_.xb, layer_weights.wo, this->curr_concurrency_size, dim, dim );
 
-//  if (layer_num == 0)
-//  for (size_t i = 0; i < 2; i++){
-//    if (this->token_pos_[i] == 772){
-////      std::cout << "Post att0, token " << this->token_pos_[i] << std::endl << std::flush;
-////      print_arr<<<1, 1>>>( this->state_.q+i*dim, head_size, 1 );
-////      cudaDeviceSynchronize();
-//      std::cout << "" << this->token_pos_[i] << std::endl << std::flush;
-//      print_arr<<<1, 1>>>( this->kv_cache_.key( layer_num, 9, i, 0 ), head_size, 1 );
-//      cudaDeviceSynchronize();
-////      std::cout << "" << this->token_pos_[i] << std::endl << std::flush;
-////      print_arr<<<1, 1>>>( this->state_.att+i*this->config_.n_heads*this->config_.seq_len, 10, 1 );
-////      cudaDeviceSynchronize();
-//    }
-//  }
-
-  //  std::cout << "Q in attention head 2" << std::endl;
-  //  print_arr_point<<<1, 1>>>(this->state_.q_p, 1, 64, 1);
-  //  cudaDeviceSynchronize();
-  //
-  //  std::cout << "K in attention head 2" << std::endl;
-  //  print_arr_point<<<1, 1>>>(this->state_.k_p, 1, 64, 1);
-  //  cudaDeviceSynchronize();
-
-  //  std::cout << "Attention" << std::endl;
-  //  print_arr<<<1, 1>>>(this->state_.att, 8, this->config_.seq_len);
-  //  cudaDeviceSynchronize();
-
   // softmax
   ops::attention_softmax( this->state_.att,
                           this->token_pos_,
@@ -341,20 +216,6 @@ void Llama2<DType>::transformer_layer( const int32_t layer_num )
                           this->config_.n_heads,
                           this->state_.temp_softmax,
                           this->curr_concurrency_size );
-
-  //  std::cout << "Softmax Attention" << std::endl;
-  //  print_arr<<<1, 1>>>(this->state_.att, 8, this->config_.batch_size * this->config_.seq_len);
-  //  cudaDeviceSynchronize();
-
-
-//  if (layer_num == 0)
-//  for (size_t i = 0; i < 2; i++){
-//    if (this->token_pos_[i] == 772){
-//      std::cout << "Post att_soft, token " << this->token_pos_[i] << std::endl << std::flush;
-//      print_arr<<<1, 1>>>( this->state_.att+i*this->config_.n_heads*this->config_.seq_len, 12, this->config_.seq_len );
-//      cudaDeviceSynchronize();
-//    }
-//  }
 
   ops::attention_2_gemm( this->state_.att,
                          this->kv_cache_.value( layer_num, 0, 0, 0 ),
@@ -369,28 +230,8 @@ void Llama2<DType>::transformer_layer( const int32_t layer_num )
                          this->token_pos_ );
   // end of multihead attention
 
-  //  std::cout << "Post MHA" << std::endl;
-  //  print_arr<<<1, 1>>>(this->state_.xb, 8, 1);
-  //  cudaDeviceSynchronize();
-//  if (layer_num == 0)
-//  for (size_t i = 0; i < 2; i++){
-//    if (this->token_pos_[i] == 772){
-//      std::cout << "Post MHA, token " << this->token_pos_[i] << std::endl << std::flush;
-//      print_arr<<<1, 1>>>( this->state_.xb+i*dim, 12, 1 );
-//      cudaDeviceSynchronize();
-//    }
-//  }
-
   // final matmul to get the output of the attention
   ops::matmul( this->state_.xb2, this->state_.xb, layer_weights.wo, this->curr_concurrency_size, dim, dim );
-//  if (layer_num == 0)
-//  for (size_t i = 0; i < 2; i++){
-//    if (this->token_pos_[i] == 772){
-//      std::cout << "Post Wo, token " << this->token_pos_[i] << std::endl << std::flush;
-//      print_arr<<<1, 1>>>( this->state_.xb2+i*dim, 10, 1 );
-//      cudaDeviceSynchronize();
-//    }
-//  }
 
   // residual connection back into x
   ops::accum( x, this->state_.xb2, dim, this->curr_concurrency_size );
@@ -410,15 +251,6 @@ void Llama2<DType>::transformer_layer( const int32_t layer_num )
 
   // residual connection
   ops::accum( x, this->state_.xb, dim, this->curr_concurrency_size );
-
-//  if (layer_num == 0)
-//    for (size_t i = 0; i < 2; i++){
-//      if (this->token_pos_[i] == 772){
-//        std::cout << "Post Layer, token " << this->token_pos_[i] << std::endl << std::flush;
-//        print_arr<<<1, 1>>>( x+i*dim, 12, 1 );
-//        cudaDeviceSynchronize();
-//      }
-//    }
 }
 
 template<typename DType>

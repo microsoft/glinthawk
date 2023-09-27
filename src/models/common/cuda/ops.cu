@@ -25,14 +25,8 @@ cublasHandle_t* cublas_handle_array;
 int cublas_handle_count;
 
 cublasComputeType_t computeType = CUBLAS_COMPUTE_32F;
-//cublasComputeType_t computeType = CUBLAS_COMPUTE_32F_PEDANTIC;
 const float alpha = 1.0f;
 const float beta = 0.0f;
-
-// cublasComputeType_t computeType = CUBLAS_COMPUTE_16F;
-// cublasComputeType_t computeType = CUBLAS_COMPUTE_16F_PEDANTIC;
-// const __half alpha = __half(1.0f);
-// const __half beta = __half(0.0f);
 
 template<unsigned_integral T>
 T div_ceil( const T x, const T y )
@@ -62,13 +56,11 @@ void init( const int num_streams )
 {
   cublasCreate( &cublas_handle_default );
   cublas_handle_count = num_streams;
-//  cublasSetMathMode(cublas_handle_default, CUBLAS_PEDANTIC_MATH);
   streams = (cudaStream_t*)malloc( num_streams * sizeof( cudaStream_t ) );
   cublas_handle_array = (cublasHandle_t*)malloc( num_streams * sizeof( cublasHandle_t ) );
   for ( int i = 0; i < num_streams; i++ ) {
     cudaStreamCreate( &( streams[i] ) );
     cublasCreate( &( cublas_handle_array[i] ) );
-//    cublasSetMathMode(cublas_handle_array[i], CUBLAS_PEDANTIC_MATH);
     cublasSetStream( cublas_handle_array[i], streams[i] );
   }
 }
@@ -362,231 +354,6 @@ void attention_2_gemm( const DType* att,
   }
 }
 
-// template<>
-// void attention_0_gemm_gemv( const __half* query,
-//                             const __half* key_base,
-//                             __half* att,
-//                             const uint64_t n_layers,
-//                             const uint64_t seq_len,
-//                             const uint64_t head_size,
-//                             const uint64_t n_heads,
-//                             const uint64_t batch_size,
-//                             const uint64_t max_batch_size,
-//                             vector<uint64_t> id_alloc_s,
-//                             vector<uint64_t> token_pos_s )
-//{
-//   const float scale = 1.0f / sqrtf( head_size );
-//   const float temp_beta = 0.0f;
-//
-//   const __half* query_p = query;
-//   __half* att_p = att;
-//
-//   for ( size_t i = 0; i < batch_size; i++ ) {
-//     const uint64_t m = head_size;
-//     const uint64_t n = token_pos_s[i] + 1;
-//
-//     const uint64_t lda = n_layers * max_batch_size * n_heads * head_size * 2;
-//     const uint64_t incx = 1;
-//     const uint64_t incy = 1;
-//
-//     const uint64_t strideA = head_size;
-//     const uint64_t stridex = head_size;
-//     const uint64_t stridey = seq_len;
-//
-//     const uint64_t batchCount = n_heads;
-//
-//     const __half* key = key_base + id_alloc_s[i] * head_size * n_heads;
-//
-//     CHECK_CUBLAS( cublasHSHgemvStridedBatched( cublas_handle_default,
-//                                                CUBLAS_OP_T,
-//                                                m,
-//                                                n,
-//
-//                                                &scale,
-//                                                key,
-//                                                lda,
-//                                                strideA,
-//
-//                                                query_p,
-//                                                incx,
-//                                                stridex,
-//                                                &temp_beta,
-//
-//                                                att_p,
-//                                                incy,
-//                                                stridey,
-//                                                batchCount ) );
-//
-//     query_p += head_size * n_heads;
-//     att_p += seq_len * n_heads;
-//   }
-// }
-//
-// template<>
-// void attention_0_gemm_gemv( const float* query,
-//                             const float* key_base,
-//                             float* att,
-//                             const uint64_t n_layers,
-//                             const uint64_t seq_len,
-//                             const uint64_t head_size,
-//                             const uint64_t n_heads,
-//                             const uint64_t batch_size,
-//                             const uint64_t max_batch_size,
-//                             vector<uint64_t> id_alloc_s,
-//                             vector<uint64_t> token_pos_s )
-//{
-//   const float scale = 1.0f / sqrtf( head_size );
-//   //  const __half scale = __half(1.0f / sqrtf( head_size ));
-//
-//   const float* query_p = query;
-//   float* att_p = att;
-//
-//   for ( size_t i = 0; i < batch_size; i++ ) {
-//     const uint64_t m = head_size;
-//     const uint64_t n = token_pos_s[i] + 1;
-//
-//     const uint64_t lda = n_layers * max_batch_size * n_heads * head_size * 2;
-//     const uint64_t incx = 1;
-//     const uint64_t incy = 1;
-//
-//     const uint64_t strideA = head_size;
-//     const uint64_t stridex = head_size;
-//     const uint64_t stridey = seq_len;
-//
-//     const uint64_t batchCount = n_heads;
-//
-//     const float* key = key_base + id_alloc_s[i] * head_size * n_heads;
-//
-//     CHECK_CUBLAS( cublasSgemvStridedBatched( cublas_handle_array[i],
-//                                              CUBLAS_OP_T,
-//                                              m,
-//                                              n,
-//                                              &scale,
-//                                              key,
-//                                              lda,
-//                                              strideA,
-//                                              query_p,
-//                                              incx,
-//                                              stridex,
-//                                              &beta,
-//                                              att_p,
-//                                              incy,
-//                                              stridey,
-//                                              batchCount ) );
-//
-//     query_p += head_size * n_heads;
-//     att_p += seq_len * n_heads;
-//   }
-// }
-//
-// template<>
-// void attention_2_gemm_gemv( const __half* att,
-//                             const __half* value_base,
-//                             __half* xb,
-//                             const uint64_t n_layers,
-//                             const uint64_t seq_len,
-//                             const uint64_t head_size,
-//                             const uint64_t n_heads,
-//                             const uint64_t batch_size,
-//                             const uint64_t max_batch_size,
-//                             vector<uint64_t> id_alloc_s,
-//                             vector<uint64_t> token_pos_s )
-//{
-//   const __half* att_p = att;
-//   __half* xb_p = xb;
-//
-//   for ( size_t i = 0; i < batch_size; i++ ) {
-//     const uint64_t m = head_size;
-//     const uint64_t n = token_pos_s[i] + 1;
-//
-//     const uint64_t lda = n_layers * max_batch_size * n_heads * head_size * 2;
-//     const uint64_t incx = 1;
-//     const uint64_t incy = 1;
-//
-//     const uint64_t strideA = head_size;
-//     const uint64_t stridex = seq_len;
-//     const uint64_t stridey = head_size;
-//
-//     const uint64_t batchCount = n_heads;
-//
-//     const __half* value = value_base + id_alloc_s[i] * head_size * n_heads;
-//
-//     CHECK_CUBLAS( cublasHSHgemvStridedBatched( cublas_handle_array[i],
-//                                                CUBLAS_OP_T,
-//                                                m,
-//                                                n,
-//                                                &alpha,
-//                                                value,
-//                                                lda,
-//                                                strideA,
-//                                                att_p,
-//                                                incx,
-//                                                stridex,
-//                                                &beta,
-//                                                xb_p,
-//                                                incy,
-//                                                stridey,
-//                                                batchCount ) );
-//
-//     att_p += seq_len * n_heads;
-//     xb_p += head_size * n_heads;
-//   }
-// }
-//
-// template<>
-// void attention_2_gemm_gemv( const float* att,
-//                             const float* value_base,
-//                             float* xb,
-//                             const uint64_t n_layers,
-//                             const uint64_t seq_len,
-//                             const uint64_t head_size,
-//                             const uint64_t n_heads,
-//                             const uint64_t batch_size,
-//                             const uint64_t max_batch_size,
-//                             vector<uint64_t> id_alloc_s,
-//                             vector<uint64_t> token_pos_s )
-//{
-//   const float* att_p = att;
-//   float* xb_p = xb;
-//
-//   for ( size_t i = 0; i < batch_size; i++ ) {
-//     const uint64_t m = head_size;
-//     const uint64_t n = token_pos_s[i] + 1;
-//
-//     const uint64_t lda = n_layers * max_batch_size * n_heads * head_size * 2;
-//     const uint64_t incx = 1;
-//     const uint64_t incy = 1;
-//
-//     const uint64_t strideA = head_size;
-//     const uint64_t stridex = seq_len;
-//     const uint64_t stridey = head_size;
-//
-//     const uint64_t batchCount = n_heads;
-//
-//     const float* value = value_base + id_alloc_s[i] * head_size * n_heads;
-//
-//     CHECK_CUBLAS( cublasSgemvStridedBatched( cublas_handle_array[i],
-//                                              CUBLAS_OP_T,
-//                                              m,
-//                                              n,
-//                                              &alpha,
-//                                              value,
-//                                              lda,
-//                                              strideA,
-//                                              att_p,
-//                                              incx,
-//                                              stridex,
-//                                              &beta,
-//                                              xb_p,
-//                                              incy,
-//                                              stridey,
-//                                              batchCount ) );
-//
-//     att_p += seq_len * n_heads;
-//     xb_p += head_size * n_heads;
-//   }
-// }
-
 template<typename DType>
 vector<uint32_t> sample( const DType* probabilities, const uint64_t n, const uint64_t batch_size )
 {
@@ -844,8 +611,8 @@ template void rmsnorm<__half>( __half* output,
                                const uint64_t size,
                                const uint64_t batch_size );
 
- template vector<uint32_t> argmax<float>( const float* v, const uint64_t n, const uint64_t batch_size );
- template vector<uint32_t> argmax<__half>( const __half* v, const uint64_t n, const uint64_t batch_size );
+template vector<uint32_t> argmax<float>( const float* v, const uint64_t n, const uint64_t batch_size );
+template vector<uint32_t> argmax<__half>( const __half* v, const uint64_t n, const uint64_t batch_size );
 
 template uint32_t argmax<float>( const float* v, const uint64_t n );
 template uint32_t argmax<__half>( const __half* v, const uint64_t n );
@@ -859,11 +626,11 @@ template uint32_t sample<__half>( const __half* probabilities, const uint64_t n 
 template void accum<float>( float* a, const float* b, const uint64_t size, const uint64_t batch_size );
 template void accum<__half>( __half* a, const __half* b, const uint64_t size, const uint64_t batch_size );
 
- template void softmax<float>( float* x, const uint64_t size, const uint64_t batch_size );
- template void softmax<__half>( __half* x, const uint64_t size, const uint64_t batch_size );
+template void softmax<float>( float* x, const uint64_t size, const uint64_t batch_size );
+template void softmax<__half>( __half* x, const uint64_t size, const uint64_t batch_size );
 
- template void softmax<float>( float* x, const uint64_t size );
- template void softmax<__half>( __half* x, const uint64_t size );
+template void softmax<float>( float* x, const uint64_t size );
+template void softmax<__half>( __half* x, const uint64_t size );
 
 template void matmul<float>( float* xout,
                              const float* x,
