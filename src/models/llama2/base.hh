@@ -20,10 +20,12 @@ struct Config
   static size_t config_size() { return sizeof( int32_t ) * 7; }
 
   uint64_t dim {};                  // transformer dimension
+  uint64_t kv_dim {};               // key/value dimension
   uint64_t hidden_dim {};           // for ffn layers
   uint64_t n_layers {};             // number of layers
   uint64_t n_heads {};              // number of query heads
   uint64_t n_kv_heads {};           // number of key/value heads (can be < query heads because of multiquery)
+  uint64_t gqa_size {};             // GQA sharing rate
   uint64_t vocab_size {};           // vocabulary size (byte-level)
   uint64_t seq_len {};              // max sequence length
   uint64_t kv_prompt_limit {1};     // max prompt K/V size
@@ -104,8 +106,8 @@ struct RunState
   DType* xb {};                 // same, but inside a residual branch (B, dim)
   DType* xb2 {};                // an additional buffer just for convenience (B, dim)
   DType* q {};                  // query (B, dim)
-  DType* k {};                  // key (B, dim)
-  DType* v {};                  // value (B, dim)
+  DType* k {};                  // key (B, kv_dim)
+  DType* v {};                  // value (B, kv_dim)
   DType* hb {};                 // buffer for hidden dimension in the ffn (B, hidden_dim)
   DType* hb2 {};                // buffer for hidden dimension in the ffn (B, hidden_dim)
   DType* att {};                // buffer for scores/attention values (B, n_heads, seq_len)
@@ -125,7 +127,7 @@ struct KVCache
 
   DType* buffer_;
   const int seq_len_;
-  const int dim_;
+  const int kv_dim_;
   const int n_layers_;
   const int head_size_;
   const int kv_prompt_limit_;

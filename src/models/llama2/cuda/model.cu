@@ -158,39 +158,47 @@ void Llama2<DType>::pass_begin( const std::vector<uint32_t>& token )
 template<typename DType>
 void Llama2<DType>::transformer_layer( const int32_t layer_num )
 {
-  DType* const x = this->state_.x;
   const uint64_t dim = this->config_.dim;
+  const uint64_t kv_dim = this->config_.kv_dim;
+  const uint64_t gqa_size = this->config_.gqa_size;
   const uint64_t hidden_dim = this->config_.hidden_dim;
   const uint64_t head_size = dim / this->config_.n_heads;
+  const uint64_t n_heads = this->config_.n_heads;
+  const uint64_t n_kv_heads = this->config_.n_kv_heads;
+  const uint64_t seq_len = this->config_.seq_len;
+  const uint64_t n_layers_loaded = this->kv_cache_.n_layers_;
+  const uint64_t kv_prompt_limit = this->config_.kv_prompt_limit;
+  const uint64_t curr_conc_lvl = this->curr_concurrency_size;
 
   const auto& layer_weights = this->layer_weights_[layer_num];
 
   // attention rmsnorm
-  ops::rmsnorm( this->state_.xb, x, layer_weights.rms_att_weight, dim, this->curr_concurrency_size );
+  ops::rmsnorm( this->state_.xb, this->state_.x, layer_weights.rms_att_weight, dim, curr_conc_lvl );
 
   // qkv matmuls for this position
-  ops::matmul( this->state_.q, this->state_.xb, layer_weights.wq, this->curr_concurrency_size, dim, dim );
-  ops::matmul( this->state_.k, this->state_.xb, layer_weights.wk, this->curr_concurrency_size, dim, dim );
-  ops::matmul( this->state_.v, this->state_.xb, layer_weights.wv, this->curr_concurrency_size, dim, dim );
+  ops::matmul( this->state_.q, this->state_.xb, layer_weights.wq, curr_conc_lvl, dim, dim );
+  ops::matmul( this->state_.k, this->state_.xb, layer_weights.wk, curr_conc_lvl, dim, kv_dim );
+  ops::matmul( this->state_.v, this->state_.xb, layer_weights.wv, curr_conc_lvl, dim, kv_dim );
 
   ops::apply_rope( head_size,
-                   this->config_.n_heads,
-                   this->curr_concurrency_size,
+                   n_kv_heads,
+                   gqa_size,
+                   curr_conc_lvl,
                    this->token_pos_,
                    this->base_weights_.freq_cis_real,
                    this->base_weights_.freq_cis_imag,
                    this->state_.q,
                    this->state_.k );
 
-  // save key,value at this time step (pos) to our kv cache
+  // save key,value at each time step (pos) to our kv cache
   ops::copy_kv_cache( this->state_.k,
                       this->state_.v,
                       this->kv_cache_.key( layer_num, 0, 0 ),
                       this->kv_cache_.value( layer_num, 0, 0 ),
-                      dim,
-                      this->kv_cache_.n_layers_,
-                      this->curr_concurrency_size,
-                      this->config_.kv_prompt_limit,
+                      kv_dim,
+                      n_layers_loaded,
+                      curr_conc_lvl,
+                      kv_prompt_limit,
                       this->id_allocation_,
                       this->token_pos_ );
 
@@ -198,59 +206,59 @@ void Llama2<DType>::transformer_layer( const int32_t layer_num )
   ops::attention_0_gemm( this->state_.q,
                          this->kv_cache_.key( layer_num, 0, 0, 0 ),
                          this->state_.att,
-                         this->kv_cache_.n_layers_,
-                         this->config_.seq_len,
+                         n_layers_loaded,
+                         seq_len,
                          head_size,
-                         this->config_.n_heads,
-                         this->curr_concurrency_size,
-                         this->config_.kv_prompt_limit,
+                         n_kv_heads,
+                         gqa_size,
+                         curr_conc_lvl,
+                         kv_prompt_limit,
                          this->id_allocation_,
                          this->token_pos_ );
-
-  ops::matmul( this->state_.xb2, this->state_.xb, layer_weights.wo, this->curr_concurrency_size, dim, dim );
 
   // softmax
   ops::attention_softmax( this->state_.att,
                           this->token_pos_,
-                          this->config_.seq_len,
-                          this->config_.n_heads,
+                          seq_len,
+                          n_heads,
                           this->state_.temp_softmax,
-                          this->curr_concurrency_size );
+                          curr_conc_lvl );
 
   ops::attention_2_gemm( this->state_.att,
                          this->kv_cache_.value( layer_num, 0, 0, 0 ),
                          this->state_.xb,
-                         this->kv_cache_.n_layers_,
-                         this->config_.seq_len,
+                         n_layers_loaded,
+                         seq_len,
                          head_size,
-                         this->config_.n_heads,
-                         this->curr_concurrency_size,
-                         this->config_.kv_prompt_limit,
+                         n_kv_heads,
+                         gqa_size,
+                         curr_conc_lvl,
+                         kv_prompt_limit,
                          this->id_allocation_,
                          this->token_pos_ );
   // end of multihead attention
 
   // final matmul to get the output of the attention
-  ops::matmul( this->state_.xb2, this->state_.xb, layer_weights.wo, this->curr_concurrency_size, dim, dim );
+  ops::matmul( this->state_.xb2, this->state_.xb, layer_weights.wo, curr_conc_lvl, dim, dim );
 
   // residual connection back into x
-  ops::accum( x, this->state_.xb2, dim, this->curr_concurrency_size );
+  ops::accum( this->state_.x, this->state_.xb2, dim, curr_conc_lvl );
 
   // ffn rmsnorm
-  ops::rmsnorm( this->state_.xb, x, layer_weights.rms_ffn_weight, dim, this->curr_concurrency_size );
+  ops::rmsnorm( this->state_.xb, this->state_.x, layer_weights.rms_ffn_weight, dim, curr_conc_lvl );
 
   // now for ffn in we have: self.w2(F.silu(self.w1(x)) * self.w3(x))
   // first calculate self.w1(x) and self.w3(x)
-  ops::matmul( this->state_.hb, this->state_.xb, layer_weights.w1, this->curr_concurrency_size, dim, hidden_dim );
-  ops::matmul( this->state_.hb2, this->state_.xb, layer_weights.w3, this->curr_concurrency_size, dim, hidden_dim );
+  ops::matmul( this->state_.hb, this->state_.xb, layer_weights.w1, curr_conc_lvl, dim, hidden_dim );
+  ops::matmul( this->state_.hb2, this->state_.xb, layer_weights.w3, curr_conc_lvl, dim, hidden_dim );
 
-  ops::silu( this->state_.hb, this->state_.hb2, hidden_dim, this->curr_concurrency_size );
+  ops::silu( this->state_.hb, this->state_.hb2, hidden_dim, curr_conc_lvl );
 
   // final matmul to get the output of the ffn
-  ops::matmul( this->state_.xb, this->state_.hb, layer_weights.w2, this->curr_concurrency_size, hidden_dim, dim );
+  ops::matmul( this->state_.xb, this->state_.hb, layer_weights.w2, curr_conc_lvl, hidden_dim, dim );
 
   // residual connection
-  ops::accum( x, this->state_.xb, dim, this->curr_concurrency_size );
+  ops::accum( this->state_.x, this->state_.xb, dim, curr_conc_lvl );
 }
 
 template<typename DType>

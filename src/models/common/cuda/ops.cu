@@ -241,7 +241,8 @@ void attention_0_gemm( const DType* query,
                        const uint64_t n_layers,
                        const uint64_t seq_len,
                        const uint64_t head_size,
-                       const uint64_t n_heads,
+                       const uint64_t n_kv_heads,
+                       const uint64_t gqa_size,
                        const uint64_t batch_size,
                        const uint64_t max_batch_size,
                        vector<uint64_t> id_alloc_s,
@@ -250,36 +251,36 @@ void attention_0_gemm( const DType* query,
   const cudaDataType_t cuda_arg_type = is_same_v<DType, __half> ? CUDA_R_16F : CUDA_R_32F;
   const float scale = 1.0f / sqrtf( head_size );
 
-  const uint64_t m = 1;
   const uint64_t k = head_size;
+  const uint64_t n = gqa_size;
 
-  const uint64_t lda = m;
-  const uint64_t ldb = n_layers * max_batch_size * n_heads * head_size * 2;
-  const uint64_t ldc = m;
+  const uint64_t lda = n_layers * max_batch_size * n_kv_heads * head_size * 2;
+  const uint64_t ldb = k;
+  const uint64_t ldc = seq_len;
 
   const uint64_t strideA = head_size;
-  const uint64_t strideB = head_size;
-  const uint64_t strideC = seq_len;
+  const uint64_t strideB = head_size * gqa_size;
+  const uint64_t strideC = seq_len * gqa_size;
 
-  const uint64_t batchCount = n_heads;
+  const uint64_t batchCount = n_kv_heads;
 
-  const uint64_t dim_ = head_size * n_heads;
-  const uint64_t att_dim_ = seq_len * n_heads;
+  const uint64_t dim_ = head_size * n_kv_heads * gqa_size;
+  const uint64_t att_dim_ = seq_len * n_kv_heads * gqa_size;
 
   for ( size_t i = 0; i < batch_size; i++ ) {
-    const uint64_t n = token_pos_s[i] + 1;
+    const uint64_t m = token_pos_s[i] + 1;
     CHECK_CUBLAS( cublasGemmStridedBatchedEx( cublas_handle_array[i],
-                                              CUBLAS_OP_N,
+                                              CUBLAS_OP_T,
                                               CUBLAS_OP_N,
                                               m,
                                               n,
                                               k,
                                               &scale,
-                                              query + i * dim_,
+                                              key_base + id_alloc_s[i] * dim_,
                                               cuda_arg_type,
                                               lda,
                                               strideA,
-                                              key_base + id_alloc_s[i] * dim_,
+                                              query + i * dim_,
                                               cuda_arg_type,
                                               ldb,
                                               strideB,
@@ -301,7 +302,8 @@ void attention_2_gemm( const DType* att,
                        const uint64_t n_layers,
                        const uint64_t seq_len,
                        const uint64_t head_size,
-                       const uint64_t n_heads,
+                       const uint64_t n_kv_heads,
+                       const uint64_t gqa_size,
                        const uint64_t batch_size,
                        const uint64_t max_batch_size,
                        vector<uint64_t> id_alloc_s,
@@ -310,23 +312,23 @@ void attention_2_gemm( const DType* att,
   const cudaDataType_t cuda_arg_type = is_same_v<DType, __half> ? CUDA_R_16F : CUDA_R_32F;
 
   const uint64_t m = head_size;
-  const uint64_t n = 1;
+  const uint64_t n = gqa_size;
 
-  const uint64_t lda = n_layers * max_batch_size * n_heads * head_size * 2;
+  const uint64_t lda = n_layers * max_batch_size * n_kv_heads * head_size * 2;
+  const uint64_t ldb = seq_len;
   const uint64_t ldc = m;
 
   const uint64_t strideA = head_size;
-  const uint64_t strideB = seq_len;
-  const uint64_t strideC = head_size;
+  const uint64_t strideB = seq_len * gqa_size;
+  const uint64_t strideC = head_size * gqa_size;
 
-  const uint64_t batchCount = n_heads;
+  const uint64_t batchCount = n_kv_heads;
 
-  const uint64_t dim_ = head_size * n_heads;
-  const uint64_t att_dim_ = seq_len * n_heads;
+  const uint64_t dim_ = head_size * n_kv_heads * gqa_size;
+  const uint64_t att_dim_ = seq_len * n_kv_heads * gqa_size;
 
   for ( size_t i = 0; i < batch_size; i++ ) {
     const uint64_t k = token_pos_s[i] + 1;
-    const uint64_t ldb = k;
 
     CHECK_CUBLAS( cublasGemmStridedBatchedEx( cublas_handle_array[i],
                                               CUBLAS_OP_N,
@@ -472,18 +474,20 @@ void silu( DType* _hb, DType* _hb2, const uint64_t hidden_dim, const uint64_t ba
 
 template<typename DType>
 __global__ void do_rope( const uint64_t head_size,
+                         const uint64_t gqa_size,
                          const DType* freq_cis_real_row,
                          const DType* freq_cis_imag_row,
                          DType* state_q,
                          DType* state_k )
 {
-  const uint64_t head_num = blockIdx.x;
+  const uint64_t head_q_num = gqa_size * blockIdx.x;
+  const uint64_t head_k_num = blockIdx.x;
   const uint64_t elem_idx = 2 * threadIdx.x;
 
   // apply RoPE rotation to the q and k vectors for each head
   // get the q and k vectors for this head
-  DType* q = state_q + head_num * head_size;
-  DType* k = state_k + head_num * head_size;
+  DType* q = state_q + head_q_num * head_size;
+  DType* k = state_k + head_k_num * head_size;
 
   // rotate q and k by the freq_cis_real and freq_cis_imag
   const DType q0 = q[elem_idx];
@@ -492,15 +496,18 @@ __global__ void do_rope( const uint64_t head_size,
   const DType k1 = k[elem_idx + 1];
   const DType fcr = freq_cis_real_row[elem_idx / 2];
   const DType fci = freq_cis_imag_row[elem_idx / 2];
-  q[elem_idx] = q0 * fcr - q1 * fci;
-  q[elem_idx + 1] = q0 * fci + q1 * fcr;
   k[elem_idx] = k0 * fcr - k1 * fci;
   k[elem_idx + 1] = k0 * fci + k1 * fcr;
+  for (uint64_t i = 0; i < gqa_size; i++){
+    q[i * head_size + elem_idx] = q0 * fcr - q1 * fci;
+    q[i * head_size + elem_idx + 1] = q0 * fci + q1 * fcr;
+  }
 }
 
 template<typename DType>
 void apply_rope( const uint64_t head_size,
-                 const uint64_t n_heads,
+                 const uint64_t n_kv_heads,
+                 const uint64_t gqa_size,
                  const uint64_t curr_batch_size,
                  vector<uint64_t> token_pos_s,
                  const DType* freq_cis_real,
@@ -509,11 +516,12 @@ void apply_rope( const uint64_t head_size,
                  DType* state_k )
 {
   for ( uint64_t i = 0; i < curr_batch_size; i++ ) {
-    do_rope<<<n_heads, head_size / 2, 0, streams[i]>>>( head_size,
+    do_rope<<<n_kv_heads, head_size / 2, 0, streams[i]>>>( head_size,
+                                                           gqa_size,
                                                         freq_cis_real + token_pos_s[i] * head_size / 2,
                                                         freq_cis_imag + token_pos_s[i] * head_size / 2,
-                                                        state_q + i * n_heads * head_size,
-                                                        state_k + i * n_heads * head_size );
+                                                        state_q + i * n_kv_heads * gqa_size * head_size,
+                                                        state_k + i * n_kv_heads * head_size );
   }
 }
 
@@ -654,7 +662,8 @@ template void attention_0_gemm<float>( const float* query,
                                        const uint64_t n_layers,
                                        const uint64_t seq_len,
                                        const uint64_t head_size,
-                                       const uint64_t n_heads,
+                                       const uint64_t n_kv_heads,
+                                       const uint64_t gqa_size,
                                        const uint64_t batch_size,
                                        const uint64_t max_batch_size,
                                        vector<uint64_t> id_alloc_s,
@@ -666,7 +675,8 @@ template void attention_0_gemm<__half>( const __half* query,
                                         const uint64_t n_layers,
                                         const uint64_t seq_len,
                                         const uint64_t head_size,
-                                        const uint64_t n_heads,
+                                        const uint64_t n_kv_heads,
+                                        const uint64_t gqa_size,
                                         const uint64_t batch_size,
                                         const uint64_t max_batch_size,
                                         vector<uint64_t> id_alloc_s,
@@ -678,7 +688,8 @@ template void attention_2_gemm<float>( const float* att,
                                        const uint64_t n_layers,
                                        const uint64_t seq_len,
                                        const uint64_t head_size,
-                                       const uint64_t n_heads,
+                                       const uint64_t n_kv_heads,
+                                       const uint64_t gqa_size,
                                        const uint64_t batch_size,
                                        const uint64_t max_batch_size,
                                        vector<uint64_t> id_alloc_s,
@@ -690,7 +701,8 @@ template void attention_2_gemm<__half>( const __half* att,
                                         const uint64_t n_layers,
                                         const uint64_t seq_len,
                                         const uint64_t head_size,
-                                        const uint64_t n_heads,
+                                        const uint64_t n_kv_heads,
+                                        const uint64_t gqa_size,
                                         const uint64_t batch_size,
                                         const uint64_t max_batch_size,
                                         vector<uint64_t> id_alloc_s,
@@ -711,7 +723,8 @@ template void attention_softmax<__half>( __half* att,
                                          const uint64_t batch_size );
 
 template void apply_rope<float>( const uint64_t head_size,
-                                 const uint64_t n_heads,
+                                 const uint64_t n_kv_heads,
+                                 const uint64_t gqa_size,
                                  const uint64_t curr_batch_size,
                                  vector<uint64_t> token_pos_s,
                                  const float* freq_cis_real,
@@ -720,7 +733,8 @@ template void apply_rope<float>( const uint64_t head_size,
                                  float* state_k );
 
 template void apply_rope<__half>( const uint64_t head_size,
-                                  const uint64_t n_heads,
+                                  const uint64_t n_kv_heads,
+                                  const uint64_t gqa_size,
                                   const uint64_t curr_batch_size,
                                   vector<uint64_t> token_pos_s,
                                   const __half* freq_cis_real,
