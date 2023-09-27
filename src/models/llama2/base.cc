@@ -223,8 +223,8 @@ template<typename DType>
 size_t RunState<DType>::state_size( const Config& config )
 {
   return sizeof( DType ) * config.concurrency_limit
-         * ( config.dim * 4 + config.kv_dim * 2 + config.hidden_dim * 2 + config.n_heads * config.seq_len + config.vocab_size
-             + config.n_heads );
+         * ( config.dim * 4 + config.kv_dim * 2 + config.hidden_dim * 2 + config.n_heads * config.seq_len
+             + config.vocab_size + config.n_heads );
 }
 
 /* InferenceContext */
@@ -238,28 +238,35 @@ InferenceContext<DType>::InferenceContext( const Config& config, DType* buffer )
   , kv_dim_( config.kv_dim )
   , n_layers_( end_layer_ - start_layer_ + 1 )
   , head_size_( config.dim / config.n_heads )
-  , kv_prompt_limit_ (config.kv_prompt_limit)
+  , kv_prompt_limit_( config.kv_prompt_limit )
 {
 }
 
 template<typename DType>
 size_t InferenceContext<DType>::context_size( const Config& config )
 {
-   return sizeof( DType ) * config.seq_len * config.kv_dim * 2 * ( config.end_layer_num - config.start_layer_num + 1 ) * config.kv_prompt_limit;
+  return sizeof( DType ) * config.seq_len * config.kv_dim * 2 * ( config.end_layer_num - config.start_layer_num + 1 )
+         * config.kv_prompt_limit;
 }
 
 template<typename DType>
 DType* InferenceContext<DType>::key( const Config& config, int layer, const int step, const int batch, const int head )
 {
   layer -= start_layer_;
-  return buffer_ + step * ( n_layers_ * kv_dim_ * kv_prompt_limit_ * 2 ) + layer * ( kv_dim_ * kv_prompt_limit_ * 2 ) + batch * kv_dim_ + head * head_size_;
+  return buffer_ + step * ( n_layers_ * kv_dim_ * kv_prompt_limit_ * 2 ) + layer * ( kv_dim_ * kv_prompt_limit_ * 2 )
+         + batch * kv_dim_ + head * head_size_;
 }
 
 template<typename DType>
-DType* InferenceContext<DType>::value( const Config& config, int layer, const int step, const int batch, const int head )
+DType* InferenceContext<DType>::value( const Config& config,
+                                       int layer,
+                                       const int step,
+                                       const int batch,
+                                       const int head )
 {
   layer -= start_layer_;
-  return buffer_ + step * ( n_layers_ * kv_dim_ * kv_prompt_limit_ * 2 ) + layer * ( kv_dim_ * kv_prompt_limit_ * 2 ) + batch * kv_dim_ + head * head_size_ + kv_dim_ * kv_prompt_limit_;
+  return buffer_ + step * ( n_layers_ * kv_dim_ * kv_prompt_limit_ * 2 ) + layer * ( kv_dim_ * kv_prompt_limit_ * 2 )
+         + batch * kv_dim_ + head * head_size_ + kv_dim_ * kv_prompt_limit_;
 }
 
 /* BaseLlama2 */
@@ -273,8 +280,8 @@ BaseLlama2<DType, Context>::BaseLlama2( const Config& config,
   , layers_buffer_( move( layers_weights ) )
   , run_state_buffer_( move( run_state ) )
   , config_( config )
-  , id_allocation_( std::vector<uint64_t>(config.concurrency_limit) )
-  , token_pos_( std::vector<uint64_t>(config.concurrency_limit) )
+  , id_allocation_( std::vector<uint64_t>( config.concurrency_limit ) )
+  , token_pos_( std::vector<uint64_t>( config.concurrency_limit ) )
   , state_( config_, run_state_buffer_.get() )
   , base_weights_( config_, base_weights_buffer_.get() )
   , layer_weights_( [&] {

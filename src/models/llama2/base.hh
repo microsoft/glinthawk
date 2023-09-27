@@ -1,19 +1,23 @@
 #pragma once
 
+#include "cuda_runtime.h"
+#include "models/common/model.hh"
 #include <filesystem>
 #include <memory>
 #include <optional>
 #include <string>
 #include <unordered_map>
 #include <vector>
-#include "cuda_runtime.h"
-#include "models/common/model.hh"
 
 namespace glinthawk::models::llama2 {
 
 struct Config
 {
-  Config( const std::filesystem::path& config_file, const int32_t start_layer, const int32_t end_layer, uint64_t kv_prompt_limit_, uint64_t concurrency_limit_ );
+  Config( const std::filesystem::path& config_file,
+          const int32_t start_layer,
+          const int32_t end_layer,
+          uint64_t kv_prompt_limit_,
+          uint64_t concurrency_limit_ );
 
   std::string to_string() const;
 
@@ -28,8 +32,8 @@ struct Config
   uint64_t gqa_size {};             // GQA sharing rate
   uint64_t vocab_size {};           // vocabulary size (byte-level)
   uint64_t seq_len {};              // max sequence length
-  uint64_t kv_prompt_limit {1};     // max prompt K/V size
-  uint64_t concurrency_limit {1};   // max concurrent inference size
+  uint64_t kv_prompt_limit { 1 };   // max prompt K/V size
+  uint64_t concurrency_limit { 1 }; // max concurrent inference size
 
   // which layers to serve
   uint64_t start_layer_num {};
@@ -117,18 +121,18 @@ struct RunState
 
   static size_t state_size( const Config& config );
 
-  DType* buffer_;               // we use this buffer for everything, including activations
-  DType* x {};                  // activation at current time stamp (B, dim)
-  DType* xb {};                 // same, but inside a residual branch (B, dim)
-  DType* xb2 {};                // an additional buffer just for convenience (B, dim)
-  DType* q {};                  // query (B, dim)
-  DType* k {};                  // key (B, kv_dim)
-  DType* v {};                  // value (B, kv_dim)
-  DType* hb {};                 // buffer for hidden dimension in the ffn (B, hidden_dim)
-  DType* hb2 {};                // buffer for hidden dimension in the ffn (B, hidden_dim)
-  DType* att {};                // buffer for scores/attention values (B, n_heads, seq_len)
-  DType* logits {};             // output logits (B, vocab_size)
-  DType* temp_softmax {};       // temporary buffer for computing softmax (B, n_heads)
+  DType* buffer_;         // we use this buffer for everything, including activations
+  DType* x {};            // activation at current time stamp (B, dim)
+  DType* xb {};           // same, but inside a residual branch (B, dim)
+  DType* xb2 {};          // an additional buffer just for convenience (B, dim)
+  DType* q {};            // query (B, dim)
+  DType* k {};            // key (B, kv_dim)
+  DType* v {};            // value (B, kv_dim)
+  DType* hb {};           // buffer for hidden dimension in the ffn (B, hidden_dim)
+  DType* hb2 {};          // buffer for hidden dimension in the ffn (B, hidden_dim)
+  DType* att {};          // buffer for scores/attention values (B, n_heads, seq_len)
+  DType* logits {};       // output logits (B, vocab_size)
+  DType* temp_softmax {}; // temporary buffer for computing softmax (B, n_heads)
 };
 
 /// @brief InferenceContext for Llama2 model is the KV-cache
@@ -160,8 +164,8 @@ protected:
 
   const Config config_;
   uint64_t curr_concurrency_size { 1 };
-  std::vector<uint64_t> id_allocation_ { };
-  std::vector<uint64_t> token_pos_ { };
+  std::vector<uint64_t> id_allocation_ {};
+  std::vector<uint64_t> token_pos_ {};
 
   RunState<DType> state_;
   BaseWeights<DType> base_weights_;
@@ -177,7 +181,7 @@ public:
   ~BaseLlama2() override = default;
 
   BaseLlama2( BaseLlama2&& ) = default;
-  BaseLlama2& operator=( BaseLlama2 && ) = default;
+  BaseLlama2& operator=( BaseLlama2&& ) = default;
   BaseLlama2( const BaseLlama2& ) = delete;
   BaseLlama2& operator=( const BaseLlama2& ) = delete;
 

@@ -46,9 +46,9 @@ int main( int argc, char* argv[] )
     const filesystem::path model_dir_path { argv[1] };
     const filesystem::path tokenizer_path { argv[2] };
 
-    const int max_batch_size = atoi(argv[3]);
-    const int conc_size = atoi(argv[4]);
-    const int batch_size = atoi(argv[5]);
+    const int max_batch_size = atoi( argv[3] );
+    const int conc_size = atoi( argv[4] );
+    const int batch_size = atoi( argv[5] );
 
     const int seq_len = 1024;
 
@@ -58,26 +58,26 @@ int main( int argc, char* argv[] )
     using Llama2 = models::llama2::cuda::Llama2<__half>;
 
     vector<vector<uint32_t>> prompt_tokens_batch;
-    for (size_t i = 0; i < prompt_tokens.size(); i++)
-      prompt_tokens_batch.push_back(vector<uint32_t>(batch_size, prompt_tokens[i]));
+    for ( size_t i = 0; i < prompt_tokens.size(); i++ )
+      prompt_tokens_batch.push_back( vector<uint32_t>( batch_size, prompt_tokens[i] ) );
 
     vector<uint32_t> prompt_ids_batch;
-    for (int i = 0; i < batch_size; i++)
-      prompt_ids_batch.push_back((i * max_batch_size) / batch_size);
+    for ( int i = 0; i < batch_size; i++ )
+      prompt_ids_batch.push_back( ( i * max_batch_size ) / batch_size );
 
     vector<vector<uint32_t>> token_pos_batch;
-    for (size_t i = 0; i < seq_len; i++)
-      token_pos_batch.push_back(vector<uint32_t>(batch_size, i));
+    for ( size_t i = 0; i < seq_len; i++ )
+      token_pos_batch.push_back( vector<uint32_t>( batch_size, i ) );
 
     size_t i = 0;
-    for ( vector<uint32_t> token = prompt_tokens_batch[0] /* BOS */; token[0] != 2 /* EOS */ && i < seq_len; i++) {
+    for ( vector<uint32_t> token = prompt_tokens_batch[0] /* BOS */; token[0] != 2 /* EOS */ && i < seq_len; i++ ) {
       if ( i < prompt_tokens_batch.size() ) {
         token = prompt_tokens_batch[i];
       }
 
       cout << vocabulary.get_word( token[0] ) << flush;
       GlobalScopeTimer<Timer::Category::TokenGeneration> _;
-      token = llama -> forward( token, prompt_ids_batch, token_pos_batch[i] );
+      token = llama->forward( token, prompt_ids_batch, token_pos_batch[i] );
     }
 
     cerr << endl << global_timer().summary() << endl;

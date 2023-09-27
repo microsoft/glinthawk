@@ -45,7 +45,7 @@ int main( int argc, char* argv[] )
     vector<uint32_t> prompt_tokens { 1,   518,  25580, 29962, 25538, 2211,  25562, 363,  7952,
                                      292, 9045, 29891, 29889, 518,   29914, 25580, 29962 };
 
-    const unsigned int batch_size = atoi(argv[3]);
+    const unsigned int batch_size = atoi( argv[3] );
     const unsigned int max_batch_size = batch_size;
     const unsigned int conc_size = batch_size + prompt_tokens.size() - 1;
 
@@ -55,71 +55,71 @@ int main( int argc, char* argv[] )
     models::llama2::Vocabulary vocabulary { tokenizer_path };
 
     vector<vector<uint32_t>> prompt_tokens_batch;
-    for (unsigned int i = 0; i < prompt_tokens.size(); i++){
+    for ( unsigned int i = 0; i < prompt_tokens.size(); i++ ) {
       vector<uint32_t> new_vec;
-      if (i == 0){
-        new_vec.insert(new_vec.end(), prompt_tokens.begin(), prompt_tokens.end());
+      if ( i == 0 ) {
+        new_vec.insert( new_vec.end(), prompt_tokens.begin(), prompt_tokens.end() );
       } else {
-        new_vec.push_back(-1);
+        new_vec.push_back( -1 );
       }
-      for (unsigned int j = 0; j < batch_size - 1; j++){
-        new_vec.push_back(prompt_tokens[i]);
+      for ( unsigned int j = 0; j < batch_size - 1; j++ ) {
+        new_vec.push_back( prompt_tokens[i] );
       }
-      prompt_tokens_batch.push_back(new_vec);
+      prompt_tokens_batch.push_back( new_vec );
     }
 
     vector<vector<uint32_t>> prompt_ids_batch;
-    for (unsigned int i = 0; i < seq_len-prompt_tokens.size(); i++){
+    for ( unsigned int i = 0; i < seq_len - prompt_tokens.size(); i++ ) {
       vector<uint32_t> new_vec;
-      if (i == 0){
-        new_vec = vector<uint32_t>(prompt_tokens.size(), 0);
+      if ( i == 0 ) {
+        new_vec = vector<uint32_t>( prompt_tokens.size(), 0 );
       } else {
-        new_vec.push_back(0);
+        new_vec.push_back( 0 );
       }
-      for (unsigned int j = 0; j < batch_size - 1; j++){
-        new_vec.push_back(j+1);
+      for ( unsigned int j = 0; j < batch_size - 1; j++ ) {
+        new_vec.push_back( j + 1 );
       }
-      prompt_ids_batch.push_back(new_vec);
+      prompt_ids_batch.push_back( new_vec );
     }
 
     vector<vector<uint32_t>> token_pos_batch;
-    for (unsigned int i = 0; i < seq_len-prompt_tokens.size(); i++){
+    for ( unsigned int i = 0; i < seq_len - prompt_tokens.size(); i++ ) {
       vector<uint32_t> new_vec;
-      if (i == 0){
-        for (unsigned int j = 0; j < prompt_tokens.size(); j++){
-          new_vec.push_back(j);
+      if ( i == 0 ) {
+        for ( unsigned int j = 0; j < prompt_tokens.size(); j++ ) {
+          new_vec.push_back( j );
         }
       } else {
-        new_vec.push_back(i+prompt_tokens.size()-1);
+        new_vec.push_back( i + prompt_tokens.size() - 1 );
       }
-      for (unsigned int j = 0; j < batch_size - 1; j++){
-        new_vec.push_back(i);
+      for ( unsigned int j = 0; j < batch_size - 1; j++ ) {
+        new_vec.push_back( i );
       }
-      token_pos_batch.push_back(new_vec);
+      token_pos_batch.push_back( new_vec );
     }
 
-    vector<vector<uint32_t>> response_tokens(batch_size);
+    vector<vector<uint32_t>> response_tokens( batch_size );
 
     vector<uint32_t> token;
-    for ( size_t i = 0; i < prompt_ids_batch.size(); i++) {
+    for ( size_t i = 0; i < prompt_ids_batch.size(); i++ ) {
       if ( i < prompt_tokens_batch.size() ) {
         token = prompt_tokens_batch[i];
       }
-      for (unsigned int j = 0; j < token.size(); j++){
-        response_tokens[prompt_ids_batch[i][j]].push_back(token[j]);
+      for ( unsigned int j = 0; j < token.size(); j++ ) {
+        response_tokens[prompt_ids_batch[i][j]].push_back( token[j] );
       }
       GlobalScopeTimer<Timer::Category::TokenGeneration> _;
-      token = llama -> forward( token, prompt_ids_batch[i], token_pos_batch[i] );
+      token = llama->forward( token, prompt_ids_batch[i], token_pos_batch[i] );
       if ( i == 0 ) {
-        prompt_tokens_batch[1][0] = token[prompt_tokens.size()-1];
-      } else if ( i + 1 < prompt_tokens_batch.size()) {
-        prompt_tokens_batch[i+1][0] = token[0];
+        prompt_tokens_batch[1][0] = token[prompt_tokens.size() - 1];
+      } else if ( i + 1 < prompt_tokens_batch.size() ) {
+        prompt_tokens_batch[i + 1][0] = token[0];
       }
     }
 
-    for ( size_t i = 0; i < response_tokens.size(); i++) {
+    for ( size_t i = 0; i < response_tokens.size(); i++ ) {
       cout << "Prompt " << i << ":" << endl;
-      for ( uint32_t tok: response_tokens[i] )
+      for ( uint32_t tok : response_tokens[i] )
         cout << vocabulary.get_word( tok ) << flush;
       cout << endl << endl;
     }
