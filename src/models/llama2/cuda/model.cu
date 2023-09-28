@@ -60,7 +60,7 @@ Llama2<DType>::~Llama2()
 template<typename DType>
 unique_ptr<Llama2<DType>> Llama2<DType>::load( const filesystem::path& model_path,
                                                const int32_t start_layer,
-                                               const int32_t end_layer_raw,
+                                               const int32_t end_layer,
                                                const uint64_t kv_prompt_limit,
                                                const uint64_t concurrency_limit )
 {
@@ -76,11 +76,12 @@ unique_ptr<Llama2<DType>> Llama2<DType>::load( const filesystem::path& model_pat
   CHECK_GT( 1 << 16, config.n_heads ) << "RoPE has n_heads blocks, and this cannot surpass 2^16.";
   CHECK_GT( 1025, config.dim / config.n_heads / 2 ) << "RoPE has head_size / 2 threads, and this cannot surpass 1024.";
   CHECK_GT( 1 << 16, config.seq_len ) << "Attention softmax has seq_len blocks, and this cannot surpass 2^16.";
-  const size_t tpb = ops::TPB;
-  CHECK_GT( 1025, tpb ) << "Threads per block cannot surpass 1024.";
-  CHECK_GT( 1 << 16, ( config.dim + tpb - 1 ) / tpb ) << "RMS Norm blocks cannot surpass 2^16.";
-  CHECK_GT( 1 << 16, ( config.dim * config.concurrency_limit + tpb - 1 ) / tpb ) << "Accum blocks cannot surpass 2^16.";
-  CHECK_GT( 1 << 16, ( config.hidden_dim * config.concurrency_limit + tpb - 1 ) / tpb )
+
+  CHECK_LT( ops::TPB, 1025 ) << "Threads per block cannot surpass 1024.";
+  CHECK_GT( 1 << 16, ( config.dim + ops::TPB - 1 ) / ops::TPB ) << "RMS Norm blocks cannot surpass 2^16.";
+  CHECK_GT( 1 << 16, ( config.dim * config.concurrency_limit + ops::TPB - 1 ) / ops::TPB )
+    << "Accum blocks cannot surpass 2^16.";
+  CHECK_GT( 1 << 16, ( config.hidden_dim * config.concurrency_limit + ops::TPB - 1 ) / ops::TPB )
     << "Silu blocks cannot surpass 2^16.";
 
   const int32_t layer_count = end_layer - start_layer + 1;
@@ -135,10 +136,7 @@ unique_ptr<Llama2<DType>> Llama2<DType>::load( const filesystem::path& model_pat
     LOG( INFO ) << "Loaded layer " << i << " (" << layer_size << " bytes).";
   }
 
-  auto model = unique_ptr<Llama2<DType>>( new Llama2<DType> {
-    config, move( base ), move( layers ), move( run_state ) } );
-
-  return model;
+  return make_unique<Llama2<DType>>( config, move( base ), move( layers ), move( run_state ) );
 }
 
 template<typename DType>
@@ -217,12 +215,8 @@ void Llama2<DType>::transformer_layer( const int32_t layer_num ) // NEEDS CONTEX
                          this->token_pos_ );
 
   // softmax
-  ops::attention_softmax( this->state_.att,
-                          this->token_pos_,
-                          seq_len,
-                          n_heads,
-                          this->state_.temp_softmax,
-                          curr_conc_lvl );
+  ops::attention_softmax(
+    this->state_.att, this->token_pos_, seq_len, n_heads, this->state_.temp_softmax, curr_conc_lvl );
 
   ops::attention_2_gemm( this->state_.att,
                          context.buffer_ + ( layer_num - this->config_.start_layer_num ) * ( dim * 2 ) + dim,
@@ -434,7 +428,7 @@ std::vector<uint32_t> Llama2<DType>::forward( const std::vector<uint32_t>& token
 
 template<typename DType>
 std::vector<InferenceState> Llama2<DType>::forward( const std::vector<InferenceState>& inference_state_s,
-                                                           const std::vector<uint32_t>& prompt_id_s )
+                                                    const std::vector<uint32_t>& prompt_id_s )
 {
   std::vector<std::reference_wrapper<const InferenceState>> res;
   for ( auto& state : inference_state_s )

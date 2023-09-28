@@ -498,7 +498,7 @@ __global__ void do_rope( const uint64_t head_size,
   const DType fci = freq_cis_imag_row[elem_idx / 2];
   k[elem_idx] = k0 * fcr - k1 * fci;
   k[elem_idx + 1] = k0 * fci + k1 * fcr;
-  for (uint64_t i = 0; i < gqa_size; i++){
+  for ( uint64_t i = 0; i < gqa_size; i++ ) {
     q[i * head_size + elem_idx] = q0 * fcr - q1 * fci;
     q[i * head_size + elem_idx + 1] = q0 * fci + q1 * fcr;
   }
@@ -518,10 +518,10 @@ void apply_rope( const uint64_t head_size,
   for ( uint64_t i = 0; i < curr_batch_size; i++ ) {
     do_rope<<<n_kv_heads, head_size / 2, 0, streams[i]>>>( head_size,
                                                            gqa_size,
-                                                        freq_cis_real + token_pos_s[i] * head_size / 2,
-                                                        freq_cis_imag + token_pos_s[i] * head_size / 2,
-                                                        state_q + i * n_kv_heads * gqa_size * head_size,
-                                                        state_k + i * n_kv_heads * head_size );
+                                                           freq_cis_real + token_pos_s[i] * head_size / 2,
+                                                           freq_cis_imag + token_pos_s[i] * head_size / 2,
+                                                           state_q + i * n_kv_heads * gqa_size * head_size,
+                                                           state_k + i * n_kv_heads * head_size );
   }
 }
 
