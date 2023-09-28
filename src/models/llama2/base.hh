@@ -21,6 +21,7 @@ struct Config
 
   std::string to_string() const;
 
+  /// @brief Size of the config stored on disk (in bytes)
   static size_t config_size() { return sizeof( int32_t ) * 7; }
 
   uint64_t dim {};                  // transformer dimension

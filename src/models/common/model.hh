@@ -129,19 +129,11 @@ template<typename Context>
 class Model
 {
 public:
-<<<<<<< HEAD
   virtual ~Model() = default;
   virtual InferenceState forward( const InferenceState& inference_state, const uint32_t& prompt_id ) = 0;
   virtual std::vector<InferenceState> forward( const std::vector<InferenceState>& inference_state_s,
                                                const std::vector<uint32_t>& prompt_id_s )
     = 0;
-||||||| parent of d22c38f (model.hh: Pass an R-value reference to the state in forward().)
-  virtual ~Model() {}
-  virtual InferenceState forward( const InferenceState& inference_state, Context& context ) = 0;
-=======
-  virtual ~Model() {}
-  virtual InferenceState forward( InferenceState&& inference_state, Context& context ) = 0;
->>>>>>> d22c38f (model.hh: Pass an R-value reference to the state in forward().)
 };
 
 } // namespace glinthawk::models
