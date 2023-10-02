@@ -199,6 +199,7 @@ RunState<DType>::RunState( const Config& config, DType* buffer )
   , att( hb2 + config.hidden_dim * config.concurrency_limit )
   , logits( att + config.n_heads * config.seq_len * config.concurrency_limit )
   , temp_softmax( logits + config.vocab_size * config.concurrency_limit )
+  , rng_state( reinterpret_cast<curandState*>(temp_softmax + config.n_heads * config.concurrency_limit ) )
 {
 }
 
@@ -207,7 +208,7 @@ size_t RunState<DType>::state_size( const Config& config )
 {
   return sizeof( DType ) * config.concurrency_limit
          * ( config.dim * 4 + config.kv_dim * 2 + config.hidden_dim * 2 + config.n_heads * config.seq_len + config.vocab_size
-             + config.n_heads);
+             + config.n_heads) + sizeof(curandState) * config.concurrency_limit * config.vocab_size;
 }
 
 /* KV CACHE */

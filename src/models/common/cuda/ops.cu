@@ -219,8 +219,8 @@ void copy_kv_cache( const DType* state_k,
                     const uint64_t n_layers,
                     const uint64_t batch_size,
                     const uint64_t max_batch_size,
-                    vector<uint64_t> id_alloc_s,
-                    vector<uint64_t> token_pos_s )
+                    const vector<uint64_t>& id_alloc_s,
+                    const vector<uint64_t>& token_pos_s )
 {
   const uint64_t large_base = n_layers * dim * max_batch_size * 2;
   const uint64_t small_base = dim;
@@ -245,8 +245,8 @@ void attention_0_gemm( const DType* query,
                        const uint64_t gqa_size,
                        const uint64_t batch_size,
                        const uint64_t max_batch_size,
-                       vector<uint64_t> id_alloc_s,
-                       vector<uint64_t> token_pos_s )
+                       const vector<uint64_t>& id_alloc_s,
+                       const vector<uint64_t>& token_pos_s )
 {
   const cudaDataType_t cuda_arg_type = is_same_v<DType, __half> ? CUDA_R_16F : CUDA_R_32F;
   const float scale = 1.0f / sqrtf( head_size );
@@ -306,8 +306,8 @@ void attention_2_gemm( const DType* att,
                        const uint64_t gqa_size,
                        const uint64_t batch_size,
                        const uint64_t max_batch_size,
-                       vector<uint64_t> id_alloc_s,
-                       vector<uint64_t> token_pos_s )
+                       const vector<uint64_t>& id_alloc_s,
+                       const vector<uint64_t>& token_pos_s )
 {
   const cudaDataType_t cuda_arg_type = is_same_v<DType, __half> ? CUDA_R_16F : CUDA_R_32F;
 
@@ -354,18 +354,6 @@ void attention_2_gemm( const DType* att,
                                               computeType,
                                               CUBLAS_GEMM_DEFAULT ) );
   }
-}
-
-template<typename DType>
-vector<uint32_t> sample( const DType* probabilities, const uint64_t n, const uint64_t batch_size )
-{
-  throw runtime_error( "not implemented" );
-}
-
-template<typename DType>
-uint32_t sample( const DType* probabilities, const uint64_t n )
-{
-  throw runtime_error( "not implemented" );
 }
 
 template<typename DType>
@@ -498,7 +486,7 @@ __global__ void do_rope( const uint64_t head_size,
   const DType fci = freq_cis_imag_row[elem_idx / 2];
   k[elem_idx] = k0 * fcr - k1 * fci;
   k[elem_idx + 1] = k0 * fci + k1 * fcr;
-  for (uint64_t i = 0; i < gqa_size; i++){
+  for ( uint64_t i = 0; i < gqa_size; i++ ) {
     q[i * head_size + elem_idx] = q0 * fcr - q1 * fci;
     q[i * head_size + elem_idx + 1] = q0 * fci + q1 * fcr;
   }
@@ -509,7 +497,7 @@ void apply_rope( const uint64_t head_size,
                  const uint64_t n_kv_heads,
                  const uint64_t gqa_size,
                  const uint64_t curr_batch_size,
-                 vector<uint64_t> token_pos_s,
+                 const vector<uint64_t>& token_pos_s,
                  const DType* freq_cis_real,
                  const DType* freq_cis_imag,
                  DType* state_q,
@@ -518,10 +506,10 @@ void apply_rope( const uint64_t head_size,
   for ( uint64_t i = 0; i < curr_batch_size; i++ ) {
     do_rope<<<n_kv_heads, head_size / 2, 0, streams[i]>>>( head_size,
                                                            gqa_size,
-                                                        freq_cis_real + token_pos_s[i] * head_size / 2,
-                                                        freq_cis_imag + token_pos_s[i] * head_size / 2,
-                                                        state_q + i * n_kv_heads * gqa_size * head_size,
-                                                        state_k + i * n_kv_heads * head_size );
+                                                           freq_cis_real + token_pos_s[i] * head_size / 2,
+                                                           freq_cis_imag + token_pos_s[i] * head_size / 2,
+                                                           state_q + i * n_kv_heads * gqa_size * head_size,
+                                                           state_k + i * n_kv_heads * head_size );
   }
 }
 
@@ -584,7 +572,7 @@ __global__ void normalize_by_sum( DType* att, const DType* sums, const uint64_t 
 
 template<typename DType>
 void attention_softmax( DType* att,
-                        vector<uint64_t> token_pos_s,
+                        const vector<uint64_t>& token_pos_s,
                         const uint64_t seq_len,
                         const uint64_t n_heads,
                         DType* temp_buffer,
@@ -608,6 +596,43 @@ void attention_softmax( DType* att,
   }
 }
 
+__global__ void setup_kernel( curandState* state, unsigned long seed )
+{
+  int id = blockIdx.x;
+  curand_init( seed, id, 0, &state[id] );
+}
+
+template<typename DType>
+__global__ void gumbel_fix( DType* array, float temp, const uint64_t vocab_size, curandState* rng_state )
+{
+  const uint64_t i = threadIdx.x + blockIdx.x * TPB;
+
+  if ( i < vocab_size ) {
+    float myrandf = curand_uniform( rng_state + i );
+    myrandf = logf( -logf( myrandf ) );
+    if constexpr ( is_same_v<DType, __half> ) {
+      array[i] = __float2half( __half2float( array[i] ) / temp - myrandf );
+    } else {
+      array[i] = array[i] / temp - myrandf;
+    }
+  }
+}
+
+template<typename DType>
+void soft_sample( DType* v,
+                  const vector<float>& temp_s,
+                  curandState* rng_state,
+                  const uint64_t vocab_size,
+                  const uint64_t batch_size )
+{
+  for ( uint64_t i = 0; i < batch_size; i++ ) {
+    if ( temp_s[i] > 0 ) {
+      gumbel_fix<<<div_ceil( vocab_size, TPB ), TPB, 0, streams[i]>>>(
+        v + i * vocab_size, temp_s[i], vocab_size, rng_state + i * vocab_size );
+    }
+  }
+}
+
 template void rmsnorm<float>( float* output,
                               const float* x,
                               const float* weight,
@@ -625,11 +650,16 @@ template vector<uint32_t> argmax<__half>( const __half* v, const uint64_t n, con
 template uint32_t argmax<float>( const float* v, const uint64_t n );
 template uint32_t argmax<__half>( const __half* v, const uint64_t n );
 
-template vector<uint32_t> sample<float>( const float* probabilities, const uint64_t n, const uint64_t batch_size );
-template vector<uint32_t> sample<__half>( const __half* probabilities, const uint64_t n, const uint64_t batch_size );
-
-template uint32_t sample<float>( const float* probabilities, const uint64_t n );
-template uint32_t sample<__half>( const __half* probabilities, const uint64_t n );
+template void soft_sample<float>( float* v,
+                                  const vector<float>& temp_s,
+                                  curandState* rng_state,
+                                  const uint64_t vocab_size,
+                                  const uint64_t batch_size );
+template void soft_sample<__half>( __half* v,
+                                   const vector<float>& temp_s,
+                                   curandState* rng_state,
+                                   const uint64_t vocab_size,
+                                   const uint64_t batch_size );
 
 template void accum<float>( float* a, const float* b, const uint64_t size, const uint64_t batch_size );
 template void accum<__half>( __half* a, const __half* b, const uint64_t size, const uint64_t batch_size );
@@ -666,8 +696,8 @@ template void attention_0_gemm<float>( const float* query,
                                        const uint64_t gqa_size,
                                        const uint64_t batch_size,
                                        const uint64_t max_batch_size,
-                                       vector<uint64_t> id_alloc_s,
-                                       vector<uint64_t> token_pos_s );
+                                       const vector<uint64_t>& id_alloc_s,
+                                       const vector<uint64_t>& token_pos_s );
 
 template void attention_0_gemm<__half>( const __half* query,
                                         const __half* key_base,
@@ -679,8 +709,8 @@ template void attention_0_gemm<__half>( const __half* query,
                                         const uint64_t gqa_size,
                                         const uint64_t batch_size,
                                         const uint64_t max_batch_size,
-                                        vector<uint64_t> id_alloc_s,
-                                        vector<uint64_t> token_pos_s );
+                                        const vector<uint64_t>& id_alloc_s,
+                                        const vector<uint64_t>& token_pos_s );
 
 template void attention_2_gemm<float>( const float* att,
                                        const float* value_base,
@@ -692,8 +722,8 @@ template void attention_2_gemm<float>( const float* att,
                                        const uint64_t gqa_size,
                                        const uint64_t batch_size,
                                        const uint64_t max_batch_size,
-                                       vector<uint64_t> id_alloc_s,
-                                       vector<uint64_t> token_pos_s );
+                                       const vector<uint64_t>& id_alloc_s,
+                                       const vector<uint64_t>& token_pos_s );
 
 template void attention_2_gemm<__half>( const __half* att,
                                         const __half* value_base,
@@ -705,18 +735,18 @@ template void attention_2_gemm<__half>( const __half* att,
                                         const uint64_t gqa_size,
                                         const uint64_t batch_size,
                                         const uint64_t max_batch_size,
-                                        vector<uint64_t> id_alloc_s,
-                                        vector<uint64_t> token_pos_s );
+                                        const vector<uint64_t>& id_alloc_s,
+                                        const vector<uint64_t>& token_pos_s );
 
 template void attention_softmax<float>( float* att,
-                                        vector<uint64_t> token_pos_s,
+                                        const vector<uint64_t>& token_pos_s,
                                         const uint64_t seq_len,
                                         const uint64_t n_heads,
                                         float* temp_buffer,
                                         const uint64_t batch_size );
 
 template void attention_softmax<__half>( __half* att,
-                                         vector<uint64_t> token_pos_s,
+                                         const vector<uint64_t>& token_pos_s,
                                          const uint64_t seq_len,
                                          const uint64_t n_heads,
                                          __half* temp_buffer,
@@ -726,7 +756,7 @@ template void apply_rope<float>( const uint64_t head_size,
                                  const uint64_t n_kv_heads,
                                  const uint64_t gqa_size,
                                  const uint64_t curr_batch_size,
-                                 vector<uint64_t> token_pos_s,
+                                 const vector<uint64_t>& token_pos_s,
                                  const float* freq_cis_real,
                                  const float* freq_cis_imag,
                                  float* state_q,
@@ -736,7 +766,7 @@ template void apply_rope<__half>( const uint64_t head_size,
                                   const uint64_t n_kv_heads,
                                   const uint64_t gqa_size,
                                   const uint64_t curr_batch_size,
-                                  vector<uint64_t> token_pos_s,
+                                  const vector<uint64_t>& token_pos_s,
                                   const __half* freq_cis_real,
                                   const __half* freq_cis_imag,
                                   __half* state_q,
@@ -750,8 +780,8 @@ template void copy_kv_cache<float>( const float* state_k,
                                     const uint64_t n_layers,
                                     const uint64_t batch_size,
                                     const uint64_t max_batch_size,
-                                    vector<uint64_t> id_alloc_s,
-                                    vector<uint64_t> token_pos_s );
+                                    const vector<uint64_t>& id_alloc_s,
+                                    const vector<uint64_t>& token_pos_s );
 
 template void copy_kv_cache<__half>( const __half* state_k,
                                      const __half* state_v,
@@ -761,7 +791,7 @@ template void copy_kv_cache<__half>( const __half* state_k,
                                      const uint64_t n_layers,
                                      const uint64_t batch_size,
                                      const uint64_t max_batch_size,
-                                     vector<uint64_t> id_alloc_s,
-                                     vector<uint64_t> token_pos_s );
+                                     const vector<uint64_t>& id_alloc_s,
+                                     const vector<uint64_t>& token_pos_s );
 
 } // namespace glinthawk::models::common::cuda

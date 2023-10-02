@@ -25,7 +25,7 @@ int main( int argc, char* argv[] )
     abort();
   }
 
-  if ( argc != 4 ) {
+  if ( argc != 5 ) {
     usage( argv[0] );
     return EXIT_FAILURE;
   }
@@ -46,6 +46,7 @@ int main( int argc, char* argv[] )
                                      292, 9045, 29891, 29889, 518,   29914, 25580, 29962 };
 
     const unsigned int batch_size = atoi(argv[3]);
+    const float temp = atof(argv[4]);
     const unsigned int max_batch_size = batch_size;
     const unsigned int conc_size = batch_size + prompt_tokens.size() - 1;
 
@@ -82,6 +83,15 @@ int main( int argc, char* argv[] )
       prompt_ids_batch.push_back(new_vec);
     }
 
+    vector<vector<float>> temp_s_batch;
+    for (unsigned int i = 0; i < seq_len-prompt_tokens.size(); i++){
+      if (i == 0){
+        temp_s_batch.push_back(vector<float>(prompt_tokens.size() + batch_size - 1, temp));
+      } else {
+        temp_s_batch.push_back(vector<float>(prompt_tokens.size(), temp));
+      }
+    }
+
     vector<vector<uint32_t>> token_pos_batch;
     for (unsigned int i = 0; i < seq_len-prompt_tokens.size(); i++){
       vector<uint32_t> new_vec;
@@ -109,7 +119,7 @@ int main( int argc, char* argv[] )
         response_tokens[prompt_ids_batch[i][j]].push_back(token[j]);
       }
       GlobalScopeTimer<Timer::Category::TokenGeneration> _;
-      token = llama -> forward( token, prompt_ids_batch[i], token_pos_batch[i] );
+      token = llama -> forward( token, prompt_ids_batch[i], token_pos_batch[i], temp_s_batch[i] );
       if ( i == 0 ) {
         prompt_tokens_batch[1][0] = token[prompt_tokens.size()-1];
       } else if ( i + 1 < prompt_tokens_batch.size()) {

@@ -12,9 +12,6 @@ private:
   void transformer_layer( const int32_t layer_num );
   void pass_end();
 
-  float temperature_ { 0.0f };
-  std::vector<DType*> pointer_scratchpad { };
-
   std::vector<InferenceState<DType>> forward( const std::vector<std::reference_wrapper<const InferenceState<DType>>>& inference_state_s, const std::vector<uint32_t>& prompt_id_s );
 
 protected:
@@ -33,9 +30,9 @@ public:
 
   std::vector<InferenceState<DType>> forward( const std::vector<InferenceState<DType>>& inference_state_s, const std::vector<uint32_t>& prompt_id_s ) override;
 
-  uint32_t forward( const uint32_t& token, const uint32_t& prompt_id, const uint32_t& token_pos );
+  uint32_t forward( const uint32_t& token, const uint32_t& prompt_id, const uint32_t& token_pos, const float& temperature );
 
-  std::vector<uint32_t> forward( const std::vector<uint32_t>& token_s, const std::vector<uint32_t>& prompt_id_s, const std::vector<uint32_t>& token_pos_s );
+  std::vector<uint32_t> forward( const std::vector<uint32_t>& token_s, const std::vector<uint32_t>& prompt_id_s, const std::vector<uint32_t>& token_pos_s, const std::vector<float>& temperature_s );
 };
 
 } // namespace glinthawk::models::llama2::cuda

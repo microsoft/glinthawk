@@ -25,7 +25,7 @@ int main( int argc, char* argv[] )
     abort();
   }
 
-  if ( argc != 6 ) {
+  if ( argc != 7 ) {
     usage( argv[0] );
     return EXIT_FAILURE;
   }
@@ -45,6 +45,7 @@ int main( int argc, char* argv[] )
     const int max_batch_size = atoi(argv[3]);
     const int conc_size = atoi(argv[4]);
     const int batch_size = atoi(argv[5]);
+    const float temp = atof(argv[6]);
 
     const int seq_len = 1024;
 
@@ -62,6 +63,10 @@ int main( int argc, char* argv[] )
     for (int i = 0; i < batch_size; i++)
       prompt_ids_batch.push_back((i * max_batch_size) / batch_size);
 
+    vector<float> temps_batch;
+    for (int i = 0; i < batch_size; i++)
+      temps_batch.push_back( temp );
+
     vector<vector<uint32_t>> token_pos_batch;
     for (size_t i = 0; i < seq_len; i++)
       token_pos_batch.push_back(vector<uint32_t>(batch_size, i));
@@ -74,7 +79,7 @@ int main( int argc, char* argv[] )
 
       cout << vocabulary.get_word( token[0] ) << flush;
       GlobalScopeTimer<Timer::Category::TokenGeneration> _;
-      token = llama -> forward( token, prompt_ids_batch, token_pos_batch[i] );
+      token = llama -> forward( token, prompt_ids_batch, token_pos_batch[i], temps_batch );
     }
 
     cerr << endl << global_timer().summary() << endl;

@@ -8,6 +8,8 @@
 #include <vector>
 #include "cuda_runtime.h"
 #include "models/common/model.hh"
+#include <curand.h>
+#include <curand_kernel.h>
 
 namespace glinthawk::models::llama2 {
 
@@ -113,6 +115,7 @@ struct RunState
   DType* att {};                // buffer for scores/attention values (B, n_heads, seq_len)
   DType* logits {};             // output logits (B, vocab_size)
   DType* temp_softmax {};       // temporary buffer for computing softmax (B, n_heads)
+  curandState* rng_state {};    // CURAND state (B, vocab_size)
 };
 
 template<typename DType>

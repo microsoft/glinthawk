@@ -138,6 +138,9 @@ unique_ptr<Llama2<DType>> Llama2<DType>::load( const filesystem::path& model_pat
   auto model = unique_ptr<Llama2<DType>>( new Llama2<DType> {
     config, move( base ), move( layers ), move( run_state ), move( kv_cache ), start_layer, end_layer } );
 
+  ops::setup_kernel<<<config.concurrency_limit * config.vocab_size, 1>>>( model -> state_.rng_state, 1234 );
+  cudaDeviceSynchronize();
+
   return model;
 }
 
@@ -281,40 +284,14 @@ void Llama2<DType>::pass_end()
 }
 
 template<typename DType>
-uint32_t extract_token( const RunState<DType>& state,
-                        const Config& config,
-                        const float temp,
-                        const uint64_t batch_index = 0 )
-{
-  uint32_t next_token;
-
-  if ( temp == 0.0f ) {
-    // greedy argmax sampling
-    next_token = ops::argmax( state.logits + batch_index * config.vocab_size, config.vocab_size );
-  } else {
-    // apply the temperature to the logits
-    for ( auto q = batch_index * config.vocab_size; q < ( batch_index + 1 ) * config.vocab_size; q++ ) {
-      state.logits[q] /= temp;
-    }
-
-    // apply softmax to the logits to get the probabilities for next token
-    ops::softmax( state.logits + batch_index * config.vocab_size, config.vocab_size );
-
-    // we now want to sample from this distribution to get the next token
-    next_token = ops::sample( state.logits + batch_index * config.vocab_size, config.vocab_size );
-  }
-
-  return next_token;
-}
-
-template<typename DType>
 std::vector<uint32_t> extract_batch_token( const RunState<DType>& state,
                                            const Config& config,
                                            const std::vector<float>& temp )
 {
+  ops::soft_sample(state.logits, temp, state.rng_state, config.vocab_size, temp.size());
   std::vector<uint32_t> next_tokens;
   for ( size_t i = 0; i < temp.size(); i++ )
-    next_tokens.push_back( extract_token( state, config, temp[i], i ) );
+    next_tokens.push_back( ops::argmax( state.logits + i * config.vocab_size, config.vocab_size ) );
   return next_tokens;
 }
 
@@ -398,7 +375,8 @@ std::vector<InferenceState<DType>> Llama2<DType>::forward(
 template<typename DType>
 std::vector<uint32_t> Llama2<DType>::forward( const std::vector<uint32_t>& token_s,
                                               const std::vector<uint32_t>& prompt_id_s,
-                                              const std::vector<uint32_t>& token_pos_s )
+                                              const std::vector<uint32_t>& token_pos_s,
+                                              const std::vector<float>& temperature_s )
 {
   CHECK_GT( token_s.size(), 0 ) << "batch size must be at least 1";
   CHECK_EQ( token_s.size(), prompt_id_s.size() ) << "token size must be the same as prompt_id size";
@@ -421,7 +399,7 @@ std::vector<uint32_t> Llama2<DType>::forward( const std::vector<uint32_t>& token
 
   pass_end();
 
-  return extract_batch_token( this->state_, this->config_, std::vector<float>( token_s.size(), temperature_ ) );
+  return extract_batch_token( this->state_, this->config_, temperature_s );
 }
 
 template<typename DType>
@@ -444,12 +422,13 @@ InferenceState<DType> Llama2<DType>::forward( const InferenceState<DType>& infer
 }
 
 template<typename DType>
-uint32_t Llama2<DType>::forward( const uint32_t& token, const uint32_t& prompt_id, const uint32_t& token_pos )
+uint32_t Llama2<DType>::forward( const uint32_t& token, const uint32_t& prompt_id, const uint32_t& token_pos, const float& temperature )
 {
   std::vector<uint32_t> token_vector = { token };
   std::vector<uint32_t> prompt_id_vector = { prompt_id };
   std::vector<uint32_t> token_pos_vector = { token_pos };
-  return forward( token_vector, prompt_id_vector, token_pos_vector )[0];
+  std::vector<float> temp_vector = { temperature };
+  return forward( token_vector, prompt_id_vector, token_pos_vector, temp_vector )[0];
 }
 
 template class Llama2<float>;
