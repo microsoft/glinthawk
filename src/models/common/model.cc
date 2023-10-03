@@ -36,7 +36,8 @@ InferenceState::InferenceState( const string_view serialized )
   next_layer_ = _get_and_advance<decltype( next_layer_ )>( ptr );
   temperature_ = _get_and_advance<decltype( temperature_ )>( ptr );
 
-  activations_.dtype.dtype = static_cast<DataType::Type>( _get_and_advance<underlying_type_t<DataType::Type>>( ptr ) );
+  activations_.dtype.dtype
+    = static_cast<SerializedDataType::Type>( _get_and_advance<underlying_type_t<SerializedDataType::Type>>( ptr ) );
   activations_.len = _get_and_advance<decltype( activations_.len )>( ptr );
   activations_.ptr = make_unique<uint8_t[]>( activations_.len * activations_.dtype.size() );
 
@@ -56,7 +57,7 @@ string InferenceState::serialize() const
   _put_and_advance( ptr, next_layer_ );
   _put_and_advance( ptr, temperature_ );
 
-  _put_and_advance( ptr, static_cast<underlying_type_t<DataType::Type>>( activations_.dtype.dtype ) );
+  _put_and_advance( ptr, static_cast<underlying_type_t<SerializedDataType::Type>>( activations_.dtype.dtype ) );
   _put_and_advance( ptr, activations_.len );
 
   memcpy( ptr, activations_.ptr.get(), activations_.len * activations_.dtype.size() );

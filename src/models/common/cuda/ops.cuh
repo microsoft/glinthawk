@@ -44,7 +44,7 @@ void silu( DType* hb, DType* hb2, const uint64_t hidden_dim, const uint64_t batc
 
 template<typename DType>
 void attention_0_gemm( const DType* query,
-                       const DType* key_base,
+                       const DType* const context_pointers[],
                        DType* att,
                        const uint64_t n_layers,
                        const uint64_t seq_len,
@@ -53,12 +53,11 @@ void attention_0_gemm( const DType* query,
                        const uint64_t gqa_size,
                        const uint64_t batch_size,
                        const uint64_t max_batch_size,
-                       std::vector<uint64_t> id_alloc_s,
-                       std::vector<uint64_t> token_pos_s );
+                       const uint32_t* token_positions );
 
 template<typename DType>
 void attention_2_gemm( const DType* att,
-                       const DType* value_base,
+                       const DType* const context_pointers[],
                        DType* xb,
                        const uint64_t n_layers,
                        const uint64_t seq_len,
@@ -67,12 +66,11 @@ void attention_2_gemm( const DType* att,
                        const uint64_t gqa_size,
                        const uint64_t batch_size,
                        const uint64_t max_batch_size,
-                       std::vector<uint64_t> id_alloc_s,
-                       std::vector<uint64_t> token_pos_s );
+                       const uint32_t* token_positions );
 
 template<typename DType>
 void attention_softmax( DType* att,
-                        std::vector<uint64_t> token_pos_s,
+                        const uint32_t* token_positions,
                         const uint64_t seq_len,
                         const uint64_t n_heads,
                         DType* temp_buffer,
@@ -83,22 +81,20 @@ void apply_rope( const uint64_t head_size,
                  const uint64_t n_kv_heads,
                  const uint64_t gqa_size,
                  const uint64_t curr_batch_size,
-                 std::vector<uint64_t> token_pos_s,
+                 const uint32_t* token_positions,
                  const DType* freq_cis_real,
                  const DType* freq_cis_imag,
                  DType* state_q,
                  DType* state_k );
 
 template<typename DType>
-void copy_kv_cache( const DType* state_k,
+void copy_kv_cache( DType* context_pointers[],
+                    const DType* state_k,
                     const DType* state_v,
-                    DType* key_base,
-                    DType* value_base,
                     const uint64_t dim,
                     const uint64_t n_layers,
                     const uint64_t batch_size,
                     const uint64_t max_batch_size,
-                    std::vector<uint64_t> id_alloc_s,
-                    std::vector<uint64_t> token_pos_s );
+                    const uint32_t* token_positions );
 
 }

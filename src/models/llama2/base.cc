@@ -54,8 +54,6 @@ Config::Config( const filesystem::path& config_file,
   this->n_layers = *reinterpret_cast<const int32_t*>( _advance_pointer( ptr, sizeof( int32_t ) ) );
   this->n_heads = *reinterpret_cast<const int32_t*>( _advance_pointer( ptr, sizeof( int32_t ) ) );
   this->n_kv_heads = *reinterpret_cast<const int32_t*>( _advance_pointer( ptr, sizeof( int32_t ) ) );
-  this->gqa_size = this->n_heads / this->n_kv_heads;
-  this->kv_dim = this->dim / this->gqa_size;
 
   // if vocab size is negative, that means that wcls is present
   const auto original_vocab_size = *reinterpret_cast<const int32_t*>( _advance_pointer( ptr, sizeof( int32_t ) ) );
@@ -66,6 +64,9 @@ Config::Config( const filesystem::path& config_file,
   if ( original_vocab_size < 0 ) {
     wcls_present = true;
   }
+
+  this->gqa_size = this->n_heads / this->n_kv_heads;
+  this->kv_dim = this->dim / this->gqa_size;
 
   CHECK_GT( dim, 0 ) << "Transformer dimension must be positive.";
   CHECK_GT( kv_dim, 0 ) << "key/value dimension must be positive.";
@@ -230,43 +231,22 @@ size_t RunState<DType>::state_size( const Config& config )
 /* InferenceContext */
 
 template<typename DType>
-InferenceContext<DType>::InferenceContext( const Config& config, DType* buffer )
-  : start_layer_( config.start_layer_num )
-  , end_layer_( config.end_layer_num )
-  , buffer_( buffer )
-  , seq_len_( config.seq_len )
-  , kv_dim_( config.kv_dim )
-  , n_layers_( end_layer_ - start_layer_ + 1 )
-  , head_size_( config.dim / config.n_heads )
-  , kv_prompt_limit_( config.kv_prompt_limit )
-{
-}
-
-template<typename DType>
 size_t InferenceContext<DType>::context_size( const Config& config )
 {
-  return sizeof( DType ) * config.seq_len * config.kv_dim * 2 * ( config.end_layer_num - config.start_layer_num + 1 )
-         * config.kv_prompt_limit;
+  return sizeof( DType ) * config.seq_len * config.kv_dim * 2 * ( config.end_layer_num - config.start_layer_num + 1 );
 }
 
 template<typename DType>
-DType* InferenceContext<DType>::key( const Config& config, int layer, const int step, const int batch, const int head )
+DType* InferenceContext<DType>::key( const Config& config, int layer_num, const int token_num, const int head_num )
 {
-  layer -= start_layer_;
-  return buffer_ + step * ( n_layers_ * kv_dim_ * kv_prompt_limit_ * 2 ) + layer * ( kv_dim_ * kv_prompt_limit_ * 2 )
-         + batch * kv_dim_ + head * head_size_;
+  return buffer_ + token_num * ( config.n_layers_loaded() * config.kv_dim * 2 )
+         + ( layer_num - config.start_layer_num ) * ( config.kv_dim * 2 ) + head_num * ( config.dim / config.n_heads );
 }
 
 template<typename DType>
-DType* InferenceContext<DType>::value( const Config& config,
-                                       int layer,
-                                       const int step,
-                                       const int batch,
-                                       const int head )
+DType* InferenceContext<DType>::value( const Config& config, int layer_num, const int token_num, const int head_num )
 {
-  layer -= start_layer_;
-  return buffer_ + step * ( n_layers_ * kv_dim_ * kv_prompt_limit_ * 2 ) + layer * ( kv_dim_ * kv_prompt_limit_ * 2 )
-         + batch * kv_dim_ + head * head_size_ + kv_dim_ * kv_prompt_limit_;
+  return key( config, layer_num, token_num, head_num ) + config.kv_dim;
 }
 
 /* BaseLlama2 */
@@ -280,8 +260,6 @@ BaseLlama2<DType, Context>::BaseLlama2( const Config& config,
   , layers_buffer_( move( layers_weights ) )
   , run_state_buffer_( move( run_state ) )
   , config_( config )
-  , id_allocation_( std::vector<uint64_t>( config.concurrency_limit ) )
-  , token_pos_( std::vector<uint64_t>( config.concurrency_limit ) )
   , state_( config_, run_state_buffer_.get() )
   , base_weights_( config_, base_weights_buffer_.get() )
   , layer_weights_( [&] {

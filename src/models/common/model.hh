@@ -22,7 +22,7 @@ using ModelID = uint32_t;
 
 namespace glinthawk::models {
 
-class DataType
+class SerializedDataType
 {
 public:
   enum class Type : uint8_t
@@ -32,7 +32,7 @@ public:
   };
 
 public:
-  DataType( const Type t )
+  SerializedDataType( const Type t )
     : dtype( t )
   {
   }
@@ -52,16 +52,16 @@ public:
   Type dtype;
 };
 
-static_assert( sizeof( DataType ) == sizeof( DataType::Type ) );
+static_assert( sizeof( SerializedDataType ) == sizeof( SerializedDataType::Type ) );
 
 struct DataBuffer
 {
-  DataType dtype { DataType::Type::Float32 };
+  SerializedDataType dtype { SerializedDataType::Type::Float32 };
   std::unique_ptr<uint8_t[]> ptr { nullptr };
   uint64_t len { 0 };
 
   DataBuffer() = default;
-  DataBuffer( const DataType other_dtype, std::unique_ptr<uint8_t[]>&& other_ptr, const uint64_t other_len )
+  DataBuffer( const SerializedDataType other_dtype, std::unique_ptr<uint8_t[]>&& other_ptr, const uint64_t other_len )
     : dtype( other_dtype )
     , ptr( std::move( other_ptr ) )
     , len( other_len )
@@ -130,9 +130,11 @@ class Model
 {
 public:
   virtual ~Model() = default;
-  virtual InferenceState forward( const InferenceState& inference_state, const uint32_t& prompt_id ) = 0;
-  virtual std::vector<InferenceState> forward( const std::vector<InferenceState>& inference_state_s,
-                                               const std::vector<uint32_t>& prompt_id_s )
+
+  virtual InferenceState forward( const InferenceState& inference_state, std::shared_ptr<Context>& context ) = 0;
+
+  virtual std::vector<InferenceState> forward( const std::vector<InferenceState>& inference_states,
+                                               const std::vector<std::shared_ptr<Context>>& contexts )
     = 0;
 };
 

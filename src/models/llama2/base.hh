@@ -11,6 +11,8 @@
 
 namespace glinthawk::models::llama2 {
 
+constexpr size_t MAX_BATCH_SIZE = 128;
+
 struct Config
 {
   Config( const std::filesystem::path& config_file,
@@ -27,7 +29,7 @@ struct Config
   uint64_t dim {};                  // transformer dimension
   uint64_t kv_dim {};               // key/value dimension
   uint64_t hidden_dim {};           // for ffn layers
-  uint64_t n_layers {};             // number of layers
+  uint64_t n_layers {};             // total number of layers
   uint64_t n_heads {};              // number of query heads
   uint64_t n_kv_heads {};           // number of key/value heads (can be < query heads because of multiquery)
   uint64_t gqa_size {};             // GQA sharing rate
@@ -41,6 +43,8 @@ struct Config
   uint64_t end_layer_num {};
 
   bool wcls_present { false };
+
+  uint64_t n_layers_loaded() const { return end_layer_num - start_layer_num + 1; }
 };
 
 class Vocabulary
@@ -134,25 +138,21 @@ struct RunState
   DType* att {};          // buffer for scores/attention values (B, n_heads, seq_len)
   DType* logits {};       // output logits (B, vocab_size)
   DType* temp_softmax {}; // temporary buffer for computing softmax (B, n_heads)
+
+  // information about the current batch
+  uint32_t batch_token_positions[MAX_BATCH_SIZE] {};
+  DType* batch_context_pointers[MAX_BATCH_SIZE] {};
 };
 
 /// @brief InferenceContext for Llama2 model is the KV-cache
 template<typename DType>
 struct InferenceContext
 {
-  InferenceContext( const Config& config, DType* buffer );
-
   static size_t context_size( const Config& config );
 
-  DType* buffer_;
-  const int seq_len_;
-  const int kv_dim_;
-  const int n_layers_;
-  const int head_size_;
-  const int kv_prompt_limit_;
-
-  DType* key( const Config& config, int layer, const int step, const int batch = 0, const int head = 0 );
-  DType* value( const Config& config, int layer, const int step, const int batch = 0, const int head = 0 );
+  DType* buffer_ { nullptr };
+  DType* key( const Config& config, int layer_num, const int token_pos, const int head = 0 );
+  DType* value( const Config& config, int layer_num, const int token_pos, const int head = 0 );
 };
 
 template<typename DType, typename Context>
@@ -165,8 +165,6 @@ protected:
 
   const Config config_;
   uint64_t curr_concurrency_size { 1 };
-  std::vector<uint64_t> id_allocation_ {};
-  std::vector<uint64_t> token_pos_ {};
 
   RunState<DType> state_;
   BaseWeights<DType> base_weights_;

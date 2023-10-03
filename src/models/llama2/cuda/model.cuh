@@ -30,9 +30,9 @@ private:
   float temperature_ { 0.0f };
   std::vector<DType*> pointer_scratchpad {};
 
-  std::vector<InferenceState<DType>> forward(
-    const std::vector<std::reference_wrapper<const InferenceState<DType>>>& inference_state_s,
-    const std::vector<uint32_t>& prompt_id_s );
+  std::vector<InferenceState> forward(
+    const std::vector<std::reference_wrapper<const InferenceState>>& inference_state_s,
+    const std::vector<std::shared_ptr<ContextType>>& context_s );
 
 protected:
   using BaseLlama2<DType, Context<DType>>::BaseLlama2;
@@ -51,16 +51,16 @@ public:
 
   ~Llama2();
 
-  InferenceState forward( const InferenceState& inference_state, const uint32_t& prompt_id ) override;
+  InferenceState forward( const InferenceState& inference_state, std::shared_ptr<ContextType>& context ) override;
 
   std::vector<InferenceState> forward( const std::vector<InferenceState>& inference_state_s,
-                                       const std::vector<Context>& context ) override;
+                                       const std::vector<std::shared_ptr<ContextType>>& context ) override;
 
-  uint32_t forward( const uint32_t& token, const uint32_t& prompt_id, const uint32_t& token_pos );
+  // uint32_t forward( const uint32_t& token, const uint32_t& prompt_id, const uint32_t& token_pos );
 
-  std::vector<uint32_t> forward( const std::vector<uint32_t>& token_s,
-                                 const std::vector<uint32_t>& prompt_id_s,
-                                 const std::vector<uint32_t>& token_pos_s );
+  // std::vector<uint32_t> forward( const std::vector<uint32_t>& token_s,
+  //                                const std::vector<uint32_t>& prompt_id_s,
+  //                                const std::vector<uint32_t>& token_pos_s );
 };
 
 } // namespace glinthawk::models::llama2::cuda
