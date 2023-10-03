@@ -8,6 +8,7 @@
 #include <sstream>
 #include <string>
 #include <string_view>
+#include <iomanip>
 
 namespace glinthawk::util::digest {
 
@@ -38,7 +39,7 @@ struct SHA256Hash
     std::ostringstream result;
 
     for ( const auto& byte : hash ) {
-      result << std::hex << static_cast<int>( byte );
+      result << std::hex << std::setfill( '0' ) << std::setw( 2 ) << static_cast<int>( byte );
     }
 
     return result.str();
