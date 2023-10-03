@@ -116,6 +116,8 @@ public:
   uint32_t next_layer() const { return next_layer_; }
   float temperature() const { return temperature_; }
 
+  void set_prompt_id( const PromptID prompt_id ) { prompt_id_ = prompt_id; }
+  void set_model_id( const ModelID model_id ) { model_id_ = model_id; }
   void set_token( const uint32_t token ) { token_ = token; }
   void set_token_pos( const uint32_t token_pos ) { token_pos_ = token_pos; }
   void set_next_layer( const uint32_t next_layer ) { next_layer_ = next_layer; }

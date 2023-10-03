@@ -250,7 +250,7 @@ void attention_0_gemm( const DType* query,
   const uint64_t k = head_size;
   const uint64_t n = gqa_size;
 
-  const uint64_t lda = n_layers * max_batch_size * n_kv_heads * head_size * 2;
+  const uint64_t lda = n_layers * n_kv_heads * head_size * 2;
   const uint64_t ldb = k;
   const uint64_t ldc = seq_len;
 
@@ -309,7 +309,7 @@ void attention_2_gemm( const DType* att,
   const uint64_t m = head_size;
   const uint64_t n = gqa_size;
 
-  const uint64_t lda = n_layers * max_batch_size * n_kv_heads * head_size * 2;
+  const uint64_t lda = n_layers * n_kv_heads * head_size * 2;
   const uint64_t ldb = seq_len;
   const uint64_t ldc = m;
 

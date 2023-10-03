@@ -5,6 +5,7 @@
 #include <cuda_fp16.h>
 #include <glog/logging.h>
 
+#include "compute/kernel.hh"
 #include "models/llama2/cuda/model.cuh"
 #include "util/timer.hh"
 
@@ -48,39 +49,70 @@ int main( int argc, char* argv[] )
 
     using Llama2 = models::llama2::cuda::Llama2<__half>;
 
+    const size_t batch_size = 8;
+    vector<string> serialized_states( batch_size );
+
+    for ( size_t i = 0; i < batch_size; i++ ) {
+      models::InferenceState state;
+
+      PromptID id;
+      util::digest::sha256( to_string( i ), id );
+
+      state.set_prompt_id( id );
+      state.set_token( 1 );
+      state.set_token_pos( 0 );
+      state.set_next_layer( 0 );
+      state.set_temperature( 0.0f );
+
+      serialized_states[i] = state.serialize();
+    }
+
     models::llama2::Vocabulary vocabulary { tokenizer_path };
-    vector<shared_ptr<Llama2::ContextType>> contexts; // each layer needs a different context
-    string serialized_state = models::InferenceState {}.serialize();
+
+    vector<shared_ptr<compute::ContextManager<Llama2>>> context_managers;
 
     while ( true ) {
       // first, let's deserialize the state
-      models::InferenceState state { serialized_state };
+      vector<models::InferenceState> states;
+      vector<shared_ptr<Llama2::ContextType>> contexts;
+
+      for ( const auto& serialized_state : serialized_states ) {
+        states.emplace_back( serialized_state );
+      }
 
       // load the model for the next layer
-      const auto current_layer = state.next_layer();
-      auto llama = Llama2::load( model_dir_path, current_layer, current_layer, 1, 1 );
+      const auto current_layer = states[0].next_layer();
+      auto llama = Llama2::load( model_dir_path, current_layer, current_layer, 1, batch_size );
 
-      if ( contexts.empty() ) {
-        contexts.resize( llama->config().n_layers );
+      if ( context_managers.empty() ) {
+        context_managers.resize( llama->config().n_layers );
       }
 
-      // create context for this layer if it doesn't exist yet
-      if ( contexts[current_layer] == nullptr ) {
-        contexts[current_layer] = make_shared<Llama2::ContextType>( llama->config() );
+      if ( context_managers[current_layer] == nullptr ) {
+        context_managers[current_layer] = make_shared<compute::ContextManager<Llama2>>( llama->config() );
       }
 
-      // forward the current token
-      state = llama->forward( state, contexts[current_layer] );
-
-      if ( state.token() == 2 /* EOS */ ) {
-        break;
+      // get the contexts for the current layer
+      for ( const auto& state : states ) {
+        contexts.push_back( context_managers[current_layer]->get_context( state.prompt_id() ) );
       }
 
-      if ( state.next_layer() == 0 ) {
-        cout << vocabulary.get_word( state.token() ) << flush;
+      auto output_states = llama->forward( states, contexts );
+      serialized_states.clear();
+
+      bool token_generated = false;
+      for ( const auto& state : output_states ) {
+        if ( state.next_layer() == 0 ) {
+          token_generated = true;
+          cout << vocabulary.get_word( state.token() ) << '\t';
+        }
+
+        serialized_states.push_back( state.serialize() );
       }
 
-      serialized_state = state.serialize();
+      if ( token_generated ) {
+        cout << endl;
+      }
     }
 
     cerr << endl << global_timer().summary() << endl;

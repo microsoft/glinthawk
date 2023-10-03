@@ -84,7 +84,7 @@ unique_ptr<Llama2<DType>> Llama2<DType>::load( const filesystem::path& model_pat
   CHECK_GT( 1 << 16, ( config.hidden_dim * config.concurrency_limit + ops::TPB - 1 ) / ops::TPB )
     << "Silu blocks cannot surpass 2^16.";
 
-  const int32_t layer_count = end_layer - start_layer + 1;
+  const int32_t layer_count = config.n_layers_loaded();
 
   const auto run_state_size = RunState<DType>::state_size( config );
   const auto base_size = BaseWeights<DType>::base_size( config );
@@ -338,7 +338,7 @@ vector<InferenceState> Llama2<DType>::forward( const vector<reference_wrapper<co
   } else {
     for ( size_t i = 0; i < inference_state_s.size(); i++ )
       // load the activations
-      ops::CHECK_CUDA( cudaMemcpyAsync( this->state_.x + i * this->config_.dim * sizeof( DType ),
+      ops::CHECK_CUDA( cudaMemcpyAsync( this->state_.x + i * this->config_.dim,
                                         inference_state_s[i].get().activations().ptr.get(),
                                         this->config_.dim * sizeof( DType ),
                                         cudaMemcpyHostToDevice ) );
@@ -379,7 +379,7 @@ vector<InferenceState> Llama2<DType>::forward( const vector<reference_wrapper<co
                              this->config_.dim };
 
     ops::CHECK_CUDA( cudaMemcpy( activations.ptr.get(),
-                                 this->state_.x + i * this->config_.dim * sizeof( DType ),
+                                 this->state_.x + i * this->config_.dim,
                                  this->config_.dim * sizeof( DType ),
                                  cudaMemcpyDeviceToHost ) );
 
