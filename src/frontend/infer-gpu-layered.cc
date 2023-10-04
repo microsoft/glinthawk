@@ -48,27 +48,31 @@ int main( int argc, char* argv[] )
     const filesystem::path tokenizer_path { argv[2] };
 
     using Llama2 = models::llama2::cuda::Llama2<__half>;
+    models::llama2::Vocabulary vocabulary { tokenizer_path };
 
-    const size_t batch_size = 8;
-    vector<string> serialized_states( batch_size );
+    PromptID id;
+    util::digest::sha256( "0", id );
 
-    for ( size_t i = 0; i < batch_size; i++ ) {
+    vector<uint32_t> prompt_tokens { 1,   518,  25580, 29962, 25538, 2211,  25562, 363,  7952,
+                                     292, 9045, 29891, 29889, 518,   29914, 25580, 29962 };
+
+    vector<string> input_states;
+
+    for ( size_t i = 0; i < prompt_tokens.size(); i++ ) {
       models::InferenceState state;
 
-      PromptID id;
-      util::digest::sha256( to_string( i ), id );
-
       state.set_prompt_id( id );
-      state.set_token( 1 );
-      state.set_token_pos( 0 );
+      state.set_token( prompt_tokens[i] );
+      state.set_token_pos( i );
       state.set_next_layer( 0 );
       state.set_temperature( 0.0f );
 
-      serialized_states[i] = state.serialize();
+      input_states.push_back( state.serialize() );
     }
 
-    models::llama2::Vocabulary vocabulary { tokenizer_path };
+    bool prompt_processed = false;
 
+    // since we're loading/executing the model layer by layer, each layer has its own context manager
     vector<shared_ptr<compute::ContextManager<Llama2>>> context_managers;
 
     while ( true ) {
@@ -76,18 +80,19 @@ int main( int argc, char* argv[] )
       vector<models::InferenceState> states;
       vector<shared_ptr<Llama2::ContextType>> contexts;
 
-      for ( const auto& serialized_state : serialized_states ) {
+      for ( const auto& serialized_state : input_states ) {
         states.emplace_back( serialized_state );
       }
 
       // load the model for the next layer
       const auto current_layer = states[0].next_layer();
-      auto llama = Llama2::load( model_dir_path, current_layer, current_layer, 1, batch_size );
+      auto llama = Llama2::load( model_dir_path, current_layer, current_layer, 1, input_states.size() );
 
       if ( context_managers.empty() ) {
         context_managers.resize( llama->config().n_layers );
       }
 
+      // do we have a context manager for the current layer?
       if ( context_managers[current_layer] == nullptr ) {
         context_managers[current_layer] = make_shared<compute::ContextManager<Llama2>>( llama->config() );
       }
@@ -98,20 +103,28 @@ int main( int argc, char* argv[] )
       }
 
       auto output_states = llama->forward( states, contexts );
-      serialized_states.clear();
+      input_states.clear();
 
-      bool token_generated = false;
       for ( const auto& state : output_states ) {
-        if ( state.next_layer() == 0 ) {
-          token_generated = true;
-          cout << vocabulary.get_word( state.token() ) << '\t';
-        }
-
-        serialized_states.push_back( state.serialize() );
+        input_states.push_back( state.serialize() );
       }
 
-      if ( token_generated ) {
-        cout << endl;
+      if ( not prompt_processed and current_layer == llama->config().n_layers - 1 ) {
+        // this is the last layer and we're done processing the prompt.
+        prompt_processed = true;
+
+        // (1) let's print the prompt in full
+        for ( auto& token : prompt_tokens ) {
+          cout << vocabulary.get_word( token );
+        }
+
+        // remove all elements in the input states except the last one
+        input_states.erase( input_states.begin(), input_states.end() - 1 );
+      } else if ( current_layer == llama->config().n_layers - 1 ) {
+        // (2) let's print the output
+        for ( const auto& state : output_states ) {
+          cout << vocabulary.get_word( state.token() ) << flush;
+        }
       }
     }
 
