@@ -9,6 +9,9 @@
 #include "models/llama2/cuda/model.cuh"
 #include "util/timer.hh"
 
+#define OOF_IMPL
+#include "oof/oof.hh"
+
 #ifndef GLINTHAWK_CUDA_ENABLED
 #error "This file should only be compiled when CUDA is enabled."
 #endif
@@ -114,9 +117,11 @@ int main( int argc, char* argv[] )
         prompt_processed = true;
 
         // (1) let's print the prompt in full
+        cout << oof::fg_color( { 0, 255, 0 } ) << oof::underline();
         for ( auto& token : prompt_tokens ) {
           cout << vocabulary.get_word( token );
         }
+        cout << oof::reset_formatting();
 
         // remove all elements in the input states except the last one
         input_states.erase( input_states.begin(), input_states.end() - 1 );

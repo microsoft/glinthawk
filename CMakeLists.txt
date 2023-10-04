@@ -14,6 +14,7 @@ find_package ( Glog REQUIRED )
 link_libraries ( glog::glog )
 
 include_directories ( src )
+include_directories ( SYSTEM lib )
 
 file ( GLOB SOURCE
   src/util/*.cc
