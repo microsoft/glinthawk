@@ -1,3 +1,7 @@
+#ifndef GLINTHAWK_CUDA_ENABLED
+#error "This file should only be compiled when CUDA is enabled."
+#endif
+
 #include <csignal>
 #include <filesystem>
 #include <iostream>
@@ -55,19 +59,23 @@ int main( int argc, char* argv[] )
     auto llama = models::llama2::cuda::Llama2<__half>::load( model_dir_path, start_slice, end_slice, batch_size );
     models::llama2::Vocabulary vocabulary { tokenizer_path };
 
-    auto prompt_tokens_batch = vector<vector<models::InferenceState<__half>>>( seq_len );
+    auto prompt_tokens_batch = vector<vector<models::InferenceState>>( seq_len );
     for ( size_t i = 0; i < prompt_tokens_batch.size(); i++ ) {
-      prompt_tokens_batch[i] = vector<models::InferenceState<__half>>();
+      prompt_tokens_batch[i] = vector<models::InferenceState>();
+      prompt_tokens_batch[i].reserve( batch_size );
+
       for ( int j = 0; j < batch_size; j++ ) {
         if ( start_slice == 0 ) {
-          prompt_tokens_batch[i].emplace_back( 1,                            // token
-                                               i,                            // token_pos
-                                               0,                            // next_layer
-                                               0.0,                          // temperature
-                                               models::DataBuffer<__half> {} // activations
+          prompt_tokens_batch[i].emplace_back( 1,                    // token
+                                               i,                    // token_pos
+                                               0,                    // next_layer
+                                               0.0,                  // temperature
+                                               models::DataBuffer {} // activations
           );
         } else {
-          models::DataBuffer<__half> activations { make_unique<__half[]>( dim ), dim };
+          models::DataBuffer activations { models::SerializedDataType::Type::Float16,
+                                           make_unique<uint8_t[]>( dim * sizeof( __half ) ),
+                                           dim };
           prompt_tokens_batch[i].emplace_back( 1,                       // token
                                                i,                       // token_pos
                                                start_slice,             // next_layer
