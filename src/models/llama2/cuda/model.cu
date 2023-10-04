@@ -61,7 +61,6 @@ template<typename DType>
 unique_ptr<Llama2<DType>> Llama2<DType>::load( const filesystem::path& model_path,
                                                const int32_t start_layer,
                                                const int32_t end_layer,
-                                               const uint64_t kv_prompt_limit,
                                                const uint64_t concurrency_limit )
 {
   ops::init( concurrency_limit );
@@ -70,7 +69,7 @@ unique_ptr<Llama2<DType>> Llama2<DType>::load( const filesystem::path& model_pat
   const auto config_path = model_path / "CONFIG";
   const auto base_path = model_path / ( "BASEWEIGHTS" + filename_suffix );
 
-  llama2::Config config { config_path, start_layer, end_layer, kv_prompt_limit, concurrency_limit };
+  llama2::Config config { config_path, start_layer, end_layer, concurrency_limit };
 
   CHECK_GT( 1025, config.n_heads ) << "Attention softmax has n_heads threads, and this cannot surpass 1024.";
   CHECK_GT( 1 << 16, config.n_heads ) << "RoPE has n_heads blocks, and this cannot surpass 2^16.";
@@ -165,8 +164,7 @@ void Llama2<DType>::transformer_layer( const int32_t layer_num )
   const uint64_t n_kv_heads = this->config_.n_kv_heads;
   const uint64_t seq_len = this->config_.seq_len;
   const uint64_t n_layers_loaded = this->config_.n_layers_loaded();
-  const uint64_t kv_prompt_limit = this->config_.kv_prompt_limit;
-  const uint64_t curr_conc_lvl = this->curr_concurrency_size;
+  const uint64_t curr_conc_lvl = this->state_.curr_concurrency_size;
 
   const auto& layer_weights = this->layer_weights_[layer_num];
 
@@ -195,10 +193,9 @@ void Llama2<DType>::transformer_layer( const int32_t layer_num )
                       kv_dim,
                       n_layers_loaded,
                       curr_conc_lvl,
-                      kv_prompt_limit,
                       this->state_.batch_token_positions );
 
-  // multihead attention. for each head and for each token up to and including the current one
+  // <multihead attention> for each head and for each token up to and including the current one
   ops::attention_0_gemm( this->state_.q,
                          this->state_.batch_context_pointers,
                          this->state_.att,
@@ -208,7 +205,6 @@ void Llama2<DType>::transformer_layer( const int32_t layer_num )
                          n_kv_heads,
                          gqa_size,
                          curr_conc_lvl,
-                         kv_prompt_limit,
                          this->state_.batch_token_positions );
 
   // softmax
@@ -224,9 +220,8 @@ void Llama2<DType>::transformer_layer( const int32_t layer_num )
                          n_kv_heads,
                          gqa_size,
                          curr_conc_lvl,
-                         kv_prompt_limit,
                          this->state_.batch_token_positions );
-  // end of multihead attention
+  // </multihead attention>
 
   // final matmul to get the output of the attention
   ops::matmul( this->state_.xb2, this->state_.xb, layer_weights.wo, curr_conc_lvl, dim, dim );
@@ -259,13 +254,13 @@ void Llama2<DType>::pass_end()
                 this->state_.x,
                 this->base_weights_.rms_final_weight,
                 this->config_.dim,
-                this->curr_concurrency_size );
+                this->state_.curr_concurrency_size );
 
   // classifier into logits
   ops::matmul( this->state_.logits,
                this->state_.x,
                this->base_weights_.wcls,
-               this->curr_concurrency_size,
+               this->state_.curr_concurrency_size,
                this->config_.dim,
                this->config_.vocab_size );
 }
@@ -307,39 +302,39 @@ vector<uint32_t> extract_batch_token( const RunState<DType>& state, const Config
 }
 
 template<typename DType>
-vector<InferenceState> Llama2<DType>::forward( const vector<reference_wrapper<const InferenceState>>& inference_state_s,
-                                               const vector<shared_ptr<ContextType>>& context_s )
+vector<InferenceState> Llama2<DType>::forward( const vector<reference_wrapper<const InferenceState>>& inference_states,
+                                               const vector<shared_ptr<ContextType>>& contexts )
 {
   // TODO(sadjad): refactor the checks into a separate function
-  CHECK_GT( inference_state_s.size(), 0 ) << "batch size must be at least 1";
-  CHECK_EQ( inference_state_s.size(), context_s.size() ) << "token size must be the same as context size";
-  CHECK_LE( inference_state_s.size(), this->config_.concurrency_limit )
+  CHECK_GT( inference_states.size(), 0 ) << "batch size must be at least 1";
+  CHECK_EQ( inference_states.size(), contexts.size() ) << "token size must be the same as context size";
+  CHECK_LE( inference_states.size(), this->config_.concurrency_limit )
     << "current batch cannot be larger than max concurrency size";
 
-  for ( auto& item : inference_state_s ) {
+  for ( auto& item : inference_states ) {
     CHECK_EQ( item.get().next_layer(), this->config_.start_layer_num ) << "next_layer must be the start layer";
   }
 
-  for ( size_t i = 0; i < inference_state_s.size(); i++ ) {
-    this->state_.batch_context_pointers[i] = context_s[i]->buffer_;
-    this->state_.batch_token_positions[i] = inference_state_s[i].get().token_pos();
+  for ( size_t i = 0; i < inference_states.size(); i++ ) {
+    this->state_.batch_context_pointers[i] = contexts[i]->buffer_;
+    this->state_.batch_token_positions[i] = inference_states[i].get().token_pos();
     CHECK_LT( this->state_.batch_token_positions[i], this->config_.seq_len )
       << "token position cannot be larger than sequence length";
   }
 
-  this->curr_concurrency_size = inference_state_s.size();
+  this->state_.curr_concurrency_size = inference_states.size();
 
-  if ( inference_state_s[0].get().next_layer() == 0 ) {
+  if ( inference_states[0].get().next_layer() == 0 ) {
     vector<uint32_t> token_vector;
-    for ( size_t i = 0; i < inference_state_s.size(); i++ ) {
-      token_vector.push_back( inference_state_s[i].get().token() );
+    for ( size_t i = 0; i < inference_states.size(); i++ ) {
+      token_vector.push_back( inference_states[i].get().token() );
     }
     pass_begin( token_vector );
   } else {
-    for ( size_t i = 0; i < inference_state_s.size(); i++ )
+    for ( size_t i = 0; i < inference_states.size(); i++ )
       // load the activations
       ops::CHECK_CUDA( cudaMemcpyAsync( this->state_.x + i * this->config_.dim,
-                                        inference_state_s[i].get().activations().ptr.get(),
+                                        inference_states[i].get().activations().ptr.get(),
                                         this->config_.dim * sizeof( DType ),
                                         cudaMemcpyHostToDevice ) );
   }
@@ -354,25 +349,25 @@ vector<InferenceState> Llama2<DType>::forward( const vector<reference_wrapper<co
     pass_end();
 
     vector<float> batch_temps;
-    for ( size_t i = 0; i < inference_state_s.size(); i++ )
-      batch_temps.push_back( inference_state_s[i].get().temperature() );
+    for ( size_t i = 0; i < inference_states.size(); i++ )
+      batch_temps.push_back( inference_states[i].get().temperature() );
 
     vector<uint32_t> next_tokens = extract_batch_token( this->state_, this->config_, batch_temps );
 
-    for ( size_t i = 0; i < inference_state_s.size(); i++ )
-      token_vector.emplace_back( inference_state_s[i].get().prompt_id(),     // prompt_id
-                                 inference_state_s[i].get().model_id(),      // model_id
-                                 next_tokens[i],                             // token
-                                 inference_state_s[i].get().token_pos() + 1, // token_pos
-                                 0,                                          // next_layer
-                                 inference_state_s[i].get().temperature(),   // temperature
-                                 DataBuffer {}                               // activations
+    for ( size_t i = 0; i < inference_states.size(); i++ )
+      token_vector.emplace_back( inference_states[i].get().prompt_id(),     // prompt_id
+                                 inference_states[i].get().model_id(),      // model_id
+                                 next_tokens[i],                            // token
+                                 inference_states[i].get().token_pos() + 1, // token_pos
+                                 0,                                         // next_layer
+                                 inference_states[i].get().temperature(),   // temperature
+                                 DataBuffer {}                              // activations
       );
 
     return token_vector;
   }
 
-  for ( size_t i = 0; i < inference_state_s.size(); i++ ) {
+  for ( size_t i = 0; i < inference_states.size(); i++ ) {
     DataBuffer activations { is_same_v<DType, float> ? SerializedDataType::Type::Float32
                                                      : SerializedDataType::Type::Float16,
                              make_unique<uint8_t[]>( this->config_.dim * sizeof( DType ) ),
@@ -383,47 +378,18 @@ vector<InferenceState> Llama2<DType>::forward( const vector<reference_wrapper<co
                                  this->config_.dim * sizeof( DType ),
                                  cudaMemcpyDeviceToHost ) );
 
-    token_vector.emplace_back( inference_state_s[i].get().prompt_id(),                   // prompt_id
-                               inference_state_s[i].get().model_id(),                    // model_id
-                               inference_state_s[i].get().token(),                       // token
-                               inference_state_s[i].get().token_pos(),                   // token_pos
+    token_vector.emplace_back( inference_states[i].get().prompt_id(),                    // prompt_id
+                               inference_states[i].get().model_id(),                     // model_id
+                               inference_states[i].get().token(),                        // token
+                               inference_states[i].get().token_pos(),                    // token_pos
                                static_cast<uint32_t>( this->config_.end_layer_num ) + 1, // next_layer
-                               inference_state_s[i].get().temperature(),                 // temperature
+                               inference_states[i].get().temperature(),                  // temperature
                                move( activations )                                       // activations
     );
   }
 
   return token_vector;
 }
-
-// template<typename DType>
-// vector<uint32_t> Llama2<DType>::forward( const vector<uint32_t>& token_s,
-//                                          const vector<uint32_t>& prompt_id_s,
-//                                          const vector<uint32_t>& token_pos_s )
-// {
-//   CHECK_GT( token_s.size(), 0 ) << "batch size must be at least 1";
-//   CHECK_EQ( token_s.size(), prompt_id_s.size() ) << "token size must be the same as prompt_id size";
-//   CHECK_EQ( token_s.size(), token_pos_s.size() ) << "token size must be the same as token_pos size";
-//   CHECK_LE( token_s.size(), this->config_.concurrency_limit )
-//     << "current batch cannot be larger than max concurrency size";
-
-//   for ( size_t i = 0; i < prompt_id_s.size(); i++ ) {
-//     this->id_allocation_[i] = prompt_id_s[i];
-//     this->token_pos_[i] = token_pos_s[i];
-//     CHECK_LT( token_pos_s[i], this->config_.seq_len ) << "token position cannot be larger than sequence length";
-//   }
-//   this->curr_concurrency_size = token_s.size();
-
-//   pass_begin( token_s );
-
-//   for ( int layer_num = this->config_.start_layer_num; layer_num <= this->config_.end_layer_num; layer_num++ ) {
-//     transformer_layer( layer_num );
-//   }
-
-//   pass_end();
-
-//   return extract_batch_token( this->state_, this->config_, vector<float>( token_s.size(), temperature_ ) );
-// }
 
 template<typename DType>
 vector<InferenceState> Llama2<DType>::forward( const vector<InferenceState>& inference_state_s,
@@ -444,15 +410,6 @@ InferenceState Llama2<DType>::forward( const InferenceState& inference_state, sh
   context_vector.push_back( context );
   return move( forward( token_vector, context_vector )[0] );
 }
-
-// template<typename DType>
-// uint32_t Llama2<DType>::forward( const uint32_t& token, const uint32_t& prompt_id, const uint32_t& token_pos )
-// {
-//   vector<uint32_t> token_vector = { token };
-//   vector<uint32_t> prompt_id_vector = { prompt_id };
-//   vector<uint32_t> token_pos_vector = { token_pos };
-//   return forward( token_vector, prompt_id_vector, token_pos_vector )[0];
-// }
 
 template class Context<__half>;
 template class Llama2<__half>;

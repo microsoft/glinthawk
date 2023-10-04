@@ -18,7 +18,6 @@ struct Config
   Config( const std::filesystem::path& config_file,
           const int32_t start_layer,
           const int32_t end_layer,
-          uint64_t kv_prompt_limit_,
           uint64_t concurrency_limit_ );
 
   std::string to_string() const;
@@ -35,8 +34,7 @@ struct Config
   uint64_t gqa_size {};             // GQA sharing rate
   uint64_t vocab_size {};           // vocabulary size (byte-level)
   uint64_t seq_len {};              // max sequence length
-  uint64_t kv_prompt_limit { 1 };   // max prompt K/V size
-  uint64_t concurrency_limit { 1 }; // max concurrent inference size
+  uint64_t concurrency_limit { 1 }; // max concurrent inference size // XXX(sadjad): I don't like this!
 
   // which layers to serve
   uint64_t start_layer_num {};
@@ -140,6 +138,7 @@ struct RunState
   DType* temp_softmax {}; // temporary buffer for computing softmax (B, n_heads)
 
   // information about the current batch
+  uint64_t curr_concurrency_size { 1 };
   uint32_t batch_token_positions[MAX_BATCH_SIZE] {};
   DType* batch_context_pointers[MAX_BATCH_SIZE] {};
 };
@@ -164,7 +163,6 @@ protected:
   std::unique_ptr<DType, void ( * )( DType* )> run_state_buffer_;
 
   const Config config_;
-  uint64_t curr_concurrency_size { 1 };
 
   RunState<DType> state_;
   BaseWeights<DType> base_weights_;

@@ -89,7 +89,7 @@ int main( int argc, char* argv[] )
 
       // load the model for the next layer
       const auto current_layer = states[0].next_layer();
-      auto llama = Llama2::load( model_dir_path, current_layer, current_layer, 1, input_states.size() );
+      auto llama = Llama2::load( model_dir_path, current_layer, current_layer, input_states.size() );
 
       if ( context_managers.empty() ) {
         context_managers.resize( llama->config().n_layers );

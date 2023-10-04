@@ -31,10 +31,8 @@ DType* _advance_pointer( DType*& ptr, const size_t size )
 Config::Config( const filesystem::path& config_file,
                 const int32_t start_layer,
                 const int32_t end_layer,
-                uint64_t kv_prompt_limit_,
                 uint64_t concurrency_limit_ )
-  : kv_prompt_limit( kv_prompt_limit_ )
-  , concurrency_limit( concurrency_limit_ )
+  : concurrency_limit( concurrency_limit_ )
 {
   ifstream fin { config_file, ios::binary };
   CHECK( fin ) << "Failed to open config file: " << config_file;
@@ -77,7 +75,6 @@ Config::Config( const filesystem::path& config_file,
   CHECK_GT( gqa_size, 0 ) << "GQA sharing rate must be positive.";
   CHECK_GT( vocab_size, 0 ) << "Vocabulary size must be positive.";
   CHECK_GT( seq_len, 0 ) << "Sequence length must be positive.";
-  CHECK_GT( kv_prompt_limit, 0 ) << "Max KV prompt size must be positive.";
   CHECK_GT( concurrency_limit, 0 ) << "Max concurrent inference size must be positive.";
 
   CHECK_GE( start_layer, 0 ) << "Start layer must be non-negative.";
@@ -103,7 +100,6 @@ string Config::to_string() const
   oss << "gqa_size: " << gqa_size << ", ";
   oss << "vocab_size: " << vocab_size << ", ";
   oss << "seq_len: " << seq_len << ", ";
-  oss << "kv_prompt_limit: " << kv_prompt_limit << ", ";
   oss << "concurrency_limit: " << concurrency_limit << ", ";
   oss << "wcls_present: " << wcls_present << ", ";
   oss << "start_layer_num: " << start_layer_num << ", ";

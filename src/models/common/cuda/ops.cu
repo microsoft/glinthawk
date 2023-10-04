@@ -217,7 +217,6 @@ void copy_kv_cache( DType* context_pointers[],
                     const uint64_t dim,
                     const uint64_t n_layers,
                     const uint64_t batch_size,
-                    const uint64_t max_batch_size,
                     const uint32_t* token_positions )
 {
   for ( size_t i = 0; i < batch_size; i++ ) {
@@ -241,7 +240,6 @@ void attention_0_gemm( const DType* query,
                        const uint64_t n_kv_heads,
                        const uint64_t gqa_size,
                        const uint64_t batch_size,
-                       const uint64_t max_batch_size,
                        const uint32_t* token_positions )
 {
   const cudaDataType_t cuda_arg_type = is_same_v<DType, __half> ? CUDA_R_16F : CUDA_R_32F;
@@ -301,7 +299,6 @@ void attention_2_gemm( const DType* att,
                        const uint64_t n_kv_heads,
                        const uint64_t gqa_size,
                        const uint64_t batch_size,
-                       const uint64_t max_batch_size,
                        const uint32_t* token_positions )
 {
   const cudaDataType_t cuda_arg_type = is_same_v<DType, __half> ? CUDA_R_16F : CUDA_R_32F;
@@ -660,7 +657,6 @@ template void attention_0_gemm<float>( const float* query,
                                        const uint64_t n_kv_heads,
                                        const uint64_t gqa_size,
                                        const uint64_t batch_size,
-                                       const uint64_t max_batch_size,
                                        const uint32_t* token_positions );
 
 template void attention_0_gemm<__half>( const __half* query,
@@ -672,7 +668,6 @@ template void attention_0_gemm<__half>( const __half* query,
                                         const uint64_t n_kv_heads,
                                         const uint64_t gqa_size,
                                         const uint64_t batch_size,
-                                        const uint64_t max_batch_size,
                                         const uint32_t* token_positions );
 
 template void attention_2_gemm<float>( const float* att,
@@ -684,7 +679,6 @@ template void attention_2_gemm<float>( const float* att,
                                        const uint64_t n_kv_heads,
                                        const uint64_t gqa_size,
                                        const uint64_t batch_size,
-                                       const uint64_t max_batch_size,
                                        const uint32_t* token_positions );
 
 template void attention_2_gemm<__half>( const __half* att,
@@ -696,7 +690,6 @@ template void attention_2_gemm<__half>( const __half* att,
                                         const uint64_t n_kv_heads,
                                         const uint64_t gqa_size,
                                         const uint64_t batch_size,
-                                        const uint64_t max_batch_size,
                                         const uint32_t* token_positions );
 
 template void attention_softmax<float>( float* att,
@@ -739,7 +732,6 @@ template void copy_kv_cache<float>( float* context_pointers[],
                                     const uint64_t dim,
                                     const uint64_t n_layers,
                                     const uint64_t batch_size,
-                                    const uint64_t max_batch_size,
                                     const uint32_t* token_positions );
 
 template void copy_kv_cache<__half>( __half* context_pointers[],
@@ -748,7 +740,6 @@ template void copy_kv_cache<__half>( __half* context_pointers[],
                                      const uint64_t dim,
                                      const uint64_t n_layers,
                                      const uint64_t batch_size,
-                                     const uint64_t max_batch_size,
                                      const uint32_t* token_positions );
 
 } // namespace glinthawk::models::common::cuda

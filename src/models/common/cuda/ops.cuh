@@ -52,7 +52,6 @@ void attention_0_gemm( const DType* query,
                        const uint64_t n_kv_heads,
                        const uint64_t gqa_size,
                        const uint64_t batch_size,
-                       const uint64_t max_batch_size,
                        const uint32_t* token_positions );
 
 template<typename DType>
@@ -65,7 +64,6 @@ void attention_2_gemm( const DType* att,
                        const uint64_t n_kv_heads,
                        const uint64_t gqa_size,
                        const uint64_t batch_size,
-                       const uint64_t max_batch_size,
                        const uint32_t* token_positions );
 
 template<typename DType>
@@ -94,7 +92,6 @@ void copy_kv_cache( DType* context_pointers[],
                     const uint64_t dim,
                     const uint64_t n_layers,
                     const uint64_t batch_size,
-                    const uint64_t max_batch_size,
                     const uint32_t* token_positions );
 
 }
