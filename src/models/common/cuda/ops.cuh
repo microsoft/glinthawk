@@ -4,6 +4,7 @@
 #include <curand.h>
 #include <curand_kernel.h>
 #include <source_location>
+#include <vector>
 
 namespace glinthawk::models::common::cuda::ops {
 

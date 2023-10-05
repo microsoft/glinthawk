@@ -4,6 +4,7 @@
 #include <iomanip>
 #include <iostream>
 #include <sstream>
+#include <math.h>
 
 using namespace std;
 using namespace glinthawk;
@@ -58,8 +59,15 @@ string Timer::summary() const
     out << fixed << setprecision( 1 ) << Value<double>( 100 * _records.at( i ).total_ns / double( elapsed ) ) << "%";
     accounted += _records.at( i ).total_ns;
 
+    uint64_t avg = _records.at( i ).total_ns / _records.at( i ).count;
+    uint64_t var = _records.at( i ).total_sq_ns / _records.at( i ).count - avg * avg;
+    uint64_t stdev = static_cast<uint64_t>( sqrt(var) );
+
+
     out << "\x1B[2m [max=" << pp_ns( _records.at( i ).max_ns );
-    out << ", avg=" << pp_ns( _records.at( i ).total_ns / _records.at( i ).count );
+    out << ", avg=" << pp_ns( avg );
+    out << ", min=" << pp_ns( _records.at( i ).min_ns );
+    out << ", stdev=" << pp_ns( stdev );
     out << ", count=" << _records.at( i ).count << "]\x1B[0m";
     out << "\n";
   }

@@ -7,6 +7,7 @@
 #include <stdexcept>
 #include <string>
 #include <type_traits>
+#include <cstdint>
 
 namespace glinthawk {
 
@@ -23,14 +24,18 @@ public:
 
   struct Record
   {
-    uint64_t count;
-    uint64_t total_ns;
-    uint64_t max_ns;
+    uint64_t count = 0;
+    uint64_t total_ns = 0;
+    uint64_t total_sq_ns = 0;
+    uint64_t min_ns = std::numeric_limits<uint64_t>::max();
+    uint64_t max_ns = 0;
 
     void log( const uint64_t time_ns )
     {
       count++;
       total_ns += time_ns;
+      total_sq_ns += time_ns * time_ns;
+      min_ns = std::min( min_ns, time_ns );
       max_ns = std::max( max_ns, time_ns );
     }
   };
@@ -43,6 +48,8 @@ public:
     DiskIO,
     TokenGeneration,
     PartialInference,
+    CopyToGPU,
+    CopyFromGPU,
     COUNT,
   };
 
@@ -54,7 +61,9 @@ public:
     "Memory Allocation",
     "I/O",
     "Token Generation",
-    "Partial Inference"
+    "Partial Inference",
+    "Copy Mem to GPU",
+    "Copy Mem from GPU"
   } };
 
 private:
