@@ -1,0 +1,378 @@
+<html lang="en" data-bs-theme="dark">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Glinthawk Dashboard</title>
+    <link
+      href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.1/dist/css/bootstrap.min.css"
+      rel="stylesheet"
+      integrity="sha384-4bw+/aepP/YC94hEpVNVgiZdgIC5+VKNBQNGCHeKRQN+PtmoHDEXuppvnDJzQIu9"
+      crossorigin="anonymous" />
+    <link
+      rel="stylesheet"
+      href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.5/font/bootstrap-icons.css" />
+    <link href="css/style.css" rel="stylesheet" />
+  </head>
+  <body>
+    <nav class="navbar navbar-expand-lg bg-body-tertiary">
+      <div class="container-fluid">
+        <a class="navbar-brand fw-bold mx-3" href="#">Glinthawk</a>
+        <button
+          class="navbar-toggler"
+          type="button"
+          data-bs-toggle="collapse"
+          data-bs-target="#navbarNavAltMarkup"
+          aria-controls="navbarNavAltMarkup"
+          aria-expanded="false"
+          aria-label="Toggle navigation">
+          <span class="navbar-toggler-icon"></span>
+        </button>
+        <div class="collapse navbar-collapse" id="navbarNavAltMarkup">
+          <div class="navbar-nav">
+            <a class="nav-link active" aria-current="page" href="#"
+              >Dashboard</a
+            >
+            <a class="nav-link" href="#">New Job</a>
+            <a class="nav-link" href="#">Browse</a>
+          </div>
+        </div>
+
+        <div class="dropdown mx-3">
+          <a
+            href="#"
+            class="d-flex align-items-center text-white text-decoration-none dropdown-toggle"
+            data-bs-toggle="dropdown"
+            aria-expanded="false">
+            <img
+              src="https://github.com/sadjad.png"
+              alt=""
+              width="32"
+              height="32"
+              class="rounded-circle me-2" />
+            <strong>sfouladi</strong>
+          </a>
+          <ul class="dropdown-menu dropdown-menu-dark text-small shadow">
+            <li><a class="dropdown-item" href="#">New project...</a></li>
+            <li><a class="dropdown-item" href="#">Settings</a></li>
+            <li><a class="dropdown-item" href="#">Profile</a></li>
+            <li><hr class="dropdown-divider" /></li>
+            <li><a class="dropdown-item" href="#">Sign out</a></li>
+          </ul>
+        </div>
+      </div>
+    </nav>
+
+    <div class="container-lg">
+      <div class="row text-center my-5 g-3">
+        <div class="col-3">
+          <div class="bg-body-secondary rounded-3 shadow-sm py-3">
+            <h1>7,345,495</h1>
+            prompt tokens processed
+          </div>
+        </div>
+
+        <div class="col-3">
+          <div class="bg-body-tertiary rounded-3 shadow-sm py-3">
+            <h1>7,345,495</h1>
+            tokens generated
+          </div>
+        </div>
+
+        <div class="col-3">
+          <div class="bg-success rounded-3 shadow-sm py-3">
+            <h1>45,495</h1>
+            prompts completed
+          </div>
+        </div>
+
+        <div class="col-3">
+          <div class="bg-primary rounded-3 shadow-sm py-3">
+            <h1>459</h1>
+            active GPUs
+          </div>
+        </div>
+
+        <div class="col-3">
+          <div class="bg-body-tertiary rounded-3 shadow-sm py-3">
+            <h1>27,345,495</h1>
+            tokens in the queue
+          </div>
+        </div>
+
+        <div class="col-3">
+          <div class="bg-body-tertiary rounded-3 shadow-sm py-3">
+            <h1>7,345,495</h1>
+            prompt tokens processed
+          </div>
+        </div>
+
+        <div class="col-3">
+          <div class="bg-body-tertiary rounded-3 shadow-sm py-3">
+            <h1>7,345,495</h1>
+            prompt tokens processed
+          </div>
+        </div>
+      </div>
+
+      <div class="row text-center g-5">
+        <div class="col-6">
+          <h3 class="pb-3">Aggregate GPU Utilization</h3>
+          <div id="gpu-utilization"></div>
+        </div>
+
+        <div class="col-6">
+          <h3 class="pb-3">Active GPUs</h3>
+          <div id="gpu-utilization-2"></div>
+        </div>
+      </div>
+
+      <div class="row my-5">
+        <div class="col-12">
+          <h3 class="pb-3">Latest Completed Prompts</h3>
+
+          <table class="table table-dark table-hover align-middle">
+            <thead>
+              <tr>
+                <th scope="col" style="width: 1%">#</th>
+                <th scope="col">Prompt ID</th>
+                <th scope="col">Submission</th>
+                <th scope="col">Completion</th>
+                <th scope="col">Submitted by</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <th scope="row" class="py-3">1</th>
+                <td class="font-monospace">
+                  <a
+                    href="#"
+                    data-bs-toggle="modal"
+                    data-bs-target="#exampleModal"
+                    >940da0b14c</a
+                  >
+                </td>
+                <td>August 31, 2023 12:34:56 AM PDT</td>
+                <td>August 31, 2023 9:34:56 PM PDT</td>
+                <td class="font-monospace">sfouladi</td>
+              </tr>
+
+              <tr>
+                <th scope="row" class="py-3">2</th>
+                <td class="font-monospace">
+                  <a href="#">940da0b14c</a>
+                </td>
+                <td>August 31, 2023 12:34:56 AM PDT</td>
+                <td>August 31, 2023 9:34:56 PM PDT</td>
+                <td class="font-monospace">ranveer</td>
+              </tr>
+
+              <tr>
+                <th scope="row" class="py-3">3</th>
+                <td class="font-monospace">
+                  <a href="#">940da0b14c</a>
+                </td>
+                <td>August 31, 2023 12:34:56 AM PDT</td>
+                <td>August 31, 2023 9:34:56 PM PDT</td>
+                <td class="font-monospace">pgoyal</td>
+              </tr>
+
+              <tr>
+                <th scope="row" class="py-3">4</th>
+                <td class="font-monospace">
+                  <a href="#">940da0b14c</a>
+                </td>
+                <td>August 31, 2023 12:34:56 AM PDT</td>
+                <td>August 31, 2023 9:34:56 PM PDT</td>
+                <td class="font-monospace">barzani</td>
+              </tr>
+
+              <tr>
+                <th scope="row" class="py-3">5</th>
+                <td class="font-monospace">
+                  <a href="#">940da0b14c</a>
+                </td>
+                <td>August 31, 2023 12:34:56 AM PDT</td>
+                <td>August 31, 2023 9:34:56 PM PDT</td>
+                <td class="font-monospace">sfouladi</td>
+              </tr>
+            </tbody>
+          </table>
+
+          <nav aria-label="Page navigation example">
+            <ul class="pagination">
+              <li class="page-item"><a class="page-link" href="#">Previous</a></li>
+              <li class="page-item"><a class="page-link" href="#">1</a></li>
+              <li class="page-item"><a class="page-link" href="#">2</a></li>
+              <li class="page-item"><a class="page-link" href="#">3</a></li>
+              <li class="page-item"><a class="page-link" href="#">Next</a></li>
+            </ul>
+          </nav>
+        </div>
+      </div>
+
+      <div class="row my-5">
+        <div class="col-7">
+          <h3 class="pb-3">Submit a Batch Job</h3>
+          <p>
+            Put your prompts in Azure Blob Storage, each in a separate text
+            file, and then submit the name of the container and the prefix of
+            the files in the form below. Please also specify the destination
+            container and prefix for the generated outputs.
+          </p>
+
+          <form>
+            <div class="mb-3">
+              <label for="exampleInputEmail1" class="form-label"
+                >Source Container</label
+              >
+              <input
+                type="text"
+                class="form-control"
+                id="exampleInputEmail1"
+                aria-describedby="emailHelp"
+                value="https://glinthawk.blob.core.windows.net/agriculture/in/" />
+            </div>
+            <div class="mb-3">
+              <label for="exampleInputPassword1" class="form-label"
+                >Destination Container</label
+              >
+              <input
+                type="text"
+                class="form-control"
+                id="exampleInputEmail1"
+                aria-describedby="emailHelp"
+                value="https://glinthawk.blob.core.windows.net/agriculture/out/" />
+            </div>
+
+            <div class="mb-3">
+              <label for="exampleInputPassword1" class="form-label"
+                >Target model</label
+              >
+              <select class="form-select" aria-label="Model Selection">
+                <option value="3">Llama2 70B</option>
+                <option value="1">Llama2 7B</option>
+                <option value="2">Llama2 13B</option>
+                <option value="4">CodeLlama 34B</option>
+              </select>
+            </div>
+
+            <button type="submit" class="btn btn-primary">Submit</button>
+          </form>
+        </div>
+
+        <div class="col-5 ps-5">
+          <h3 class="pb-3">Donate Your GPU</h3>
+          <p>
+            You can easily donate your GPU to Glinthawk by running the following
+            command:
+          </p>
+
+          <pre
+            class="bg-body-tertiary rounded-3 shadow-sm p-3"><code class="language-bash">docker run -it glinthawk/glinthawk</code></pre>
+
+          <p>
+            You can simply take back your GPU by pressing Ctrl+C and killing the
+            container.
+          </p>
+        </div>
+      </div>
+
+      <footer
+        class="d-flex flex-wrap justify-content-between align-items-center py-3 my-4 border-top">
+        <p class="col-md-4 mb-0 text-body-secondary">
+          Made with &hearts; at Microsoft.
+        </p>
+
+        <a
+          href="/"
+          class="col-md-4 d-flex align-items-center justify-content-center mb-3 mb-md-0 me-md-auto link-body-emphasis text-decoration-none">
+        </a>
+
+        <ul class="nav col-md-4 justify-content-end">
+          <li class="nav-item">
+            <a href="#" class="nav-link px-2 text-body-secondary">Dashboard</a>
+          </li>
+          <li class="nav-item">
+            <a href="#" class="nav-link px-2 text-body-secondary">Features</a>
+          </li>
+          <li class="nav-item">
+            <a href="#" class="nav-link px-2 text-body-secondary">FAQs</a>
+          </li>
+          <li class="nav-item">
+            <a href="#" class="nav-link px-2 text-body-secondary">About</a>
+          </li>
+        </ul>
+      </footer>
+    </div>
+
+    <div
+      class="modal fade modal-xl"
+      id="exampleModal"
+      tabindex="-1"
+      aria-labelledby="exampleModalLabel"
+      aria-hidden="true">
+      <div class="modal-dialog">
+        <div class="modal-content">
+          <div class="modal-header">
+            <h1 class="modal-title fs-5" id="exampleModalLabel">Modal title</h1>
+            <button
+              type="button"
+              class="btn-close"
+              data-bs-dismiss="modal"
+              aria-label="Close"></button>
+          </div>
+          <div class="modal-body">
+            <h4>Model: Llama2 70B</h4>
+            <h4>Prompt</h4>
+            <p>
+              Lorem ipsum dolor sit amet, consectetur adipisicing elit.
+              Repellendus cum accusamus numquam aspernatur unde distinctio
+              obcaecati possimus, porro, delectus non in consectetur sit earum
+              veniam molestias qui quibusdam ratione quam. Lorem ipsum dolor sit
+              amet, consectetur adipisicing elit. Repellendus cum accusamus
+              numquam aspernatur unde distinctio obcaecati possimus, porro,
+              delectus non in consectetur sit earum veniam molestias qui
+              quibusdam ratione quam. Lorem ipsum dolor sit amet, consectetur
+              adipisicing elit. Repellendus cum accusamus numquam aspernatur
+              unde distinctio obcaecati possimus, porro, delectus non in
+              consectetur sit earum veniam molestias qui quibusdam ratione quam?
+            </p>
+
+            <h4>Generated</h4>
+            <p>
+              Lorem ipsum dolor sit amet, consectetur adipisicing elit.
+              Repellendus cum accusamus numquam aspernatur unde distinctio
+              obcaecati possimus, porro, delectus non in consectetur sit earum
+              veniam molestias qui quibusdam ratione quam. Lorem ipsum dolor sit
+              amet, consectetur adipisicing elit. Repellendus cum accusamus
+              numquam aspernatur unde distinctio obcaecati possimus, porro,
+              delectus non in consectetur sit earum veniam molestias qui
+              quibusdam ratione quam. Lorem ipsum dolor sit amet, consectetur
+              adipisicing elit. Repellendus cum accusamus numquam aspernatur
+              unde distinctio obcaecati possimus, porro, delectus non in
+              consectetur sit earum veniam molestias qui quibusdam ratione quam?
+            </p>
+          </div>
+          <div class="modal-footer">
+            <button
+              type="button"
+              class="btn btn-secondary"
+              data-bs-dismiss="modal">
+              Close
+            </button>
+            <button type="button" class="btn btn-primary">Download</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <script
+      src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.1/dist/js/bootstrap.bundle.min.js"
+      integrity="sha384-HwwvtgBNo3bZJJLYd8oVXjrBZt8cqVSpeBNS5n7C8IVInixGAoxmnlMuBnhbgrkm"
+      crossorigin="anonymous"></script>
+
+    <script src="https://cdn.jsdelivr.net/npm/d3@7"></script>
+
+    <script src="js/script.js"></script>
+  </body>
+</html>

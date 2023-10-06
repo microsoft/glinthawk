@@ -1,8 +1,8 @@
 #pragma once
 
+#include <functional>
 #include <optional>
 #include <stdexcept>
-#include <functional>
 
 #include "util/eventloop.hh"
 #include "util/ring_buffer.hh"

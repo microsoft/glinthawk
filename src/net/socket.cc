@@ -7,7 +7,7 @@
 #include <unistd.h>
 
 using namespace std;
-using namespace glinthawk;
+using namespace glinthawk::net;
 
 // default constructor for socket of (subclassed) domain and type
 //! \param[in] domain is as described in [socket(7)](\ref man7::socket),

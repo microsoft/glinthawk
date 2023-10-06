@@ -6,7 +6,7 @@
 #include "util/ring_buffer.hh"
 #include "util/simple_string_span.hh"
 
-namespace glinthawk {
+namespace glinthawk::net {
 
 template<class T, class Enable = void>
 class SessionBase;

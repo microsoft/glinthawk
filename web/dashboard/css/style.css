@@ -1,0 +1,12 @@
+html,
+body {
+}
+
+.full-height {
+}
+
+.line {
+  fill: none;
+  stroke: rgb(110, 165, 210);
+  stroke-width: 2px;
+}

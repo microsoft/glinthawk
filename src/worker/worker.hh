@@ -1,62 +1,64 @@
 #pragma once
 
-#include <chrono>
-#include <fstream>
 #include <list>
+#include <map>
 
-#include "queue.hh"
-
+#include "compute/kernel.hh"
+#include "message/handler.hh"
+#include "message/message.hh"
 #include "net/address.hh"
-#include "net/message.hh"
 #include "net/session.hh"
 #include "net/socket.hh"
-#include "nn/inference.hh"
 #include "util/eventloop.hh"
-#include "util/timerfd.hh"
 
-namespace glinthawk {
+namespace glinthawk::core {
 
+template<typename Model>
 class Worker
 {
-public:
-  enum class Type
+private:
+  class Peer
   {
-    First,
-    Mid,
-    Last
+  public:
+    enum class State
+    {
+      Connecting,
+      Connected,
+      Disconnected,
+    };
+
+    net::Address address;
+    core::MessageHandler<net::TCPSession> message_handler;
+    State state { State::Connecting };
+
+    Peer( const net::Address& addr, net::TCPSocket&& socket )
+      : address( addr )
+      , message_handler( net::TCPSession { std::move( socket ) } )
+    {
+    }
   };
 
 private:
-  const Address this_address_;
-  const Address next_address_;
   EventLoop event_loop_ {};
 
-  std::unique_ptr<Model> model_ {};
-  const Type type_;
+  std::map<net::Address, Peer> peers_ {};
 
-  InferenceStateMessageHandler::RuleCategories rule_categories_ {
-    event_loop_.add_category( "TCP Session" ),
-    event_loop_.add_category( "Message read" ),
-    event_loop_.add_category( "Message write" ),
-    event_loop_.add_category( "Message response" ),
+  net::Address listen_address_;
+  net::TCPSocket listen_socket_ {};
+
+  compute::ComputeKernel<Model> compute_kernel_;
+
+  core::MessageHandler<net::TCPSession>::RuleCategories rule_categories_ {
+    .session = event_loop_.add_category( "Worker session" ),
+    .endpoint_read = event_loop_.add_category( "Worker endpoint read" ),
+    .endpoint_write = event_loop_.add_category( "Worker endpoint write" ),
+    .response = event_loop_.add_category( "Worker response" ),
   };
 
-  TCPSocket listen_socket_ {};
-
-  std::unique_ptr<InferenceStateMessageHandler> incoming_message_handler_ {};
-  std::unique_ptr<InferenceStateMessageHandler> outgoing_message_handler_ {};
-
-  TimerFD reconnect_timer_fd_ { std::chrono::seconds( 1 ) }; // retry connection to next every second
-
-  std::ofstream output_ { "output.txt", std::ios::trunc };
-
-  void reconnect_to_next();
-
 public:
-  Worker( const Address& this_address, const Address& next_address, std::unique_ptr<Model>&& model, const Type type );
-  ~Worker() = default;
+  Worker( const net::Address& address, Model&& model );
 
   void run();
 };
 
-} // namespace glinthawk
+} // namespace glinthawk::core

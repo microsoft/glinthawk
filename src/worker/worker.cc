@@ -1,112 +1,70 @@
 #include "worker.hh"
 
-#include "util/timer.hh"
+#include <glog/logging.h>
+
+#ifdef GLINTHAWK_CUDA_ENABLED
+#include "models/llama2/cuda/model.cuh"
+#endif
 
 using namespace std;
 using namespace glinthawk;
+using namespace glinthawk::core;
+using namespace glinthawk::net;
 
-Worker::Worker( const Address& this_address,
-                const Address& next_address,
-                std::unique_ptr<Model>&& model,
-                const Type type )
-  : this_address_ { this_address }
-  , next_address_ { next_address }
-  , model_( move( model ) )
-  , type_( type )
+template<typename Model>
+Worker<Model>::Worker( const Address& address, Model&& model )
+  : listen_address_( address )
+  , compute_kernel_( move( model ) )
 {
-  /* Setting up the listen socket and callback */
   listen_socket_.set_reuseaddr();
-  listen_socket_.bind( this_address_ );
+  listen_socket_.bind( listen_address_ );
   listen_socket_.set_blocking( false );
   listen_socket_.listen();
 
+  LOG( INFO ) << "Listening on " << listen_address_.to_string();
+
+  // handle fd failures gracefully
   event_loop_.set_fd_failure_callback( [] {} );
 
-  /* Listening for incoming connections */
   event_loop_.add_rule(
     "Worker listen",
     Direction::In,
     listen_socket_,
     [this] {
-      auto new_peer_socket = listen_socket_.accept();
-      LOG( INFO ) << "Accepted new peer connection from " << new_peer_socket.peer_address().to_string();
-      incoming_message_handler_ = make_unique<InferenceStateMessageHandler>( move( new_peer_socket ) );
-      incoming_message_handler_->install_rules(
-        event_loop_,
-        rule_categories_,
-        [this]( InferenceState&& state ) {
-          InferenceResult result;
+      TCPSocket socket = listen_socket_.accept();
+      auto addr = socket.peer_address();
 
-          {
-            // GlobalScopeTimer<Timer::Category::PartialInference> _;
-            result = model_->forward( state );
-          }
+      LOG( INFO ) << "Accepted connection from " << addr.to_string();
 
-          if ( result.word ) {
-            LOG( INFO ) << state.to_string() << "\t=> " << result.inference_state.to_string() << " + TOKEN";
-            output_ << *result.word << flush;
-          } else {
-            LOG( INFO ) << state.to_string() << "\t=> " << result.inference_state.to_string();
-          }
+      auto [peer_it, peer_new]
+        = peers_.emplace( piecewise_construct, forward_as_tuple( addr ), forward_as_tuple( addr, move( socket ) ) );
 
-          if ( result.inference_state.token == -1 ) {
-            cerr << "\n\n"
-                 << "End of sequence reached." << endl;
-            return false;
-          }
+      CHECK( peer_new ) << "A peer with this address already exists.";
 
-          if ( outgoing_message_handler_ ) {
-            outgoing_message_handler_->push_message( move( result.inference_state ) );
-          } else {
-            LOG( WARNING ) << "No outgoing connection to send result to";
-          }
-
+      peer_it->second.message_handler.install_rules(
+        this->event_loop_,
+        this->rule_categories_,
+        []( Message&& msg ) {
+          LOG( INFO ) << "Incoming message: " << msg.info();
           return true;
         },
-        [this] {
-          LOG( WARNING ) << "Peer closed connection";
-          incoming_message_handler_.reset();
-        } );
+        [] { LOG( INFO ) << "Connection to peer closed."; } );
     },
-    [this] { return not incoming_message_handler_; } );
-
-  /* Periodically try to connect to the next peer */
-  event_loop_.add_rule(
-    "Reconnect to next",
-    Direction::In,
-    reconnect_timer_fd_,
-    [this] {
-      reconnect_timer_fd_.read_event();
-      reconnect_to_next();
-    },
-    [this] { return not outgoing_message_handler_; } );
+    [] { return true; },
+    [] { LOG( INFO ) << "STOPPED LISTENING"; } );
 }
 
-void Worker::reconnect_to_next()
-{
-  TCPSocket next_socket {};
-  next_socket.set_reuseaddr();
-  next_socket.set_blocking( false );
-  next_socket.connect( next_address_ );
-  outgoing_message_handler_ = make_unique<InferenceStateMessageHandler>( move( next_socket ) );
-
-  outgoing_message_handler_->install_rules(
-    event_loop_,
-    rule_categories_,
-    [this]( InferenceState&& ) -> bool { throw runtime_error { "Received message on outgoing connection" }; },
-    [this] { outgoing_message_handler_.reset(); },
-    [] { LOG( ERROR ) << "Connection error."; } );
-
-  // Kick off the computation
-  if ( type_ == Type::Last ) {
-    InferenceState initial_state {};
-    outgoing_message_handler_->push_message( move( initial_state ) );
-  }
-}
-
-void Worker::run()
+template<typename Model>
+void Worker<Model>::run()
 {
   while ( event_loop_.wait_next_event( -1 ) != EventLoop::Result::Exit ) {
-    // Do nothing.
   }
 }
+
+namespace glinthawk::core {
+
+#ifdef GLINTHAWK_CUDA_ENABLED
+template class Worker<models::llama2::cuda::Llama2<__half>>;
+#endif
+
+} // namespace glinthawk::core

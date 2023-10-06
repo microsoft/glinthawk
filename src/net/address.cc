@@ -10,7 +10,7 @@
 #include <system_error>
 
 using namespace std;
-using namespace glinthawk;
+using namespace glinthawk::net;
 
 //! Converts Raw to `sockaddr *`.
 Address::Raw::operator sockaddr*() { return reinterpret_cast<sockaddr*>( &storage ); }

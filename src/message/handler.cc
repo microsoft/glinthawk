@@ -1,10 +1,11 @@
-#include "message.hh"
+#include "handler.hh"
 
-#include "nn/inference.hh"
-#include "session.hh"
+#include "models/common/model.hh"
+#include "net/session.hh"
 
 using namespace std;
 using namespace glinthawk;
+using namespace glinthawk::net;
 
 template<class SessionType, class OutgoingMessage, class IncomingMessage>
 MessageHandler<SessionType, OutgoingMessage, IncomingMessage>::MessageHandler( SessionType&& session )
@@ -106,11 +107,12 @@ void MessageHandler<SessionType, OutgoingMessage, IncomingMessage>::install_rule
     rule_categories.response,
     [this, incoming_callback] {
       while ( not incoming_empty() ) {
-        auto response = move( incoming_front() );
-        incoming_pop();
+        auto& response = incoming_front();
 
-        if ( not incoming_callback( move( response ) ) ) {
-          // pop all response
+        if ( incoming_callback( move( response ) ) ) {
+          incoming_pop();
+        } else {
+          // user doesn't want to continue processing messages
           while ( not incoming_empty() ) {
             incoming_pop();
           }
@@ -124,6 +126,11 @@ void MessageHandler<SessionType, OutgoingMessage, IncomingMessage>::install_rule
 
 namespace glinthawk {
 
-template class MessageHandler<TCPSession, InferenceState, InferenceState>;
+namespace core {
+class Message;
+}
+
+template class MessageHandler<TCPSession, models::InferenceState, models::InferenceState>;
+template class MessageHandler<TCPSession, core::Message, core::Message>;
 
 } // namespace glinthawk

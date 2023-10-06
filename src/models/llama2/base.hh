@@ -1,39 +1,50 @@
 #pragma once
 
+#include "cuda_runtime.h"
+#include "models/common/model.hh"
 #include <filesystem>
 #include <memory>
 #include <optional>
 #include <string>
 #include <unordered_map>
 #include <vector>
-#include "cuda_runtime.h"
-#include "models/common/model.hh"
 #include <curand.h>
 #include <curand_kernel.h>
 
 namespace glinthawk::models::llama2 {
 
+constexpr size_t MAX_BATCH_SIZE = 128;
+
 struct Config
 {
-  Config( const std::filesystem::path& config_file, uint64_t kv_prompt_limit_, uint64_t concurrency_limit_ );
+  Config( const std::filesystem::path& config_file,
+          const int32_t start_layer,
+          const int32_t end_layer,
+          uint64_t concurrency_limit_ );
 
   std::string to_string() const;
 
+  /// @brief Size of the config stored on disk (in bytes)
   static size_t config_size() { return sizeof( int32_t ) * 7; }
 
   uint64_t dim {};                  // transformer dimension
   uint64_t kv_dim {};               // key/value dimension
   uint64_t hidden_dim {};           // for ffn layers
-  uint64_t n_layers {};             // number of layers
+  uint64_t n_layers {};             // total number of layers
   uint64_t n_heads {};              // number of query heads
   uint64_t n_kv_heads {};           // number of key/value heads (can be < query heads because of multiquery)
   uint64_t gqa_size {};             // GQA sharing rate
   uint64_t vocab_size {};           // vocabulary size (byte-level)
   uint64_t seq_len {};              // max sequence length
-  uint64_t kv_prompt_limit {1};     // max prompt K/V size
-  uint64_t concurrency_limit {1};   // max concurrent inference size
+  uint64_t concurrency_limit { 1 }; // max concurrent inference size // XXX(sadjad): I don't like this!
+
+  // which layers to serve
+  uint64_t start_layer_num {};
+  uint64_t end_layer_num {};
 
   bool wcls_present { false };
+
+  uint64_t n_layers_loaded() const { return end_layer_num - start_layer_num + 1; }
 };
 
 class Vocabulary
@@ -54,8 +65,11 @@ template<typename DType>
 struct BaseWeights
 {
   BaseWeights( const Config& config, const DType* base_weights );
+
   BaseWeights( const BaseWeights& ) = delete;
   BaseWeights operator=( const BaseWeights& ) = delete;
+  BaseWeights( BaseWeights&& ) = default;
+  BaseWeights& operator=( BaseWeights&& ) = default;
 
   static size_t base_size( const Config& config );
 
@@ -76,6 +90,11 @@ struct LayerWeights
   LayerWeights() = default;
   LayerWeights( const Config& config, const DType* model );
 
+  LayerWeights( const LayerWeights& ) = delete;
+  LayerWeights operator=( const LayerWeights& ) = delete;
+  LayerWeights( LayerWeights&& ) = default;
+  LayerWeights& operator=( LayerWeights&& ) = default;
+
   static size_t layer_size( const Config& config );
 
   // weights for rmsnorms
@@ -94,6 +113,7 @@ struct LayerWeights
   const DType* w3 { nullptr }; // (hidden_dim, dim)
 };
 
+/// @brief This class acts as the scratchpad for the computations
 template<typename DType>
 struct RunState
 {
@@ -116,27 +136,22 @@ struct RunState
   DType* logits {};             // output logits (B, vocab_size)
   DType* temp_softmax {};       // temporary buffer for computing softmax (B, n_heads)
   curandState* rng_state {};    // CURAND state (B, vocab_size)
+
+  // information about the current batch
+  uint64_t curr_concurrency_size { 1 };
+  uint32_t batch_token_positions[MAX_BATCH_SIZE] {};
+  DType* batch_context_pointers[MAX_BATCH_SIZE] {};
 };
 
+// @brief InferenceContext for Llama2 model is the KV-cache
 template<typename DType>
-struct KVCache
+struct InferenceContext
 {
-  KVCache( const Config& config, DType* buffer, const int32_t start_layer, const int32_t end_layer );
+  static size_t context_size( const Config& config );
 
-  static size_t cache_size( const Config& config, const int32_t start_layer, const int32_t end_layer );
-
-  const int32_t start_layer_;
-  const int32_t end_layer_;
-
-  DType* buffer_;
-  const int seq_len_;
-  const int kv_dim_;
-  const int n_layers_;
-  const int head_size_;
-  const int kv_prompt_limit_;
-
-  DType* key( int layer, const int step, const int batch = 0, const int head = 0);
-  DType* value( int layer, const int step, const int batch = 0, const int head = 0);
+  DType* buffer_ { nullptr };
+  DType* key( const Config& config, int layer_num, const int token_pos, const int head = 0 );
+  DType* value( const Config& config, int layer_num, const int token_pos, const int head = 0 );
 };
 
 template<typename DType>
@@ -146,34 +161,32 @@ protected:
   std::unique_ptr<DType, void ( * )( DType* )> base_weights_buffer_;
   std::unique_ptr<DType, void ( * )( DType* )> layers_buffer_;
   std::unique_ptr<DType, void ( * )( DType* )> run_state_buffer_;
-  std::unique_ptr<DType, void ( * )( DType* )> kv_cache_buffer_;
 
   const Config config_;
-  const int32_t start_layer_num_;
-  const int32_t end_layer_num_;
-  uint64_t curr_concurrency_size { 1 };
-  std::vector<uint64_t> id_allocation_ { };
-  std::vector<uint64_t> token_pos_ { };
 
   RunState<DType> state_;
-  KVCache<DType> kv_cache_;
-  const BaseWeights<DType> base_weights_;
-  const std::vector<LayerWeights<DType>> layer_weights_;
+  BaseWeights<DType> base_weights_;
+  std::vector<LayerWeights<DType>> layer_weights_;
 
 protected:
   BaseLlama2( const Config& config,
               std::unique_ptr<DType, void ( * )( DType* )>&& base_weights,
               std::unique_ptr<DType, void ( * )( DType* )>&& layers_weights,
-              std::unique_ptr<DType, void ( * )( DType* )>&& run_state,
-              std::unique_ptr<DType, void ( * )( DType* )>&& kv_cache,
-              const int32_t start_layer = 0,
-              const int32_t end_layer = -1 );
+              std::unique_ptr<DType, void ( * )( DType* )>&& run_state );
 
 public:
   ~BaseLlama2() override = default;
 
   BaseLlama2( BaseLlama2&& ) = default;
-  BaseLlama2& operator=( BaseLlama2 && ) = default;
+  BaseLlama2& operator=( BaseLlama2&& ) = default;
+  BaseLlama2( const BaseLlama2& ) = delete;
+  BaseLlama2& operator=( const BaseLlama2& ) = delete;
+
+  using ConfigType = Config;
+  using ContextType = Context;
+  using DataType = DType;
+
+  Config config() const { return config_; }
 };
 
 } // namespace glinthawk::models::llama2

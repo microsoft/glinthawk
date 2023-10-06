@@ -55,16 +55,9 @@ public:
 
   constexpr static size_t num_categories = static_cast<size_t>( Category::COUNT );
 
-  constexpr static std::array<const char*, num_categories> _category_names { {
-    "Non-blocking",
-    "Waiting for Event",
-    "Memory Allocation",
-    "I/O",
-    "Token Generation",
-    "Partial Inference",
-    "Copy Mem to GPU",
-    "Copy Mem from GPU"
-  } };
+  constexpr static std::array<const char*, num_categories> _category_names {
+    { "Non-blocking", "Waiting for Event", "Memory Allocation", "I/O", "Token Generation", "Partial Inference", "Copy Mem to GPU", "Copy Mem from GPU" }
+  };
 
 private:
   uint64_t _beginning_timestamp = timestamp_ns();

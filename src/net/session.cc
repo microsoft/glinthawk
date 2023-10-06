@@ -1,7 +1,7 @@
 #include "session.hh"
 
 using namespace std;
-using namespace glinthawk;
+using namespace glinthawk::net;
 
 template<>
 SessionBase<TCPSocket>::SessionBase( TCPSocket&& socket )

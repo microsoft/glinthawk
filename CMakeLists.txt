@@ -7,15 +7,20 @@ include ( etc/cflags.cmake )
 include ( etc/openmp.cmake )
 include ( etc/cuda.cmake )
 
+find_package ( OpenSSL REQUIRED )
+link_libraries ( OpenSSL::SSL )
+
 find_package ( Glog REQUIRED )
 link_libraries ( glog::glog )
 
 include_directories ( src )
+include_directories ( SYSTEM lib )
 
 file ( GLOB SOURCE
   src/util/*.cc
   src/net/*.cc
-  src/nn/*.cc
+  src/compute/*.cc
+  src/message/*.cc
   src/worker/*.cc
 )
 
@@ -29,12 +34,7 @@ list ( APPEND SOURCE ${MODELS_SOURCE} )
 add_library ( glinthawk STATIC ${SOURCE} )
 link_libraries ( glinthawk )
 
-add_executable ( infer src/frontend/infer.cc )
-add_executable ( infer-partial src/frontend/infer-partial.cc )
-
 if ( CUDA_ENABLED )
-  add_executable ( infer-gpu src/frontend/infer-gpu.cc )
-  add_executable ( infer-parallel-prompts src/frontend/infer-parallel-prompts.cc )
-  add_executable ( profile-gpu src/frontend/profile-gpu.cc )
-  add_executable ( profile-offload src/frontend/profile-offload.cc )
+  # add_executable ( profile-gpu src/frontend/profile-gpu.cc )
+  add_executable ( infer-gpu-layered src/frontend/infer-gpu-layered.cc )
 endif ()
