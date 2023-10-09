@@ -82,6 +82,7 @@ unique_ptr<Llama2<DType>> Llama2<DType>::load( const filesystem::path& model_pat
     << "Accum blocks cannot surpass 2^16.";
   CHECK_GT( 1 << 16, ( config.hidden_dim * config.concurrency_limit + ops::TPB - 1 ) / ops::TPB )
     << "Silu blocks cannot surpass 2^16.";
+  CHECK_GT( 1 << 16, ( config.vocab_size + ops::TPB - 1 ) / ops::TPB ) << "CuRAND blocks cannot surpass 2^16.";
 
   const int32_t layer_count = config.n_layers_loaded();
 
@@ -139,7 +140,7 @@ unique_ptr<Llama2<DType>> Llama2<DType>::load( const filesystem::path& model_pat
   auto model
     = unique_ptr<Llama2<DType>> { new Llama2<DType>( config, move( base ), move( layers ), move( run_state ) ) };
 
-  ops::setup_kernel<<<config.concurrency_limit * config.vocab_size, 1>>>( model->state_.rng_state, 1234 );
+  ops::setup_rng( model->state_.rng_state, 1234, config.vocab_size, config.concurrency_limit );
   cudaDeviceSynchronize();
 
   return model;

@@ -13,7 +13,7 @@
 
 namespace glinthawk::models::llama2 {
 
-constexpr size_t MAX_BATCH_SIZE = 128;
+constexpr size_t MAX_BATCH_SIZE = 1024;
 
 struct Config
 {

@@ -100,4 +100,6 @@ void copy_kv_cache( DType* context_pointers[],
                     const uint64_t batch_size,
                     const uint32_t* token_positions );
 
+void setup_rng( curandState* rng_state, unsigned long seed, const uint64_t size, const uint64_t batch_size );
+
 }

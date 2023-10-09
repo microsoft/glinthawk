@@ -590,8 +590,15 @@ void attention_softmax( DType* att,
 
 __global__ void setup_kernel( curandState* state, unsigned long seed )
 {
-  int id = blockIdx.x;
+  int id = threadIdx.x + blockIdx.x * TPB;
   curand_init( seed, id, 0, &state[id] );
+}
+
+void setup_rng( curandState* rng_state, unsigned long seed, const uint64_t size, const uint64_t batch_size )
+{
+  for ( uint64_t i = 0; i < batch_size; i++ ) {
+    setup_kernel<<<div_ceil( size, TPB ), TPB, 0, streams[i]>>>( rng_state + i * size, 1234 );
+  }
 }
 
 template<typename DType>
