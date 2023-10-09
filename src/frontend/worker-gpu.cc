@@ -55,13 +55,12 @@ int main( int argc, char* argv[] )
   const string listen_ip { argv[5] };
   const uint16_t listen_port = static_cast<uint16_t>( stoi( argv[6] ) );
 
-  try {
-    using Llama2 = models::llama2::cuda::Llama2<__half>;
+  using Llama2 = models::llama2::cuda::Llama2<__half>;
 
+  try {
     net::Address listen_addr { listen_ip, listen_port };
     core::Worker<Llama2> worker { listen_addr, Llama2::load( model_path, start_layer, end_layer ) };
     worker.run();
-
   } catch ( const exception& e ) {
     cerr << "Error: " << e.what() << endl;
     return EXIT_FAILURE;

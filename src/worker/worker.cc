@@ -51,7 +51,7 @@ Worker<Model>::Worker( const Address& address, std::unique_ptr<Model>&& model )
         [] { LOG( INFO ) << "Connection to peer closed."; } );
     },
     [] { return true; },
-    [] { LOG( INFO ) << "STOPPED LISTENING"; } );
+    [] { LOG( ERROR ) << "Worker stopped listening."; } );
 }
 
 template<typename Model>
