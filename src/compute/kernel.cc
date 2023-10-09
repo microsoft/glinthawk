@@ -23,7 +23,7 @@ void ComputeKernel<Model>::execution_thread_func()
       processing_.pop();
     }
 
-    auto result = model_.forward( move( action.first ), action.second );
+    auto result = model_->forward( move( action.first ), action.second );
 
     {
       unique_lock<mutex> lock( outgoing_mutex_ );

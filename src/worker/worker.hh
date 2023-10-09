@@ -2,6 +2,7 @@
 
 #include <list>
 #include <map>
+#include <memory>
 
 #include "compute/kernel.hh"
 #include "message/handler.hh"
@@ -56,7 +57,7 @@ private:
   };
 
 public:
-  Worker( const net::Address& address, Model&& model );
+  Worker( const net::Address& address, std::unique_ptr<Model>&& model );
 
   void run();
 };

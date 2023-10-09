@@ -12,7 +12,7 @@ using namespace glinthawk::core;
 using namespace glinthawk::net;
 
 template<typename Model>
-Worker<Model>::Worker( const Address& address, Model&& model )
+Worker<Model>::Worker( const Address& address, std::unique_ptr<Model>&& model )
   : listen_address_( address )
   , compute_kernel_( move( model ) )
 {

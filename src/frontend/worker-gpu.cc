@@ -25,7 +25,8 @@ static void signal_handler( int )
 
 void usage( const char* argv0 )
 {
-  cout << "Usage: " << argv0 << " <model_dir_path> <tokenizer_path> <start_layer> <end_layer>" << endl;
+  cout << "Usage: " << argv0 << " <model_dir_path> <tokenizer_path> <start_layer> <end_layer>"
+       << " <listen_ip> <listen_port>" << endl;
 }
 
 int main( int argc, char* argv[] )
@@ -34,7 +35,7 @@ int main( int argc, char* argv[] )
     abort();
   }
 
-  if ( argc != 3 ) {
+  if ( argc != 7 ) {
     usage( argv[0] );
     return EXIT_FAILURE;
   }
@@ -47,7 +48,19 @@ int main( int argc, char* argv[] )
   FLAGS_timestamp_in_logfile_name = false;
   google::InitGoogleLogging( argv[0] );
 
+  const filesystem::path model_path { argv[1] };
+  const filesystem::path tokenizer_path { argv[2] };
+  const int start_layer = stoi( argv[3] );
+  const int end_layer = stoi( argv[4] );
+  const string listen_ip { argv[5] };
+  const uint16_t listen_port = static_cast<uint16_t>( stoi( argv[6] ) );
+
   try {
+    using Llama2 = models::llama2::cuda::Llama2<__half>;
+
+    net::Address listen_addr { listen_ip, listen_port };
+    core::Worker<Llama2> worker { listen_addr, Llama2::load( model_path, start_layer, end_layer ) };
+    worker.run();
 
   } catch ( const exception& e ) {
     cerr << "Error: " << e.what() << endl;
