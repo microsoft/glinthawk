@@ -44,7 +44,9 @@ InferenceState::InferenceState( const string_view serialized )
   memcpy( activations_.ptr.get(), ptr, activations_.len * activations_.dtype.size() );
   ptr += activations_.len * activations_.dtype.size();
 
-  while ( ptr < serialized.data() + serialized.size() ) {
+  const auto num_workers = _get_and_advance<uint32_t>( ptr );
+
+  for ( uint32_t i = 0; i < num_workers; i++ ) {
     const auto layer = _get_and_advance<uint32_t>( ptr );
     const auto ipv4_numeric = _get_and_advance<uint32_t>( ptr );
     const auto port = _get_and_advance<uint16_t>( ptr );
@@ -70,6 +72,8 @@ string InferenceState::serialize() const
 
   memcpy( ptr, activations_.ptr.get(), activations_.len * activations_.dtype.size() );
   ptr += activations_.len * activations_.dtype.size();
+
+  _put_and_advance( ptr, static_cast<uint32_t>( layer_workers_.size() ) );
 
   for ( auto& [layer, address] : layer_workers_ ) {
     _put_and_advance( ptr, layer );
@@ -103,16 +107,17 @@ string InferenceState::to_string() const
 
 size_t InferenceState::serialized_size() const
 {
-  return sizeof( PromptID )                                                     /* prompt_id_ */
-         + sizeof( ModelID )                                                    /* model_id_ */
-         + sizeof( token_ )                                                     /* token_ */
-         + sizeof( token_pos_ )                                                 /* token_pos_ */
-         + sizeof( next_layer_ )                                                /* next_layer_ */
-         + sizeof( temperature_ )                                               /* temperature_ */
-         + sizeof( SerializedDataType::Type )                                   /* activations_.dtype.dtype */
-         + sizeof( activations_.len )                                           /* activations_.len */
-         + activations_.dtype.size() * activations_.len                         /* activations_ data */
-         + layer_workers_.size() * ( sizeof( uint32_t ) + sizeof( uint16_t ) ); /* layer_workers_ */
+  return sizeof( PromptID )                                                         /* prompt_id_ */
+         + sizeof( ModelID )                                                        /* model_id_ */
+         + sizeof( token_ )                                                         /* token_ */
+         + sizeof( token_pos_ )                                                     /* token_pos_ */
+         + sizeof( next_layer_ )                                                    /* next_layer_ */
+         + sizeof( temperature_ )                                                   /* temperature_ */
+         + sizeof( SerializedDataType::Type )                                       /* activations_.dtype.dtype */
+         + sizeof( activations_.len )                                               /* activations_.len */
+         + activations_.dtype.size() * activations_.len                             /* activations_ data */
+         + sizeof( uint32_t )                                                       /* layer_workers_.size() */
+         + layer_workers_.size() * ( 2 * sizeof( uint32_t ) + sizeof( uint16_t ) ); /* layer_workers_ */
 }
 
 }
