@@ -129,6 +129,12 @@ public:
   void set_temperature( const float temperature ) { temperature_ = temperature; }
   void set_activations( DataBuffer&& activations ) { activations_ = std::move( activations ); }
 
+  glinthawk::net::Address layer_worker( const uint32_t layer ) const { return layer_workers_.at( layer ); }
+  void set_layer_worker( const uint32_t layer, const glinthawk::net::Address& address )
+  {
+    layer_workers_.emplace( layer, address );
+  }
+
   const DataBuffer& activations() const { return activations_; }
 };
 
