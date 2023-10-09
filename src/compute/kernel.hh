@@ -87,6 +87,8 @@ public:
     outgoing_.pop();
   }
 
+  EventFD& event_fd() { return event_fd_; }
+
   ~ComputeKernel()
   {
     running_ = false;

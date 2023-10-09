@@ -13,6 +13,8 @@ using namespace glinthawk::compute;
 template<typename Model>
 void ComputeKernel<Model>::execution_thread_func()
 {
+  LOG(INFO) << "ComputeKernel execution thread started.";
+
   pair<InferenceState, shared_ptr<typename Model::ContextType>> action;
 
   while ( running_ ) {
@@ -37,6 +39,8 @@ void ComputeKernel<Model>::execution_thread_func()
 template<typename Model>
 void ComputeKernel<Model>::bookkeeping_thread_func()
 {
+  LOG(INFO) << "ComputeKernel bookkeeping thread started.";
+
   InferenceState action;
 
   while ( running_ ) {
