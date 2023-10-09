@@ -1,5 +1,6 @@
 #pragma once
 
+#include <map>
 #include <memory>
 #include <stdexcept>
 #include <string>
@@ -11,6 +12,7 @@
 #define __half uint16_t
 #endif
 
+#include "net/address.hh"
 #include "util/digest.hh"
 
 namespace glinthawk {
@@ -81,6 +83,9 @@ private:
   float temperature_ { 0.0f };
 
   DataBuffer activations_ {};
+
+  // mapping from layer to worker address for this inference state
+  std::map<uint32_t, glinthawk::net::Address> layer_workers_ {};
 
   size_t serialized_size() const;
 
