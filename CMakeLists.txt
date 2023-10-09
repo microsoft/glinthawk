@@ -13,6 +13,10 @@ link_libraries ( OpenSSL::SSL )
 find_package ( Glog REQUIRED )
 link_libraries ( glog::glog )
 
+find_package ( Protobuf REQUIRED )
+add_subdirectory ( src/message/protobuf )
+link_libraries ( protobuf::libprotobuf )
+
 include_directories ( src )
 include_directories ( SYSTEM lib )
 
