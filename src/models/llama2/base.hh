@@ -121,21 +121,24 @@ struct RunState
   RunState( const RunState& ) = delete;
   RunState operator=( const RunState& ) = delete;
 
+  RunState( RunState&& ) = default;
+  RunState& operator=( RunState&& ) = default;
+
   static size_t state_size( const Config& config );
 
-  DType* buffer_;               // we use this buffer for everything, including activations
-  DType* x {};                  // activation at current time stamp (B, dim)
-  DType* xb {};                 // same, but inside a residual branch (B, dim)
-  DType* xb2 {};                // an additional buffer just for convenience (B, dim)
-  DType* q {};                  // query (B, dim)
-  DType* k {};                  // key (B, kv_dim)
-  DType* v {};                  // value (B, kv_dim)
-  DType* hb {};                 // buffer for hidden dimension in the ffn (B, hidden_dim)
-  DType* hb2 {};                // buffer for hidden dimension in the ffn (B, hidden_dim)
-  DType* att {};                // buffer for scores/attention values (B, n_heads, seq_len)
-  DType* logits {};             // output logits (B, vocab_size)
-  DType* temp_softmax {};       // temporary buffer for computing softmax (B, n_heads)
-  curandState* rng_state {};    // CURAND state (B, vocab_size)
+  DType* buffer_;             // we use this buffer for everything, including activations
+  DType* x {};                // activation at current time stamp (B, dim)
+  DType* xb {};               // same, but inside a residual branch (B, dim)
+  DType* xb2 {};              // an additional buffer just for convenience (B, dim)
+  DType* q {};                // query (B, dim)
+  DType* k {};                // key (B, kv_dim)
+  DType* v {};                // value (B, kv_dim)
+  DType* hb {};               // buffer for hidden dimension in the ffn (B, hidden_dim)
+  DType* hb2 {};              // buffer for hidden dimension in the ffn (B, hidden_dim)
+  DType* att {};              // buffer for scores/attention values (B, n_heads, seq_len)
+  DType* logits {};           // output logits (B, vocab_size)
+  DType* temp_softmax {};     // temporary buffer for computing softmax (B, n_heads)
+  curandState* rng_state {};  // CURAND state (B, vocab_size)
 
   // information about the current batch
   uint64_t curr_concurrency_size { 1 };
@@ -143,7 +146,7 @@ struct RunState
   DType* batch_context_pointers[MAX_BATCH_SIZE] {};
 };
 
-// @brief InferenceContext for Llama2 model is the KV-cache
+/// @brief InferenceContext for Llama2 model is the KV-cache
 template<typename DType>
 struct InferenceContext
 {
@@ -154,8 +157,8 @@ struct InferenceContext
   DType* value( const Config& config, int layer_num, const int token_pos, const int head = 0 );
 };
 
-template<typename DType>
-class BaseLlama2 : public virtual glinthawk::models::Model<DType>
+template<typename DType, typename Context>
+class BaseLlama2 : public virtual glinthawk::models::Model<Context>
 {
 protected:
   std::unique_ptr<DType, void ( * )( DType* )> base_weights_buffer_;

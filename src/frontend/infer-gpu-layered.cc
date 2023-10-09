@@ -112,7 +112,9 @@ int main( int argc, char* argv[] )
         input_states.push_back( state.serialize() );
       }
 
-      if ( not prompt_processed and current_layer == llama->config().n_layers - 1 ) {
+      const auto next_layer = output_states[0].next_layer();
+
+      if ( not prompt_processed and next_layer == 0 ) {
         // this is the last layer and we're done processing the prompt.
         prompt_processed = true;
 
@@ -125,7 +127,11 @@ int main( int argc, char* argv[] )
 
         // remove all elements in the input states except the last one
         input_states.erase( input_states.begin(), input_states.end() - 1 );
-      } else if ( current_layer == llama->config().n_layers - 1 ) {
+        output_states.erase( output_states.begin(), output_states.end() - 1 );
+        for ( const auto& state : output_states ) {
+          cout << vocabulary.get_word( state.token() ) << flush;
+        }
+      } else if ( next_layer == 0 ) {
         // (2) let's print the output
         for ( const auto& state : output_states ) {
           cout << vocabulary.get_word( state.token() ) << flush;

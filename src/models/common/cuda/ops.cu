@@ -223,22 +223,6 @@ void copy_kv_cache( DType* context_pointers[],
     DType* k_cache_pos = context_pointers[i] + token_positions[i] * n_layers * dim * 2;
     DType* v_cache_pos = k_cache_pos + dim;
 
-void copy_kv_cache( const DType* state_k,
-                    const DType* state_v,
-                    DType* key_base,
-                    DType* value_base,
-                    const uint64_t dim,
-                    const uint64_t n_layers,
-                    const uint64_t batch_size,
-                    const uint64_t max_batch_size,
-                    const vector<uint64_t>& id_alloc_s,
-                    const vector<uint64_t>& token_pos_s )
-{
-  const uint64_t large_base = n_layers * dim * max_batch_size * 2;
-  const uint64_t small_base = dim;
-  for ( size_t i = 0; i < batch_size; i++ ) {
-    DType* k_cache_pos = key_base + token_pos_s[i] * large_base + id_alloc_s[i] * small_base;
-    DType* v_cache_pos = value_base + token_pos_s[i] * large_base + id_alloc_s[i] * small_base;
     ops::CHECK_CUDA(
       cudaMemcpyAsync( k_cache_pos, state_k + i * dim, dim * sizeof( DType ), cudaMemcpyDeviceToDevice, streams[i] ) );
     ops::CHECK_CUDA(

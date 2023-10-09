@@ -77,12 +77,12 @@ Config::Config( const filesystem::path& config_file,
   CHECK_GT( seq_len, 0 ) << "Sequence length must be positive.";
   CHECK_GT( concurrency_limit, 0 ) << "Max concurrent inference size must be positive.";
 
-  CHECK_GE( start_layer, 0 ) << "Start layer must be non-negative.";
-  CHECK_LT( end_layer, n_layers ) << "End layer must be less than the number of layers.";
-  CHECK_LE( start_layer, end_layer ) << "Start layer must be less than or equal to end layer.";
-
   start_layer_num = start_layer;
-  end_layer_num = end_layer;
+  end_layer_num = ( end_layer == -1 ) ? ( n_layers - 1 ) : end_layer;
+
+  CHECK_GE( start_layer_num, 0 ) << "Start layer must be non-negative.";
+  CHECK_LT( end_layer_num, n_layers ) << "End layer must be less than the number of layers.";
+  CHECK_LE( start_layer_num, end_layer_num ) << "Start layer must be less than or equal to end layer.";
 
   LOG( INFO ) << "Loaded config: " << to_string();
 }
@@ -230,7 +230,7 @@ size_t RunState<DType>::state_size( const Config& config )
 template<typename DType>
 size_t InferenceContext<DType>::context_size( const Config& config )
 {
-  return sizeof( DType ) * config.seq_len * config.kv_dim * 2 * ( config.end_layer_num - config.start_layer_num + 1 );
+  return sizeof( DType ) * config.seq_len * config.kv_dim * 2 * config.n_layers_loaded();
 }
 
 template<typename DType>

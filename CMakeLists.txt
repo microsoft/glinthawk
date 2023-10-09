@@ -36,5 +36,7 @@ link_libraries ( glinthawk )
 
 if ( CUDA_ENABLED )
   # add_executable ( profile-gpu src/frontend/profile-gpu.cc )
+  add_executable ( infer-gpu src/frontend/infer-gpu.cc )
   add_executable ( infer-gpu-layered src/frontend/infer-gpu-layered.cc )
+  add_executable ( profile-offload src/frontend/profile-offload.cc )
 endif ()

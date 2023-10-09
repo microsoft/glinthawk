@@ -119,7 +119,7 @@ unique_ptr<Llama2<DType>> Llama2<DType>::load( const filesystem::path& model_pat
   }
 
   // (2) load the layers
-  for ( auto i = start_layer; i <= end_layer; i++ ) {
+  for ( auto i = config.start_layer_num; i <= config.end_layer_num; i++ ) {
     const auto layer_path = model_path / ( "LAYER" + to_string( i ) + filename_suffix );
 
     CHECK_EQ( filesystem::file_size( layer_path ), layer_size ) << "Layer " << i << " is not the expected size.";
@@ -127,17 +127,19 @@ unique_ptr<Llama2<DType>> Llama2<DType>::load( const filesystem::path& model_pat
     FileDescriptor layer_fd { CHECK_SYSCALL( "open", open( layer_path.c_str(), O_RDONLY ) ) };
     MMap_Region layer_mmap { nullptr, layer_size, PROT_READ, MAP_PRIVATE, layer_fd.fd_num(), 0 };
 
-    ops::CHECK_CUDA( cudaMemcpy( reinterpret_cast<uint8_t*>( layers.get() ) + ( i - start_layer ) * layer_size,
-                                 layer_mmap.addr(),
-                                 layer_size,
-                                 cudaMemcpyHostToDevice ) );
+    ops::CHECK_CUDA(
+      cudaMemcpy( reinterpret_cast<uint8_t*>( layers.get() ) + ( i - config.start_layer_num ) * layer_size,
+                  layer_mmap.addr(),
+                  layer_size,
+                  cudaMemcpyHostToDevice ) );
 
     LOG( INFO ) << "Loaded layer " << i << " (" << layer_size << " bytes).";
   }
 
-  auto model = unique_ptr<Llama2<DType>> { new Llama2<DType> ( config, move( base ), move( layers ), move( run_state ) ) };
+  auto model
+    = unique_ptr<Llama2<DType>> { new Llama2<DType>( config, move( base ), move( layers ), move( run_state ) ) };
 
-  ops::setup_kernel<<<config.concurrency_limit * config.vocab_size, 1>>>( model -> state_.rng_state, 1234 );
+  ops::setup_kernel<<<config.concurrency_limit * config.vocab_size, 1>>>( model->state_.rng_state, 1234 );
   cudaDeviceSynchronize();
 
   return model;
@@ -199,6 +201,7 @@ void Llama2<DType>::transformer_layer( const int32_t layer_num )
                       n_layers_loaded,
                       curr_conc_lvl,
                       this->state_.batch_token_positions );
+  cudaDeviceSynchronize();
 
   // <multihead attention> for each head and for each token up to and including the current one
   ops::attention_0_gemm( this->state_.q,
@@ -275,7 +278,7 @@ std::vector<uint32_t> extract_batch_token( const RunState<DType>& state,
                                            const Config& config,
                                            const std::vector<float>& temp )
 {
-  ops::soft_sample(state.logits, temp, state.rng_state, config.vocab_size, temp.size());
+  ops::soft_sample( state.logits, temp, state.rng_state, config.vocab_size, temp.size() );
   std::vector<uint32_t> next_tokens;
   for ( size_t i = 0; i < temp.size(); i++ )
     next_tokens.push_back( ops::argmax( state.logits + i * config.vocab_size, config.vocab_size ) );
@@ -297,7 +300,6 @@ vector<InferenceState> Llama2<DType>::forward( const vector<reference_wrapper<co
   }
 
   for ( size_t i = 0; i < inference_states.size(); i++ ) {
-    this->state_.batch_context_pointers[i] = contexts[i]->buffer_;
     this->state_.batch_token_positions[i] = inference_states[i].get().token_pos();
     CHECK_LT( this->state_.batch_token_positions[i], this->config_.seq_len )
       << "token position cannot be larger than sequence length";
@@ -321,6 +323,9 @@ vector<InferenceState> Llama2<DType>::forward( const vector<reference_wrapper<co
   }
 
   for ( int layer_num = this->config_.start_layer_num; layer_num <= this->config_.end_layer_num; layer_num++ ) {
+    for ( size_t i = 0; i < inference_states.size(); i++ ) {
+      this->state_.batch_context_pointers[i] = contexts[i]->key(this->config_, layer_num, 0);
+    }
     transformer_layer( layer_num );
   }
 
