@@ -224,9 +224,9 @@ void copy_kv_cache( DType* context_pointers[],
     DType* v_cache_pos = k_cache_pos + dim;
 
     ops::CHECK_CUDA(
-      cudaMemcpyAsync( k_cache_pos, state_k + i * dim, dim * sizeof( DType ), cudaMemcpyDeviceToDevice, streams[i] ) );
+      cudaMemcpyAsync( k_cache_pos, state_k + i * dim, dim * sizeof( DType ), cudaMemcpyDeviceToDevice ) );
     ops::CHECK_CUDA(
-      cudaMemcpyAsync( v_cache_pos, state_v + i * dim, dim * sizeof( DType ), cudaMemcpyDeviceToDevice, streams[i] ) );
+      cudaMemcpyAsync( v_cache_pos, state_v + i * dim, dim * sizeof( DType ), cudaMemcpyDeviceToDevice ) );
   }
 }
 
@@ -496,12 +496,12 @@ void apply_rope( const uint64_t head_size,
                  DType* state_k )
 {
   for ( uint64_t i = 0; i < curr_batch_size; i++ ) {
-    do_rope<<<n_kv_heads, head_size / 2, 0, streams[i]>>>( head_size,
-                                                           gqa_size,
-                                                           freq_cis_real + token_positions[i] * head_size / 2,
-                                                           freq_cis_imag + token_positions[i] * head_size / 2,
-                                                           state_q + i * n_kv_heads * gqa_size * head_size,
-                                                           state_k + i * n_kv_heads * head_size );
+    do_rope<<<n_kv_heads, head_size / 2>>>( head_size,
+                                            gqa_size,
+                                            freq_cis_real + token_positions[i] * head_size / 2,
+                                            freq_cis_imag + token_positions[i] * head_size / 2,
+                                            state_q + i * n_kv_heads * gqa_size * head_size,
+                                            state_k + i * n_kv_heads * head_size );
   }
 }
 

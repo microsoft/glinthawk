@@ -202,7 +202,6 @@ void Llama2<DType>::transformer_layer( const int32_t layer_num )
                       n_layers_loaded,
                       curr_conc_lvl,
                       this->state_.batch_token_positions );
-  cudaDeviceSynchronize();
 
   // <multihead attention> for each head and for each token up to and including the current one
   ops::attention_0_gemm( this->state_.q,
