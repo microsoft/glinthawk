@@ -21,6 +21,7 @@ public:
   using ContextType = glinthawk::models::llama2::BaseLlama2<DType, Context<DType>>::ContextType;
   using ConfigType = glinthawk::models::llama2::BaseLlama2<DType, Context<DType>>::ConfigType;
   using DataType = glinthawk::models::llama2::BaseLlama2<DType, Context<DType>>::DataType;
+  using TokenizerType = glinthawk::models::llama2::BaseLlama2<DType, Context<DType>>::TokenizerType;
 
 private:
   void pass_begin( const std::vector<uint32_t>& token );
