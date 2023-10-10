@@ -24,7 +24,9 @@ int main()
   state.set_next_layer( 0 );
   state.set_temperature( 0.0f );
   state.set_layer_workers( { { 0, net::Address { "127.0.0.1", static_cast<uint16_t>( 12000 ) } },
-                             { 6, net::Address { "127.0.0.1", static_cast<uint16_t>( 12006 ) } } } );
+                             { 3, net::Address { "127.0.0.1", static_cast<uint16_t>( 12003 ) } },
+                             { 6, net::Address { "127.0.0.1", static_cast<uint16_t>( 12006 ) } },
+                             { 9, net::Address { "127.0.0.1", static_cast<uint16_t>( 12009 ) } } } );
 
   cerr << "State created: " << state.to_string() << endl;
 

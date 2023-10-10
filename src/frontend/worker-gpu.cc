@@ -56,10 +56,11 @@ int main( int argc, char* argv[] )
   const uint16_t listen_port = static_cast<uint16_t>( stoi( argv[6] ) );
 
   using Llama2 = models::llama2::cuda::Llama2<__half>;
+  auto tokenizer = make_optional<Llama2::TokenizerType>( tokenizer_path );
 
   try {
     net::Address listen_addr { listen_ip, listen_port };
-    core::Worker<Llama2> worker { listen_addr, Llama2::load( model_path, start_layer, end_layer ) };
+    core::Worker<Llama2> worker { listen_addr, Llama2::load( model_path, start_layer, end_layer ), move( tokenizer ) };
     worker.run();
   } catch ( const exception& e ) {
     cerr << "Error: " << e.what() << endl;
