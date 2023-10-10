@@ -73,6 +73,7 @@ int main( int argc, char* argv[] )
       input_states.push_back( state.serialize() );
     }
 
+    constexpr size_t LAYERS_AT_ONCE = 2;
     bool prompt_processed = false;
 
     // since we're loading/executing the model layer by layer, each layer has its own context manager
@@ -89,7 +90,8 @@ int main( int argc, char* argv[] )
 
       // load the model for the next layer
       const auto current_layer = states[0].next_layer();
-      auto llama = Llama2::load( model_dir_path, current_layer, current_layer, input_states.size() );
+      auto llama
+        = Llama2::load( model_dir_path, current_layer, current_layer + LAYERS_AT_ONCE - 1, input_states.size() );
 
       if ( context_managers.empty() ) {
         context_managers.resize( llama->config().n_layers );
