@@ -1,6 +1,7 @@
 #pragma once
 
 #include <array>
+#include <compare>
 #include <cstddef>
 #include <cstdint>
 #include <netdb.h>
@@ -47,6 +48,7 @@ public:
   //! Equality comparison.
   bool operator==( const Address& other ) const;
   bool operator!=( const Address& other ) const { return not operator==( other ); }
+  std::strong_ordering operator<=>( const Address& other ) const;
 
   //! \name Conversions
   //!@{

@@ -153,3 +153,12 @@ bool Address::operator==( const Address& other ) const
 
   return 0 == memcmp( &_address, &other._address, _size );
 }
+
+std::strong_ordering Address::operator<=>( const Address& other ) const
+{
+  if ( _size != other._size ) {
+    return _size <=> other._size;
+  }
+
+  return memcmp( &_address, &other._address, _size ) <=> 0;
+}
