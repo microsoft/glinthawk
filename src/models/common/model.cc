@@ -2,6 +2,8 @@
 
 #include <sstream>
 
+#include <glog/logging.h>
+
 using namespace std;
 
 namespace glinthawk::models {
@@ -52,6 +54,13 @@ InferenceState::InferenceState( const string_view serialized )
     const auto port = _get_and_advance<uint16_t>( ptr );
     layer_workers_.emplace( layer, net::Address::from_ipv4_numeric( ipv4_numeric, port ) );
   }
+}
+
+net::Address InferenceState::next_worker() const
+{
+  auto it = layer_workers_.find( next_layer_ );
+  CHECK( it != layer_workers_.end() ) << "No worker found for layer " << next_layer_;
+  return it->second;
 }
 
 string InferenceState::serialize() const

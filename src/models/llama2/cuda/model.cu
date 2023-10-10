@@ -347,7 +347,8 @@ vector<InferenceState> Llama2<DType>::forward( const vector<reference_wrapper<co
                                  inference_states[i].get().token_pos() + 1, // token_pos
                                  0,                                         // next_layer
                                  inference_states[i].get().temperature(),   // temperature
-                                 DataBuffer {}                              // activations
+                                 DataBuffer {},                             // activations
+                                 inference_states[i].get().layer_workers()  // layer_workers
       );
 
     return token_vector;
@@ -370,7 +371,8 @@ vector<InferenceState> Llama2<DType>::forward( const vector<reference_wrapper<co
                                inference_states[i].get().token_pos(),                    // token_pos
                                static_cast<uint32_t>( this->config_.end_layer_num ) + 1, // next_layer
                                inference_states[i].get().temperature(),                  // temperature
-                               move( activations )                                       // activations
+                               move( activations ),                                      // activations
+                               inference_states[i].get().layer_workers()                 // layer_workers
     );
   }
 
