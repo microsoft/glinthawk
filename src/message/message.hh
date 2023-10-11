@@ -18,6 +18,8 @@ public:
     Hey = 0x1,
     Ping,
     Bye,
+    InferenceState,
+
     COUNT
   };
 
@@ -26,6 +28,7 @@ public:
     "Hey",
     "Ping",
     "Bye",
+    "InferenceState",
   };
 
   constexpr static size_t HEADER_LENGTH = 5;

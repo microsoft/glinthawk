@@ -2,10 +2,13 @@
 
 #include <list>
 #include <map>
+#include <memory>
+#include <optional>
 
 #include "compute/kernel.hh"
 #include "message/handler.hh"
 #include "message/message.hh"
+#include "models/llama2/base.hh"
 #include "net/address.hh"
 #include "net/session.hh"
 #include "net/socket.hh"
@@ -20,33 +23,25 @@ private:
   class Peer
   {
   public:
-    enum class State
-    {
-      Connecting,
-      Connected,
-      Disconnected,
-    };
-
     net::Address address;
-    core::MessageHandler<net::TCPSession> message_handler;
-    State state { State::Connecting };
+    std::vector<models::InferenceState> outgoing_states {};
+    core::MessageHandler<net::TCPSession> message_handler {};
 
     Peer( const net::Address& addr, net::TCPSocket&& socket )
       : address( addr )
-      , message_handler( net::TCPSession { std::move( socket ) } )
+      , message_handler( std::move( socket ) )
     {
     }
   };
 
 private:
   EventLoop event_loop_ {};
-
-  std::map<net::Address, Peer> peers_ {};
-
   net::Address listen_address_;
   net::TCPSocket listen_socket_ {};
+  std::map<net::Address, Peer> peers_ {};
 
   compute::ComputeKernel<Model> compute_kernel_;
+  std::optional<typename Model::TokenizerType> tokenizer_;
 
   core::MessageHandler<net::TCPSession>::RuleCategories rule_categories_ {
     .session = event_loop_.add_category( "Worker session" ),
@@ -55,8 +50,12 @@ private:
     .response = event_loop_.add_category( "Worker response" ),
   };
 
+  void setup_peer( std::map<net::Address, Peer>::iterator peer_it );
+
 public:
-  Worker( const net::Address& address, Model&& model );
+  Worker( const net::Address& address,
+          std::unique_ptr<Model>&& model,
+          std::optional<typename Model::TokenizerType>&& tokenizer = std::nullopt );
 
   void run();
 };

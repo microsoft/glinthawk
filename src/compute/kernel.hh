@@ -43,7 +43,7 @@ template<typename Model>
 class ComputeKernel
 {
 private:
-  Model model_;
+  std::unique_ptr<Model> model_;
   ContextManager<Model> context_manager_;
 
   std::thread execution_thread_;
@@ -62,9 +62,9 @@ private:
   std::atomic<bool> running_ { true };
 
 public:
-  ComputeKernel( Model&& model )
+  ComputeKernel( std::unique_ptr<Model>&& model )
     : model_( std::move( model ) )
-    , context_manager_( model_.config() )
+    , context_manager_( model_->config() )
     , execution_thread_( &ComputeKernel::execution_thread_func, this )
     , bookkeeping_thread_( &ComputeKernel::bookkeeping_thread_func, this )
   {
@@ -86,6 +86,8 @@ public:
     state = std::move( outgoing_.front() );
     outgoing_.pop();
   }
+
+  EventFD& event_fd() { return event_fd_; }
 
   ~ComputeKernel()
   {

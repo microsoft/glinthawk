@@ -2,14 +2,14 @@
 
 #include "cuda_runtime.h"
 #include "models/common/model.hh"
+#include <curand.h>
+#include <curand_kernel.h>
 #include <filesystem>
 #include <memory>
 #include <optional>
 #include <string>
 #include <unordered_map>
 #include <vector>
-#include <curand.h>
-#include <curand_kernel.h>
 
 namespace glinthawk::models::llama2 {
 
@@ -126,19 +126,19 @@ struct RunState
 
   static size_t state_size( const Config& config );
 
-  DType* buffer_;             // we use this buffer for everything, including activations
-  DType* x {};                // activation at current time stamp (B, dim)
-  DType* xb {};               // same, but inside a residual branch (B, dim)
-  DType* xb2 {};              // an additional buffer just for convenience (B, dim)
-  DType* q {};                // query (B, dim)
-  DType* k {};                // key (B, kv_dim)
-  DType* v {};                // value (B, kv_dim)
-  DType* hb {};               // buffer for hidden dimension in the ffn (B, hidden_dim)
-  DType* hb2 {};              // buffer for hidden dimension in the ffn (B, hidden_dim)
-  DType* att {};              // buffer for scores/attention values (B, n_heads, seq_len)
-  DType* logits {};           // output logits (B, vocab_size)
-  DType* temp_softmax {};     // temporary buffer for computing softmax (B, n_heads)
-  curandState* rng_state {};  // CURAND state (B, vocab_size)
+  DType* buffer_;            // we use this buffer for everything, including activations
+  DType* x {};               // activation at current time stamp (B, dim)
+  DType* xb {};              // same, but inside a residual branch (B, dim)
+  DType* xb2 {};             // an additional buffer just for convenience (B, dim)
+  DType* q {};               // query (B, dim)
+  DType* k {};               // key (B, kv_dim)
+  DType* v {};               // value (B, kv_dim)
+  DType* hb {};              // buffer for hidden dimension in the ffn (B, hidden_dim)
+  DType* hb2 {};             // buffer for hidden dimension in the ffn (B, hidden_dim)
+  DType* att {};             // buffer for scores/attention values (B, n_heads, seq_len)
+  DType* logits {};          // output logits (B, vocab_size)
+  DType* temp_softmax {};    // temporary buffer for computing softmax (B, n_heads)
+  curandState* rng_state {}; // CURAND state (B, vocab_size)
 
   // information about the current batch
   uint64_t curr_concurrency_size { 1 };
@@ -188,6 +188,7 @@ public:
   using ConfigType = Config;
   using ContextType = Context;
   using DataType = DType;
+  using TokenizerType = Vocabulary;
 
   Config config() const { return config_; }
 };

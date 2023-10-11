@@ -1,5 +1,6 @@
 #pragma once
 
+#include <map>
 #include <memory>
 #include <stdexcept>
 #include <string>
@@ -11,6 +12,7 @@
 #define __half uint16_t
 #endif
 
+#include "net/address.hh"
 #include "util/digest.hh"
 
 namespace glinthawk {
@@ -82,6 +84,9 @@ private:
 
   DataBuffer activations_ {};
 
+  // mapping from layer to worker address for this inference state
+  std::map<uint32_t, glinthawk::net::Address> layer_workers_ {};
+
   size_t serialized_size() const;
 
 public:
@@ -93,7 +98,8 @@ public:
                   const uint32_t token_pos,
                   const uint32_t next_layer,
                   const float temperature,
-                  DataBuffer&& activations )
+                  DataBuffer&& activations,
+                  const std::map<uint32_t, glinthawk::net::Address>& layer_workers )
     : prompt_id_( prompt_id )
     , model_id_( model_id )
     , token_( token )
@@ -101,6 +107,7 @@ public:
     , next_layer_( next_layer )
     , temperature_( temperature )
     , activations_( std::move( activations ) )
+    , layer_workers_( layer_workers )
   {
   }
 
@@ -115,6 +122,7 @@ public:
   uint32_t token_pos() const { return token_pos_; }
   uint32_t next_layer() const { return next_layer_; }
   float temperature() const { return temperature_; }
+  const decltype( layer_workers_ )& layer_workers() const { return layer_workers_; }
 
   void set_prompt_id( const PromptID prompt_id ) { prompt_id_ = prompt_id; }
   void set_model_id( const ModelID model_id ) { model_id_ = model_id; }
@@ -123,7 +131,9 @@ public:
   void set_next_layer( const uint32_t next_layer ) { next_layer_ = next_layer; }
   void set_temperature( const float temperature ) { temperature_ = temperature; }
   void set_activations( DataBuffer&& activations ) { activations_ = std::move( activations ); }
+  void set_layer_workers( decltype( layer_workers_ )&& layer_workers ) { layer_workers_ = layer_workers; }
 
+  glinthawk::net::Address next_worker() const;
   const DataBuffer& activations() const { return activations_; }
 };
 

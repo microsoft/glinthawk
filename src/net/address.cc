@@ -134,11 +134,12 @@ uint32_t Address::ipv4_numeric() const
   return be32toh( ipv4_addr.sin_addr.s_addr );
 }
 
-Address Address::from_ipv4_numeric( const uint32_t ip_address )
+Address Address::from_ipv4_numeric( const uint32_t ip_address, const uint16_t port )
 {
   sockaddr_in ipv4_addr {};
   ipv4_addr.sin_family = AF_INET;
   ipv4_addr.sin_addr.s_addr = htobe32( ip_address );
+  ipv4_addr.sin_port = htobe16( port );
 
   return { reinterpret_cast<sockaddr*>( &ipv4_addr ), sizeof( ipv4_addr ) };
 }
@@ -151,4 +152,13 @@ bool Address::operator==( const Address& other ) const
   }
 
   return 0 == memcmp( &_address, &other._address, _size );
+}
+
+std::strong_ordering Address::operator<=>( const Address& other ) const
+{
+  if ( _size != other._size ) {
+    return _size <=> other._size;
+  }
+
+  return memcmp( &_address, &other._address, _size ) <=> 0;
 }

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <array>
+#include <compare>
 #include <cstddef>
 #include <cstdint>
 #include <netdb.h>
@@ -47,6 +48,7 @@ public:
   //! Equality comparison.
   bool operator==( const Address& other ) const;
   bool operator!=( const Address& other ) const { return not operator==( other ); }
+  std::strong_ordering operator<=>( const Address& other ) const;
 
   //! \name Conversions
   //!@{
@@ -61,7 +63,7 @@ public:
   //! man3::byteorder)).
   uint32_t ipv4_numeric() const;
   //! Create an Address from a 32-bit raw numeric IP address
-  static Address from_ipv4_numeric( const uint32_t ip_address );
+  static Address from_ipv4_numeric( const uint32_t ip_address, const uint16_t port );
   //! Human-readable string, e.g., "8.8.8.8:53".
   std::string to_string() const;
   //!@}
