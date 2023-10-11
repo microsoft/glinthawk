@@ -80,12 +80,13 @@ __global__ void normalize_and_scale_full( float* output,
                                           const float* x,
                                           const float* weight,
                                           const uint64_t size,
-                                          const float ss )
+                                          const float* ss )
 {
   const uint64_t i = threadIdx.x + blockIdx.x * TPB;
 
   if ( i < size ) {
-    output[i] = weight[i] * ss * x[i];
+    const float denom = sqrtf( *ss / size + 1e-5f );
+    output[i] = weight[i] * x[i] / denom;
   }
 }
 
@@ -93,121 +94,144 @@ __global__ void normalize_and_scale_half( __half* output,
                                           const __half* x,
                                           const __half* weight,
                                           const uint64_t size,
-                                          const float ss )
+                                          const float* ss )
 {
+  const uint64_t gb_i = threadIdx.x + blockIdx.x * TPB + blockIdx.y * size;
   const uint64_t i = threadIdx.x + blockIdx.x * TPB;
 
   if ( i < size ) {
-    output[i] = weight[i] * __float2half( ss * __half2float( x[i] ) );
+    const float denom = sqrtf( ss[blockIdx.y] / size + 1e-5f );
+    output[gb_i] = weight[i] * __float2half( __half2float( x[gb_i] ) / denom );
   }
 }
 
 template<>
 void rmsnorm<float>( float* output,
                      const float* x,
+                     float* temp,
                      const float* weight,
                      const uint64_t size,
                      const uint64_t batch_size )
 {
-  // TODO: optimize batching
-  // Doing the dumbest batching possible and optimizing later
   for ( size_t i = 0; i < batch_size; i++ ) {
-    float ss = 0.0f;
-
-    CHECK_CUBLAS( cublasSdot( cublas_handle_default, size, x + i * size, 1, x + i * size, 1, &ss ) );
-    ss /= size;
-    ss += 1e-5f;
-    ss = 1.0f / sqrtf( ss );
-
-    normalize_and_scale_full<<<div_ceil( size, TPB ), TPB>>>( output + i * size, x + i * size, weight, size, ss );
+    CHECK_CUBLAS( cublasSdot( cublas_handle_default, size, x + i * size, 1, x + i * size, 1, temp + i ) );
+    normalize_and_scale_full<<<div_ceil( size, TPB ), TPB>>>( output + i * size, x + i * size, weight, size, temp + i );
   }
 }
 
-struct square : public thrust::unary_function<__half, float>
+__global__ void reduce_norm_v2_square_batched( float* output, const __half* x, const uint64_t size )
 {
-  __host__ __device__ float operator()( const __half& x ) const
-  {
-    const float x_f = __half2float( x );
-    return x_f * x_f;
+  extern __shared__ float s_out[];
+
+  const uint64_t global_tid = size * blockIdx.y + RBS * 2 * blockIdx.x + threadIdx.x; // index within whole batch
+  const uint64_t local_tid = RBS * 2 * blockIdx.x + threadIdx.x;                      // index within array
+  const uint64_t tid = threadIdx.x;                                                   // index within block
+
+  if ( local_tid < size ) {
+    const float _x_f = __half2float( x[global_tid] );
+    s_out[tid] = _x_f * _x_f;
+  } else {
+    s_out[tid] = 0;
   }
-};
+  if ( local_tid + RBS < size ) {
+    const float _x_f = __half2float( x[global_tid + RBS] );
+    s_out[tid + RBS] = _x_f * _x_f;
+  } else {
+    s_out[tid + RBS] = 0;
+  }
+
+  for ( unsigned int s = RBS; s > 1; s >>= 1 ) {
+    if ( tid < s ) {
+      s_out[tid] += s_out[tid + s];
+    }
+    __syncthreads();
+  }
+
+  if ( tid == 0 )
+    output[blockIdx.y * gridDim.x + blockIdx.x] = s_out[0] + s_out[1];
+}
+
+__global__ void reduce_norm_v2_sum_batched( float* output, const float* x, const uint64_t size )
+{
+  extern __shared__ float s_out[];
+
+  const uint64_t global_tid = size * blockIdx.y + RBS * 2 * blockIdx.x + threadIdx.x; // index within whole batch
+  const uint64_t local_tid = RBS * 2 * blockIdx.x + threadIdx.x;                      // index within array
+  const uint64_t tid = threadIdx.x;                                                   // index within block
+
+  if ( local_tid < size ) {
+    s_out[tid] = x[global_tid];
+  } else {
+    s_out[tid] = 0;
+  }
+  if ( local_tid + RBS < size ) {
+    s_out[tid + RBS] = x[global_tid + RBS];
+  } else {
+    s_out[tid + RBS] = 0;
+  }
+
+  for ( unsigned int s = RBS; s > 1; s >>= 1 ) {
+    if ( tid < s ) {
+      s_out[tid] += s_out[tid + s];
+    }
+    __syncthreads();
+  }
+
+  if ( tid == 0 )
+    output[blockIdx.y * gridDim.x + blockIdx.x] = s_out[0] + s_out[1];
+}
+
+void square_reduce_step_2( float* output,
+                           const float* x,
+                           float* temp_1,
+                           float* temp_2,
+                           const uint64_t size,
+                           const uint64_t batch_size )
+{
+  const uint64_t max_elems_per_block = RBS * 2;
+  const uint64_t shmem_size = sizeof( float ) * max_elems_per_block;
+
+  const uint64_t grid_size = div_ceil( size, max_elems_per_block );
+
+  dim3 grids( grid_size, batch_size );
+  if ( grid_size == 1 ) {
+    reduce_norm_v2_sum_batched<<<grids, RBS, shmem_size>>>( output, x, size );
+  } else {
+    reduce_norm_v2_sum_batched<<<grids, RBS, shmem_size>>>( temp_1, x, size );
+    square_reduce_step_2( output, temp_1, temp_2, temp_1, grid_size, batch_size );
+  }
+}
+
+void square_reduce_step_1( float* output, const __half* x, const uint64_t size, const uint64_t batch_size )
+{
+  const uint64_t max_elems_per_block = RBS * 2;
+  const uint64_t shmem_size = sizeof( float ) * max_elems_per_block;
+
+  const uint64_t grid_size = div_ceil( size, max_elems_per_block );
+
+  dim3 grids( grid_size, batch_size );
+  if ( grid_size == 1 ) {
+    reduce_norm_v2_square_batched<<<grids, RBS, shmem_size>>>( output, x, size );
+  } else {
+    float* temp_1 = output + batch_size;
+    float* temp_2 = temp_1 + batch_size * grid_size;
+    reduce_norm_v2_square_batched<<<grids, RBS, shmem_size>>>( temp_1, x, size );
+    square_reduce_step_2( output, temp_1, temp_2, temp_1, grid_size, batch_size );
+  }
+}
 
 template<>
 void rmsnorm<__half>( __half* output,
                       const __half* x,
+                      __half* temp,
                       const __half* weight,
                       const uint64_t size,
                       const uint64_t batch_size )
 {
-  // TODO: optimize batching
-  // Doing the dumbest batching possible and optimizing later
-  for ( size_t i = 0; i < batch_size; i++ ) {
-    thrust::device_ptr<__half> thrust_x { const_cast<__half*>( x + i * size ) };
-    float ss = thrust::transform_reduce( thrust_x, thrust_x + size, square(), 0.0f, thrust::plus<float>() );
-    ss /= size;
-    ss += 1e-5f;
-    ss = 1.0f / sqrtf( ss );
+  square_reduce_step_1( reinterpret_cast<float*>( temp ), x, size, batch_size );
 
-    normalize_and_scale_half<<<div_ceil( size, TPB ), TPB>>>( output + i * size, x + i * size, weight, size, ss );
-  }
-}
-
-template<>
-void softmax<float>( float* _x, const uint64_t size, const uint64_t batch_size )
-{
-  // optimize batching
-  // Doing the dumbest batching possible and optimizing later
-  for ( size_t i = 0; i < batch_size; i++ ) {
-    thrust::device_ptr<float> x { _x + i * size };
-
-    const float max_val = *thrust::max_element( x, x + size );
-    const float sum = thrust::transform_reduce(
-      x, x + size, [max_val] __device__( const float x ) { return expf( x - max_val ); }, 0.0f, thrust::plus<float>() );
-    thrust::transform( x, x + size, x, [sum] __device__( const float x ) { return x / sum; } );
-  }
-}
-
-template<>
-void softmax<float>( float* _x, const uint64_t size )
-{
-  thrust::device_ptr<float> x { _x };
-
-  const float max_val = *thrust::max_element( x, x + size );
-  const float sum = thrust::transform_reduce(
-    x, x + size, [max_val] __device__( const float x ) { return expf( x - max_val ); }, 0.0f, thrust::plus<float>() );
-  thrust::transform( x, x + size, x, [sum] __device__( const float x ) { return x / sum; } );
-}
-
-template<>
-void softmax( __half* _x, const uint64_t size, const uint64_t batch_size )
-{
-  // TODO: optimize batching
-  // Doing the dumbest batching possible and optimizing later
-  for ( size_t i = 0; i < batch_size; i++ ) {
-    thrust::device_ptr<__half> x { _x + i * size };
-    const __half max_val = *thrust::max_element( x, x + size );
-    const __half sum = thrust::transform_reduce(
-      x,
-      x + size,
-      [max_val] __device__( const __half x ) { return hexp( x - max_val ); },
-      __half(),
-      thrust::plus<__half>() );
-    thrust::transform( x, x + size, x, [sum] __device__( const __half x ) { return x / sum; } );
-  }
-}
-
-template<>
-void softmax( __half* _x, const uint64_t size )
-{
-  thrust::device_ptr<__half> x { _x };
-  const __half max_val = *thrust::max_element( x, x + size );
-  const __half sum = thrust::transform_reduce(
-    x,
-    x + size,
-    [max_val] __device__( const __half x ) { return hexp( x - max_val ); },
-    __half(),
-    thrust::plus<__half>() );
-  thrust::transform( x, x + size, x, [sum] __device__( const __half x ) { return x / sum; } );
+  dim3 grid( div_ceil( size, TPB ), batch_size );
+  normalize_and_scale_half<<<grid, TPB>>>( output, x, weight, size, reinterpret_cast<float*>( temp ) );
 }
 
 template<typename DType>
@@ -351,7 +375,7 @@ void attention_2_gemm( const DType* att,
 template<typename DType>
 vector<uint32_t> argmax( const DType* _v, const uint64_t n, const uint64_t batch_size )
 {
-  // optimize batching
+  // TODO: optimize batching
   // Doing the dumbest batching possible and optimizing later
   vector<uint32_t> arg_maxes;
   for ( size_t i = 0; i < batch_size; i++ ) {
@@ -634,11 +658,13 @@ void soft_sample( DType* v,
 
 template void rmsnorm<float>( float* output,
                               const float* x,
+                              float* temp,
                               const float* weight,
                               const uint64_t size,
                               const uint64_t batch_size );
 template void rmsnorm<__half>( __half* output,
                                const __half* x,
+                               __half* temp,
                                const __half* weight,
                                const uint64_t size,
                                const uint64_t batch_size );
@@ -662,12 +688,6 @@ template void soft_sample<__half>( __half* v,
 
 template void accum<float>( float* a, const float* b, const uint64_t size, const uint64_t batch_size );
 template void accum<__half>( __half* a, const __half* b, const uint64_t size, const uint64_t batch_size );
-
-template void softmax<float>( float* x, const uint64_t size, const uint64_t batch_size );
-template void softmax<__half>( __half* x, const uint64_t size, const uint64_t batch_size );
-
-template void softmax<float>( float* x, const uint64_t size );
-template void softmax<__half>( __half* x, const uint64_t size );
 
 template void matmul<float>( float* xout,
                              const float* x,

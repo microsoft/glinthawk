@@ -77,12 +77,14 @@ unique_ptr<Llama2<DType>> Llama2<DType>::load( const filesystem::path& model_pat
   CHECK_GT( 1 << 16, config.seq_len ) << "Attention softmax has seq_len blocks, and this cannot surpass 2^16.";
 
   CHECK_LT( ops::TPB, 1025 ) << "Threads per block cannot surpass 1024.";
-  CHECK_GT( 1 << 16, ( config.dim + ops::TPB - 1 ) / ops::TPB ) << "RMS Norm blocks cannot surpass 2^16.";
   CHECK_GT( 1 << 16, ( config.dim * config.concurrency_limit + ops::TPB - 1 ) / ops::TPB )
     << "Accum blocks cannot surpass 2^16.";
   CHECK_GT( 1 << 16, ( config.hidden_dim * config.concurrency_limit + ops::TPB - 1 ) / ops::TPB )
     << "Silu blocks cannot surpass 2^16.";
   CHECK_GT( 1 << 16, ( config.vocab_size + ops::TPB - 1 ) / ops::TPB ) << "CuRAND blocks cannot surpass 2^16.";
+  CHECK_GT( 1 << 16, ( config.dim + ops::RBS - 1 ) / ops::RBS ) << "RMS Norm blocks cannot surpass 2^16.";
+  CHECK_GT( sizeof( DType ) * config.dim, 4 * ( 2 * ( config.dim + ops::RBS - 1 ) / ops::RBS + 1 ) )
+    << "RMS Norm scratch pad does not have enough space.";
 
   const int32_t layer_count = config.n_layers_loaded();
 
@@ -177,7 +179,7 @@ void Llama2<DType>::transformer_layer( const int32_t layer_num )
   const auto& layer_weights = this->layer_weights_[layer_num];
 
   // attention rmsnorm
-  ops::rmsnorm( this->state_.xb, this->state_.x, layer_weights.rms_att_weight, dim, curr_conc_lvl );
+  ops::rmsnorm( this->state_.xb, this->state_.x, this->state_.xb2, layer_weights.rms_att_weight, dim, curr_conc_lvl );
 
   // qkv matmuls for this position
   ops::matmul( this->state_.q, this->state_.xb, layer_weights.wq, curr_conc_lvl, dim, dim );
@@ -238,7 +240,7 @@ void Llama2<DType>::transformer_layer( const int32_t layer_num )
   ops::accum( this->state_.x, this->state_.xb2, dim, curr_conc_lvl );
 
   // ffn rmsnorm
-  ops::rmsnorm( this->state_.xb, this->state_.x, layer_weights.rms_ffn_weight, dim, curr_conc_lvl );
+  ops::rmsnorm( this->state_.xb, this->state_.x, this->state_.xb2, layer_weights.rms_ffn_weight, dim, curr_conc_lvl );
 
   // now for ffn in we have: self.w2(F.silu(self.w1(x)) * self.w3(x))
   // first calculate self.w1(x) and self.w3(x)
@@ -260,6 +262,7 @@ void Llama2<DType>::pass_end()
   // final rmsnorm
   ops::rmsnorm( this->state_.x,
                 this->state_.x,
+                this->state_.xb2,
                 this->base_weights_.rms_final_weight,
                 this->config_.dim,
                 this->state_.curr_concurrency_size );
@@ -324,7 +327,7 @@ vector<InferenceState> Llama2<DType>::forward( const vector<reference_wrapper<co
 
   for ( int layer_num = this->config_.start_layer_num; layer_num <= this->config_.end_layer_num; layer_num++ ) {
     for ( size_t i = 0; i < inference_states.size(); i++ ) {
-      this->state_.batch_context_pointers[i] = contexts[i]->key(this->config_, layer_num, 0);
+      this->state_.batch_context_pointers[i] = contexts[i]->key( this->config_, layer_num, 0 );
     }
     transformer_layer( layer_num );
   }

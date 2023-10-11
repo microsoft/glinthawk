@@ -1,14 +1,15 @@
 #pragma once
 
 #include <cstdint>
-#include <source_location>
 #include <curand.h>
 #include <curand_kernel.h>
+#include <source_location>
 #include <vector>
 
 namespace glinthawk::models::common::cuda::ops {
 
 constexpr size_t TPB = 64; /* threads per block */
+constexpr size_t RBS = 32; /* reduce block size */
 
 void init( const int num_streams );
 void destroy();
@@ -21,13 +22,7 @@ template<typename DType>
 void accum( DType* a, const DType* b, const uint64_t size, const uint64_t batch_size );
 
 template<typename DType>
-void rmsnorm( DType* o, const DType* x, const DType* weight, const uint64_t size, const uint64_t batch_size );
-
-template<typename DType>
-void softmax( DType* x, const uint64_t size, const uint64_t batch_size );
-
-template<typename DType>
-void softmax( DType* x, const uint64_t size );
+void rmsnorm( DType* o, const DType* x, DType* a, const DType* weight, const uint64_t size, const uint64_t batch_size );
 
 template<typename DType>
 void matmul( DType* xout, const DType* x, const DType* w, const uint64_t b, const uint64_t s, const uint64_t r );
