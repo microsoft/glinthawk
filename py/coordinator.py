@@ -1,5 +1,6 @@
 import os
 import sys
+import enum
 import asyncio
 
 from itertools import count
@@ -7,52 +8,56 @@ from dataclasses import dataclass, field
 
 from common.message import Message
 
+
 @dataclass
 class Worker:
+    class State(enum.Enum):
+        Connected = enum.auto()
+        Disconnected = enum.auto()
+
     id: int = field(default_factory=count().__next__)
+    state: State = State.Connected
     reader: asyncio.StreamReader = None
     writer: asyncio.StreamWriter = None
+
 
 workers = []
 incoming_messages = asyncio.Queue()
 
+
 async def handle_worker(reader, writer):
     global workers
 
-    addr = writer.get_extra_info('peername')
-    print(f'New connection from {addr!r}.')
+    addr = writer.get_extra_info("peername")
+    print(f"New connection from {addr!r}.")
 
-    client = Worker(reader=reader, writer=writer)
-    workers += [client]
+    worker = Worker(reader=reader, writer=writer)
+    workers += [worker]
 
     while True:
         try:
             message_header = await reader.readexactly(5)
-        except asyncio.IncompleteReadError:
-            message_header = None
-            pass
-
-        if not message_header:
-            print(f'Connection from {addr!r} closed.')
-            break
-
-        payload_length, opcode = Message.parse_header(message_header)
-
-        try:
+            payload_length, opcode = Message.parse_header(message_header)
             message_payload = await reader.readexactly(payload_length)
-        except asyncio.IncompleteReadError:
-            print(f'Connection from {addr!r} closed.')
-            break
+            message = Message(opcode=opcode, payload=message_payload)
+            await incoming_messages.put([worker, message])
+        except:
+            worker.state = Worker.State.Disconnected
+            return
 
-        message = Message(opcode=opcode, payload=message_payload)
 
-        print(f'Received {message!r} from {addr!r}.')
-        await incoming_messages.put(message)
+async def message_processor():
+    while True:
+        worker, message = await incoming_messages.get()
+        print(f'Received "{message}" from {worker.id}.')
+
 
 async def main():
-    server = await asyncio.start_server(handle_worker, '127.0.0.1', 8888)
+    server = await asyncio.start_server(handle_worker, "127.0.0.1", 8888)
 
     async with server:
+        asyncio.create_task(message_processor())
         await server.serve_forever()
+
 
 asyncio.run(main())
