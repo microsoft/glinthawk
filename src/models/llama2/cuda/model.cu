@@ -77,14 +77,25 @@ unique_ptr<Llama2<DType>> Llama2<DType>::load( const filesystem::path& model_pat
   CHECK_GT( 1 << 16, config.seq_len ) << "Attention softmax has seq_len blocks, and this cannot surpass 2^16.";
 
   CHECK_LT( ops::TPB, 1025 ) << "Threads per block cannot surpass 1024.";
-  CHECK_GT( 1 << 16, ( config.dim * config.concurrency_limit + ops::TPB - 1 ) / ops::TPB )
+  CHECK_GT( 1 << 16, ops::div_ceil( config.dim * config.concurrency_limit, ops::TPB ) )
     << "Accum blocks cannot surpass 2^16.";
-  CHECK_GT( 1 << 16, ( config.hidden_dim * config.concurrency_limit + ops::TPB - 1 ) / ops::TPB )
+  CHECK_GT( 1 << 16, ops::div_ceil( config.hidden_dim * config.concurrency_limit, ops::TPB ) )
     << "Silu blocks cannot surpass 2^16.";
-  CHECK_GT( 1 << 16, ( config.vocab_size + ops::TPB - 1 ) / ops::TPB ) << "CuRAND blocks cannot surpass 2^16.";
-  CHECK_GT( 1 << 16, ( config.dim + ops::RBS - 1 ) / ops::RBS ) << "RMS Norm blocks cannot surpass 2^16.";
-  CHECK_GT( sizeof( DType ) * config.dim, 4 * ( 2 * ( config.dim + ops::RBS - 1 ) / ops::RBS + 1 ) )
+  CHECK_GT( 1 << 16, ops::div_ceil( config.vocab_size, ops::TPB ) ) << "CuRAND blocks cannot surpass 2^16.";
+  CHECK_GT( 1 << 16, ops::div_ceil( config.dim, ops::NRBS ) ) << "RMS Norm blocks cannot surpass 2^16.";
+  CHECK_GT( sizeof( DType ) * config.dim,
+            sizeof( float )
+              * ( ops::div_ceil( config.dim, ops::NRBS )
+                  + ops::div_ceil( ops::div_ceil( config.dim, ops::NRBS ), ops::NRBS ) + 1 ) )
     << "RMS Norm scratch pad does not have enough space.";
+  CHECK_GT( sizeof( DType ) * ( 4 * config.dim + 2 * config.hidden_dim ),
+            sizeof( uint32_t )
+                * ( ops::div_ceil( config.vocab_size, ops::AMRBS )
+                    + ops::div_ceil( ops::div_ceil( config.vocab_size, ops::AMRBS ), ops::AMRBS ) + 1 )
+              + sizeof( DType )
+                  * ( ops::div_ceil( config.vocab_size, ops::AMRBS )
+                      + ops::div_ceil( ops::div_ceil( config.vocab_size, ops::AMRBS ), ops::AMRBS ) ) )
+    << "Argmax scratch pad does not have enough space.";
 
   const int32_t layer_count = config.n_layers_loaded();
 
@@ -277,15 +288,10 @@ void Llama2<DType>::pass_end()
 }
 
 template<typename DType>
-std::vector<uint32_t> extract_batch_token( const RunState<DType>& state,
-                                           const Config& config,
-                                           const std::vector<float>& temp )
+void extract_batch_token( RunState<DType>& state, const Config& config, const std::vector<float>& temp )
 {
   ops::soft_sample( state.logits, temp, state.rng_state, config.vocab_size, temp.size() );
-  std::vector<uint32_t> next_tokens;
-  for ( size_t i = 0; i < temp.size(); i++ )
-    next_tokens.push_back( ops::argmax( state.logits + i * config.vocab_size, config.vocab_size ) );
-  return next_tokens;
+  ops::argmax( &( state.argmax_pos[0] ), state.logits, state.x, config.vocab_size, temp.size() );
 }
 
 template<typename DType>
@@ -341,12 +347,12 @@ vector<InferenceState> Llama2<DType>::forward( const vector<reference_wrapper<co
     for ( size_t i = 0; i < inference_states.size(); i++ )
       batch_temps.push_back( inference_states[i].get().temperature() );
 
-    vector<uint32_t> next_tokens = extract_batch_token( this->state_, this->config_, batch_temps );
+    extract_batch_token( this->state_, this->config_, batch_temps );
 
     for ( size_t i = 0; i < inference_states.size(); i++ )
       token_vector.emplace_back( inference_states[i].get().prompt_id(),     // prompt_id
                                  inference_states[i].get().model_id(),      // model_id
-                                 next_tokens[i],                            // token
+                                 this->state_.argmax_pos[i],                // token
                                  inference_states[i].get().token_pos() + 1, // token_pos
                                  0,                                         // next_layer
                                  inference_states[i].get().temperature(),   // temperature

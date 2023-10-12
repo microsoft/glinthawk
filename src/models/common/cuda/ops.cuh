@@ -5,11 +5,18 @@
 #include <curand_kernel.h>
 #include <source_location>
 #include <vector>
+#include <concepts>
 
 namespace glinthawk::models::common::cuda::ops {
 
 constexpr size_t TPB = 64; /* threads per block */
-constexpr size_t RBS = 32; /* reduce block size */
+constexpr size_t NRBS = 32; /* norm reduce block size */
+constexpr size_t AMRBS = 128; /* argmax reduce block size */
+
+template<std::unsigned_integral T>
+T div_ceil( const T x, const T y ) {
+  return x / y + ( x % y != 0 );
+}
 
 void init( const int num_streams );
 void destroy();
@@ -35,7 +42,7 @@ void soft_sample( DType* v,
                   const uint64_t batch_size );
 
 template<typename DType>
-std::vector<uint32_t> argmax( const DType* v, const uint64_t n, const uint64_t batch_size );
+void argmax( uint32_t* output, const DType* v, DType* temp, const uint64_t n, const uint64_t batch_size );
 
 template<typename DType>
 uint32_t argmax( const DType* v, const uint64_t n );

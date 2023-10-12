@@ -140,6 +140,9 @@ struct RunState
   DType* temp_softmax {};    // temporary buffer for computing softmax (B, n_heads)
   curandState* rng_state {}; // CURAND state (B, vocab_size)
 
+  // This memory is on CPU
+  uint32_t argmax_pos[MAX_BATCH_SIZE] {};             // argmax results (B, )
+
   // information about the current batch
   uint64_t curr_concurrency_size { 1 };
   uint32_t batch_token_positions[MAX_BATCH_SIZE] {};
