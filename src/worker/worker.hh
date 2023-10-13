@@ -37,8 +37,11 @@ private:
 private:
   EventLoop event_loop_ {};
   net::Address listen_address_;
-  net::TCPSocket listen_socket_ {};
+  net::TCPSocket listen_socket_;
   std::map<net::Address, Peer> peers_ {};
+
+  net::Address coordinator_address_;
+  Peer coordinator_;
 
   compute::ComputeKernel<Model> compute_kernel_;
   std::optional<typename Model::TokenizerType> tokenizer_;
@@ -53,7 +56,8 @@ private:
   void setup_peer( std::map<net::Address, Peer>::iterator peer_it );
 
 public:
-  Worker( const net::Address& address,
+  Worker( const net::Address& worker_address,
+          const net::Address& coordinator_address,
           std::unique_ptr<Model>&& model,
           std::optional<typename Model::TokenizerType>&& tokenizer = std::nullopt );
 

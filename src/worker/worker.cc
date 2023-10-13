@@ -63,22 +63,50 @@ void Worker<Model>::setup_peer( std::map<net::Address, Peer>::iterator peer_it )
 }
 
 template<typename Model>
-Worker<Model>::Worker( const Address& address,
+Worker<Model>::Worker( const Address& worker_address,
+                       const Address& coordinator_address,
                        std::unique_ptr<Model>&& model,
                        std::optional<typename Model::TokenizerType>&& tokenizer )
-  : listen_address_( address )
+  : listen_address_( worker_address )
+  , listen_socket_( [this]() -> TCPSocket {
+    TCPSocket socket;
+    socket.set_reuseaddr();
+    socket.bind( this->listen_address_ );
+    socket.set_blocking( false );
+    socket.listen();
+    LOG( INFO ) << "Listening on " << this->listen_address_.to_string();
+    return socket;
+  }() )
+  , coordinator_address_( coordinator_address )
+  , coordinator_( coordinator_address,
+                  [this]() -> TCPSocket {
+                    TCPSocket socket;
+                    socket.set_blocking( false );
+                    socket.connect( this->coordinator_address_ );
+                    LOG( INFO ) << "Connecting to coordinator at " << this->coordinator_address_.to_string();
+                    return socket;
+                  }() )
   , compute_kernel_( move( model ) )
   , tokenizer_( move( tokenizer ) )
 {
-  listen_socket_.set_reuseaddr();
-  listen_socket_.bind( listen_address_ );
-  listen_socket_.set_blocking( false );
-  listen_socket_.listen();
-
-  LOG( INFO ) << "Listening on " << listen_address_.to_string();
-
   // handle fd failures gracefully
   event_loop_.set_fd_failure_callback( [] { LOG( ERROR ) << "FD failure callback called."; } );
+
+  coordinator_.message_handler.install_rules(
+    this->event_loop_,
+    this->rule_categories_,
+    [this]( Message&& msg ) {
+      LOG( INFO ) << "Incoming message from coordinator: " << msg.info();
+      return true;
+    },
+    [] {
+      // TODO(sadjad): handle this gracefully
+      LOG( FATAL ) << "Connection to coordinator closed.";
+    },
+    [] {
+      // TODO(sadjad): handle this gracefully
+      LOG( FATAL ) << "Exception in coordinator message handler.";
+    } );
 
   event_loop_.add_rule(
     "Worker listen",
@@ -129,6 +157,10 @@ Worker<Model>::Worker( const Address& address,
       peer_it->second.outgoing_states.push_back( move( state ) );
     },
     [] { return true; } );
+
+  // Send "HEY" to coordinator
+  Message hey_message { Message::OpCode::Hey, this->listen_address_.to_string() };
+  coordinator_.message_handler.push_message( move( hey_message ) );
 }
 
 template<typename Model>

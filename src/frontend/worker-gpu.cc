@@ -26,7 +26,8 @@ static void signal_handler( int )
 void usage( const char* argv0 )
 {
   cout << "Usage: " << argv0 << " <model_dir_path> <tokenizer_path> <start_layer> <end_layer>"
-       << " <listen_ip> <listen_port>" << endl;
+       << " <listen_ip> <listen_port>"
+       << " <coordinator_ip> <coordinator_port>" << endl;
 }
 
 int main( int argc, char* argv[] )
@@ -35,7 +36,7 @@ int main( int argc, char* argv[] )
     abort();
   }
 
-  if ( argc != 7 ) {
+  if ( argc != 9 ) {
     usage( argv[0] );
     return EXIT_FAILURE;
   }
@@ -54,13 +55,19 @@ int main( int argc, char* argv[] )
   const int end_layer = stoi( argv[4] );
   const string listen_ip { argv[5] };
   const uint16_t listen_port = static_cast<uint16_t>( stoi( argv[6] ) );
+  const string coordinator_ip { argv[7] };
+  const uint16_t coordinator_port = static_cast<uint16_t>( stoi( argv[8] ) );
 
   using Llama2 = models::llama2::cuda::Llama2<__half>;
   auto tokenizer = make_optional<Llama2::TokenizerType>( tokenizer_path );
 
   try {
     net::Address listen_addr { listen_ip, listen_port };
-    core::Worker<Llama2> worker { listen_addr, Llama2::load( model_path, start_layer, end_layer ), move( tokenizer ) };
+    net::Address coordinator_addr { coordinator_ip, coordinator_port };
+    core::Worker<Llama2> worker {
+      listen_addr, coordinator_addr, Llama2::load( model_path, start_layer, end_layer ), move( tokenizer )
+    };
+
     worker.run();
   } catch ( const exception& e ) {
     cerr << "Error: " << e.what() << endl;
