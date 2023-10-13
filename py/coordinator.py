@@ -57,12 +57,19 @@ async def message_processor():
         print(f'Received "{message}" from {worker.id}.')
 
 
-async def main():
-    server = await asyncio.start_server(handle_worker, "127.0.0.1", 8888)
+async def main(listen_address, listen_port):
+    server = await asyncio.start_server(handle_worker, listen_address, listen_port)
 
     async with server:
         asyncio.create_task(message_processor())
         await server.serve_forever()
 
 
-asyncio.run(main())
+if __name__ == "__main__":
+    if len(sys.argv) != 3:
+        sys.exit(f"Usage: {sys.argv[0]} <listen_address> <listen_port>")
+
+    listen_address = sys.argv[1]
+    listen_port = int(sys.argv[2])
+
+    asyncio.run(main(listen_address, listen_port))
