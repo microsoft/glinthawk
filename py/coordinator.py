@@ -6,12 +6,14 @@ if sys.version_info < (3, 10):
 
 import enum
 import asyncio
+import logging
 
 from itertools import count
 from dataclasses import dataclass, field
 
 from common.message import Message
 
+logging.basicConfig(level=logging.INFO)
 
 @dataclass
 class Worker:
@@ -34,7 +36,7 @@ async def handle_worker(reader, writer):
     global workers
 
     addr = writer.get_extra_info("peername")
-    print(f"New connection from {addr!r}.")
+    logging.info(f"New connection from {addr!r}.")
 
     worker = Worker(reader=reader, writer=writer)
     workers += [worker]
@@ -54,7 +56,11 @@ async def handle_worker(reader, writer):
 async def message_processor():
     while True:
         worker, message = await incoming_messages.get()
-        print(f'Received "{message}" from {worker.id}.')
+
+        if message.opcode == Message.OpCode.Hey:
+            worker.address = message.payload.decode()
+
+        logging.info(f'Received "{message}" from {worker.id}.')
 
 
 async def main(listen_address, listen_port):
