@@ -13,6 +13,8 @@ class Message:
         Hey = 0x1
         Ping = enum.auto()
         Bye = enum.auto()
+
+        InitializeWorker = enum.auto()
         InferenceState = enum.auto()
 
     def __init__(self, opcode: Union[OpCode, int], payload: bytes):

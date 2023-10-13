@@ -18,6 +18,8 @@ public:
     Hey = 0x1,
     Ping,
     Bye,
+
+    InitializeWorker,
     InferenceState,
 
     COUNT
@@ -28,6 +30,8 @@ public:
     "Hey",
     "Ping",
     "Bye",
+
+    "InitializeWorker",
     "InferenceState",
   };
 
