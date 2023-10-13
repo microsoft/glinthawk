@@ -1,5 +1,9 @@
-import os
+#!/usr/bin/env python3
+
 import sys
+if sys.version_info < (3, 10):
+    sys.exit("Python 3.10 or newer is required to run this program.")
+
 import enum
 import asyncio
 
@@ -17,6 +21,7 @@ class Worker:
 
     id: int = field(default_factory=count().__next__)
     state: State = State.Connected
+    address: str = None
     reader: asyncio.StreamReader = None
     writer: asyncio.StreamWriter = None
 
