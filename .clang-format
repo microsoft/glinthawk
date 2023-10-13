@@ -8,4 +8,14 @@ AlwaysBreakAfterDefinitionReturnType: None
 SpaceBeforeCpp11BracedList: true
 BreakBeforeBinaryOperators: All
 AllowShortFunctionsOnASingleLine: All
+---
+Language: Proto
+BasedOnStyle: Mozilla
+ColumnLimit: 120
+SpacesInParentheses: true
+AlwaysBreakAfterReturnType: None
+AlwaysBreakAfterDefinitionReturnType: None
+SpaceBeforeCpp11BracedList: true
+BreakBeforeBinaryOperators: All
+AllowShortFunctionsOnASingleLine: All
 ...
