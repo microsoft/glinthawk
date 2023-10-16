@@ -31,6 +31,8 @@ std::string put_field( T n ) = delete;
 template<class T>
 std::string put_field( char* message, T n, size_t ) = delete;
 
+namespace protoutil {
+
 template<class ProtobufType>
 std::string to_json( const ProtobufType& protobuf, const bool pretty_print = false )
 {
@@ -56,5 +58,7 @@ void from_json( const std::string& data, ProtobufType& dest )
     throw std::runtime_error( "cannot convert json to protobuf" );
   }
 }
+
+} // namespace protoutil
 
 } // namespace glinthawk::core
