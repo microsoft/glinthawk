@@ -1,5 +1,6 @@
 #pragma once
 
+#include <filesystem>
 #include <list>
 #include <map>
 #include <memory>
@@ -38,13 +39,13 @@ private:
   EventLoop event_loop_ {};
   net::Address listen_address_;
   net::TCPSocket listen_socket_;
-  std::map<net::Address, Peer> peers_ {};
 
   net::Address coordinator_address_;
   Peer coordinator_;
 
-  compute::ComputeKernel<Model> compute_kernel_;
-  std::optional<typename Model::TokenizerType> tokenizer_;
+  std::map<net::Address, Peer> peers_ {};
+  std::unique_ptr<compute::ComputeKernel<Model>> compute_kernel_ { nullptr };
+  std::filesystem::path model_root_;
 
   core::MessageHandler<net::TCPSession>::RuleCategories rule_categories_ {
     .session = event_loop_.add_category( "Worker session" ),
@@ -54,12 +55,17 @@ private:
   };
 
   void setup_peer( std::map<net::Address, Peer>::iterator peer_it );
+  void setup_compute_kernel( const std::filesystem::path& model_root, const int start_layer, const int end_layer );
 
 public:
+  /// \brief Construct a new Worker object
+  ///
+  /// \param worker_address The address of the worker
+  /// \param coordinator_address The address of the coordinator
+  /// \param model_root The root directory of the model
   Worker( const net::Address& worker_address,
           const net::Address& coordinator_address,
-          std::unique_ptr<Model>&& model,
-          std::optional<typename Model::TokenizerType>&& tokenizer = std::nullopt );
+          const std::filesystem::path& model_root );
 
   void run();
 };
