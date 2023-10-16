@@ -7,6 +7,7 @@ if sys.version_info < (3, 10):
 
 import enum
 import json
+import socket
 import asyncio
 import logging
 import itertools
@@ -14,8 +15,16 @@ import itertools
 from dataclasses import dataclass, field
 
 from common.message import Message
+from common.inference import InferenceState
 
 logging.basicConfig(level=logging.INFO)
+
+
+@dataclass
+class ModelInfo:
+    name: str
+    n_layers: int
+    layers_per_worker: int
 
 
 @dataclass
@@ -26,12 +35,18 @@ class Worker:
 
     id: int = field(default_factory=itertools.count().__next__)
     state: State = State.Connected
-    address: str = None
+    ip: bytes = None
+    port: int = None
     reader: asyncio.StreamReader = None
     writer: asyncio.StreamWriter = None
+    model_name: str = ""
+    start_layer: int = 0
+    end_layer: int = 0
 
 
+model = ModelInfo(name="stories-110M-glint", n_layers=12, layers_per_worker=4)
 workers = []
+layer_workers = {}
 incoming_messages = asyncio.Queue()
 
 
@@ -62,24 +77,48 @@ async def send_message(worker, message):
 
 
 async def message_processor():
+    global initialized_workers
+
     while True:
         worker, message = await incoming_messages.get()
         logging.info(f'Received "{message!r}" from {worker.id}.')
 
         if message.opcode == Message.OpCode.Hey:
-            worker.address = message.payload.decode()
+            address = message.payload.decode()
+            ip, port = address.split(":")
+            worker.ip = socket.inet_aton(ip)
+            worker.port = int(port)
+            logging.info(f"Worker {worker.id} is at {ip}:{port}.")
+
+            # assinging layers to this worker
+            worker.start_layer = worker.id * model.layers_per_worker
+            worker.end_layer = (worker.id + 1) * model.layers_per_worker - 1
+
             initialization_message = {
-                "model_name": "XXX",
-                "start_layer": worker.id,
-                "end_layer": worker.id,
+                "model_name": "something",
+                "start_layer": worker.start_layer,
+                "end_layer": worker.end_layer,
             }
 
-            message = Message(
+            response = Message(
                 Message.OpCode.InitializeWorker,
                 json.dumps(initialization_message).encode(),
             )
 
-            asyncio.create_task(send_message(worker, message))
+            asyncio.create_task(send_message(worker, response))
+
+            layer_workers[worker.start_layer] = [worker.ip, worker.port]
+
+            if len(layer_workers) == model.n_layers / model.layers_per_worker:
+                # we're ready for lift-off
+                state = InferenceState(layer_workers=layer_workers)
+                message = Message(Message.OpCode.InferenceState, state.serialize())
+
+                for w in workers:
+                    if w.start_layer == 0:
+                        logging.info(f"Sending InferenceState to {w.id}.")
+                        asyncio.create_task(send_message(w, message))
+                        break
 
 
 async def main(listen_address, listen_port):
