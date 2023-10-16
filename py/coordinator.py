@@ -1,19 +1,22 @@
 #!/usr/bin/env python3
 
 import sys
+
 if sys.version_info < (3, 10):
     sys.exit("Python 3.10 or newer is required to run this program.")
 
 import enum
+import json
 import asyncio
 import logging
+import itertools
 
-from itertools import count
 from dataclasses import dataclass, field
 
 from common.message import Message
 
 logging.basicConfig(level=logging.INFO)
+
 
 @dataclass
 class Worker:
@@ -21,7 +24,7 @@ class Worker:
         Connected = enum.auto()
         Disconnected = enum.auto()
 
-    id: int = field(default_factory=count().__next__)
+    id: int = field(default_factory=itertools.count().__next__)
     state: State = State.Connected
     address: str = None
     reader: asyncio.StreamReader = None
@@ -53,14 +56,30 @@ async def handle_worker(reader, writer):
             return
 
 
+async def send_message(worker, message):
+    worker.writer.write(message.serialize())
+    await worker.writer.drain()
+
+
 async def message_processor():
     while True:
         worker, message = await incoming_messages.get()
+        logging.info(f'Received "{message!r}" from {worker.id}.')
 
         if message.opcode == Message.OpCode.Hey:
             worker.address = message.payload.decode()
+            initialization_message = {
+                "model_name": "XXX",
+                "start_layer": worker.id,
+                "end_layer": worker.id,
+            }
 
-        logging.info(f'Received "{message}" from {worker.id}.')
+            message = Message(
+                Message.OpCode.InitializeWorker,
+                json.dumps(initialization_message).encode(),
+            )
+
+            asyncio.create_task(send_message(worker, message))
 
 
 async def main(listen_address, listen_port):
