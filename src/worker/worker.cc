@@ -152,6 +152,14 @@ Worker<Model>::Worker( const Address& worker_address,
           break;
         }
 
+        case Message::OpCode::InferenceState: {
+          // got an inference state from the coordinator
+          auto state = models::InferenceState( msg.payload() );
+          LOG( INFO ) << "Inference state: " << state.to_string();
+          this->compute_kernel_->push( move( state ) );
+          break;
+        }
+
         default: {
           LOG( WARNING ) << "[Coordinator] Message not handled." << endl;
           break;
