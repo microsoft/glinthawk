@@ -1,5 +1,7 @@
 syntax = "proto3";
 
+package glinthawk.protobuf;
+
 message InitializeWorker
 {
   string model_name = 1;

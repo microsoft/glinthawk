@@ -18,6 +18,7 @@ add_subdirectory ( src/message/protobuf )
 link_libraries ( protobuf::libprotobuf )
 
 include_directories ( src )
+include_directories ( SYSTEM "${CMAKE_CURRENT_BINARY_DIR}/src/message/protobuf" )
 include_directories ( SYSTEM lib )
 
 file ( GLOB SOURCE
@@ -37,6 +38,7 @@ list ( APPEND SOURCE ${MODELS_SOURCE} )
 
 add_library ( glinthawk STATIC ${SOURCE} )
 link_libraries ( glinthawk )
+link_libraries ( glinthawk_proto )
 
 if ( CUDA_ENABLED )
   # add_executable ( profile-gpu src/frontend/profile-gpu.cc )
