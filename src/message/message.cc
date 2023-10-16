@@ -22,6 +22,10 @@ Message::Message( const string_view& header, string&& payload )
 
   payload_length_ = get_field<uint32_t>( header );
   opcode_ = static_cast<OpCode>( header[4] );
+
+  if ( static_cast<int>( opcode_ ) >= static_cast<int>( OpCode::COUNT ) ) {
+    throw out_of_range( "invalid opcode" );
+  }
 }
 
 Message::Message( const OpCode opcode, string&& payload )
@@ -29,6 +33,9 @@ Message::Message( const OpCode opcode, string&& payload )
   , opcode_( opcode )
   , payload_( move( payload ) )
 {
+  if ( static_cast<int>( opcode_ ) >= static_cast<int>( OpCode::COUNT ) ) {
+    throw out_of_range( "invalid opcode" );
+  }
 }
 
 uint32_t Message::expected_payload_length( const string_view header )
