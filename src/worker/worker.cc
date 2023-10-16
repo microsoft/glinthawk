@@ -22,7 +22,7 @@ void Worker<Model>::setup_peer( std::map<net::Address, Peer>::iterator peer_it )
     this->event_loop_,
     this->rule_categories_,
     [this]( Message&& msg ) {
-      LOG( INFO ) << "Incoming message: " << msg.info();
+      LOG( INFO ) << "[Peer] Incoming message: " << msg.info();
 
       switch ( msg.opcode() ) {
         case Message::OpCode::InferenceState: {
@@ -32,22 +32,8 @@ void Worker<Model>::setup_peer( std::map<net::Address, Peer>::iterator peer_it )
           break;
         }
 
-        case Message::OpCode::InitializeWorker: {
-          LOG( INFO ) << "Initializing worker with params=" << msg.payload();
-          protobuf::InitializeWorker request;
-          core::protoutil::from_json( msg.payload(), request );
-
-          // TODO(sadjad): eventually allow for loading multiple models
-          // const auto& model_name = request.model_name();
-
-          setup_compute_kernel( model_root_, request.start_layer(), request.end_layer() );
-
-          LOG( INFO ) << "Worker initialized.";
-          break;
-        }
-
         default: {
-          LOG( WARNING ) << "Message not handled." << endl;
+          LOG( WARNING ) << "[Peer] Message not handled." << endl;
           break;
         }
       }
@@ -149,7 +135,29 @@ Worker<Model>::Worker( const Address& worker_address,
     this->event_loop_,
     this->rule_categories_,
     [this]( Message&& msg ) {
-      LOG( INFO ) << "Incoming message from coordinator: " << msg.info();
+      LOG( INFO ) << "[Coordinator] Incoming message: " << msg.info();
+
+      switch ( msg.opcode() ) {
+        case Message::OpCode::InitializeWorker: {
+          LOG( INFO ) << "Initializing worker with params=" << msg.payload();
+          protobuf::InitializeWorker request;
+          core::protoutil::from_json( msg.payload(), request );
+
+          // TODO(sadjad): eventually allow for loading multiple models
+          // const auto& model_name = request.model_name();
+
+          setup_compute_kernel( model_root_, request.start_layer(), request.end_layer() );
+
+          LOG( INFO ) << "Worker initialized.";
+          break;
+        }
+
+        default: {
+          LOG( WARNING ) << "[Coordinator] Message not handled." << endl;
+          break;
+        }
+      }
+
       return true;
     },
     [] {
