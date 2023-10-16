@@ -231,19 +231,19 @@ template<typename DType>
 void copy_kv_cache( DType* context_pointers[],
                     const DType* state_k,
                     const DType* state_v,
-                    const uint64_t dim,
+                    const uint64_t kv_dim,
                     const uint64_t n_layers,
                     const uint64_t batch_size,
                     const uint32_t* token_positions )
 {
   for ( size_t i = 0; i < batch_size; i++ ) {
-    DType* k_cache_pos = context_pointers[i] + token_positions[i] * n_layers * dim * 2;
-    DType* v_cache_pos = k_cache_pos + dim;
+    DType* k_cache_pos = context_pointers[i] + token_positions[i] * n_layers * kv_dim * 2;
+    DType* v_cache_pos = k_cache_pos + kv_dim;
 
     ops::CHECK_CUDA(
-      cudaMemcpyAsync( k_cache_pos, state_k + i * dim, dim * sizeof( DType ), cudaMemcpyDeviceToDevice ) );
+      cudaMemcpyAsync( k_cache_pos, state_k + i * kv_dim, kv_dim * sizeof( DType ), cudaMemcpyDeviceToDevice ) );
     ops::CHECK_CUDA(
-      cudaMemcpyAsync( v_cache_pos, state_v + i * dim, dim * sizeof( DType ), cudaMemcpyDeviceToDevice ) );
+      cudaMemcpyAsync( v_cache_pos, state_v + i * kv_dim, kv_dim * sizeof( DType ), cudaMemcpyDeviceToDevice ) );
   }
 }
 
@@ -333,6 +333,7 @@ void attention_2_gemm( const DType* att,
 
   const uint64_t batchCount = n_kv_heads;
 
+  const uint64_t kv_dim_ = head_size * n_kv_heads;
   const uint64_t dim_ = head_size * n_kv_heads * gqa_size;
   const uint64_t att_dim_ = seq_len * n_kv_heads * gqa_size;
 
@@ -346,7 +347,7 @@ void attention_2_gemm( const DType* att,
                                               n,
                                               k,
                                               &alpha,
-                                              context_pointers[i] + dim_,
+                                              context_pointers[i] + kv_dim_,
                                               cuda_arg_type,
                                               lda,
                                               strideA,
@@ -640,15 +641,17 @@ __global__ void do_rope( const uint64_t head_size,
   DType* k = state_k + head_k_num * head_size;
 
   // rotate q and k by the freq_cis_real and freq_cis_imag
-  const DType q0 = q[elem_idx];
-  const DType q1 = q[elem_idx + 1];
-  const DType k0 = k[elem_idx];
-  const DType k1 = k[elem_idx + 1];
   const DType fcr = freq_cis_real_row[elem_idx / 2];
   const DType fci = freq_cis_imag_row[elem_idx / 2];
+
+  const DType k0 = k[elem_idx];
+  const DType k1 = k[elem_idx + 1];
   k[elem_idx] = k0 * fcr - k1 * fci;
   k[elem_idx + 1] = k0 * fci + k1 * fcr;
+
   for ( uint64_t i = 0; i < gqa_size; i++ ) {
+    const DType q0 = q[i * head_size + elem_idx];
+    const DType q1 = q[i * head_size + elem_idx + 1];
     q[i * head_size + elem_idx] = q0 * fcr - q1 * fci;
     q[i * head_size + elem_idx + 1] = q0 * fci + q1 * fcr;
   }

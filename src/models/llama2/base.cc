@@ -193,7 +193,7 @@ LayerWeights<DType>::LayerWeights( const Config& config, const DType* model )
 template<typename DType>
 size_t LayerWeights<DType>::layer_size( const Config& config )
 {
-  return sizeof( DType ) * ( 2 * config.dim + 4 * config.dim * config.dim + 3 * config.dim * config.hidden_dim );
+  return sizeof( DType ) * ( 2 * config.dim + 2 * config.dim * config.dim + 2 * config.dim * config.kv_dim + 3 * config.dim * config.hidden_dim );
 }
 
 /* RUN STATE */

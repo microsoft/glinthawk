@@ -68,8 +68,6 @@ def export(p: Dict[str, int], state_dict_map: Dict[str, List[Path,]], dest_dir: 
     with open(os.path.join(dest_dir, "CONFIG"), "wb") as fout:
         fout.write(header)
 
-    exit(0)
-
     # next write out the embedding weights
     print("writing BASEWEIGHTS")
 
@@ -106,7 +104,7 @@ def load_tensor(key: str, path_list: List[Path]) -> torch.Tensor:
         with open(piece_path, "rb") as f:
             tensors.append(pickle.load(f))
         os.remove(piece_path)
-    if len(tensors) == 1:
+    if len(tensors) == 1 or len(tensors[0].shape) == 1:
         ret_tensor = tensors[0]
     else:
         is_axis_1 = (
