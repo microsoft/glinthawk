@@ -85,16 +85,16 @@ unique_ptr<Llama2<DType>> Llama2<DType>::load( const filesystem::path& model_pat
   CHECK_GT( 1 << 16, ops::div_ceil( config.dim, ops::NRBS ) ) << "RMS Norm blocks cannot surpass 2^16.";
   CHECK_GT( sizeof( DType ) * config.dim,
             sizeof( float )
-              * ( ops::div_ceil( config.dim, ops::NRBS )
-                  + ops::div_ceil( ops::div_ceil( config.dim, ops::NRBS ), ops::NRBS ) + 1 ) )
+              * ( ops::div_ceil( config.dim, 2 * ops::NRBS )
+                  + ops::div_ceil( ops::div_ceil( config.dim, 2 * ops::NRBS ), 2 * ops::NRBS ) + 1 ) )
     << "RMS Norm scratch pad does not have enough space.";
   CHECK_GT( sizeof( DType ) * ( 4 * config.dim + 2 * config.hidden_dim ),
             sizeof( uint32_t )
-                * ( ops::div_ceil( config.vocab_size, ops::AMRBS )
-                    + ops::div_ceil( ops::div_ceil( config.vocab_size, ops::AMRBS ), ops::AMRBS ) + 1 )
+                * ( ops::div_ceil( config.vocab_size, 2 * ops::AMRBS )
+                    + ops::div_ceil( ops::div_ceil( config.vocab_size, 2 * ops::AMRBS ), 2 * ops::AMRBS ) + 1 )
               + sizeof( DType )
-                  * ( ops::div_ceil( config.vocab_size, ops::AMRBS )
-                      + ops::div_ceil( ops::div_ceil( config.vocab_size, ops::AMRBS ), ops::AMRBS ) ) )
+                  * ( ops::div_ceil( config.vocab_size, 2 * ops::AMRBS )
+                      + ops::div_ceil( ops::div_ceil( config.vocab_size, 2 * ops::AMRBS ), 2 * ops::AMRBS ) ) )
     << "Argmax scratch pad does not have enough space.";
 
   const int32_t layer_count = config.n_layers_loaded();
