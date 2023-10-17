@@ -2,6 +2,7 @@
 
 #include <cmath>
 #include <cstdlib>
+#include <cstring>
 #include <vector>
 
 using namespace std;
@@ -11,8 +12,9 @@ namespace glinthawk::models::common::cpu::ops {
 template<typename DType>
 void accum( DType* a, const DType* b, const uint64_t size, const uint64_t batch_size )
 {
-#pragma omp parallel for private( b )
-  for ( size_t b_idx = 0; b_idx < batch_size; b_idx++ ) {
+  size_t b_idx;
+#pragma omp parallel for private( b_idx )
+  for ( b_idx = 0; b_idx < batch_size; b_idx++ ) {
     for ( uint64_t i = 0; i < size; i++ ) {
       a[b_idx * size + i] += b[b_idx * size + i];
     }
@@ -27,7 +29,7 @@ void rmsnorm( DType* output, const DType* x, const DType* weight, const uint64_t
   for ( b = 0; b < batch_size; b++ ) {
     const DType* X = x + b * size;
     const DType* W = weight + b * size;
-    const DType* O = output + b * size;
+    DType* O = output + b * size;
 
     // calculate sum of squares
     DType ss = 0.0f;
@@ -369,5 +371,143 @@ void argmax( uint32_t* output, const DType* v, const uint64_t n, const uint64_t 
     output[b] = max_i;
   }
 }
+
+template void accum<_Float16>( _Float16* a, const _Float16* b, const uint64_t size, const uint64_t batch_size );
+template void argmax<_Float16>( uint32_t* output, const _Float16* v, const uint64_t n, const uint64_t batch_size );
+template void silu<_Float16>( _Float16* hb, _Float16* hb2, const uint64_t hidden_dim, const uint64_t batch_size );
+
+template void rmsnorm<_Float16>( _Float16* o,
+                                 const _Float16* x,
+                                 const _Float16* weight,
+                                 const uint64_t size,
+                                 const uint64_t batch_size );
+
+template void matmul<_Float16>( _Float16* xout,
+                                const _Float16* x,
+                                const _Float16* w,
+                                const uint64_t b,
+                                const uint64_t s,
+                                const uint64_t r );
+
+template void soft_sample<_Float16>( _Float16* v,
+                                     const std::vector<float>& temp_s,
+                                     const uint64_t vocab_size,
+                                     const uint64_t batch_size );
+
+template void attention_0_gemm<_Float16>( const _Float16* query,
+                                          const _Float16* const context_pointers[],
+                                          _Float16* att,
+                                          const uint64_t n_layers,
+                                          const uint64_t seq_len,
+                                          const uint64_t head_size,
+                                          const uint64_t n_kv_heads,
+                                          const uint64_t gqa_size,
+                                          const uint64_t batch_size,
+                                          const uint32_t* token_positions );
+
+template void attention_2_gemm<_Float16>( const _Float16* att,
+                                          const _Float16* const context_pointers[],
+                                          _Float16* xb,
+                                          const uint64_t n_layers,
+                                          const uint64_t seq_len,
+                                          const uint64_t head_size,
+                                          const uint64_t n_kv_heads,
+                                          const uint64_t gqa_size,
+                                          const uint64_t batch_size,
+                                          const uint32_t* token_positions );
+
+template void attention_softmax<_Float16>( _Float16* att,
+                                           const uint32_t* token_positions,
+                                           const uint64_t seq_len,
+                                           const uint64_t n_heads,
+                                           _Float16* temp_buffer,
+                                           const uint64_t batch_size );
+
+template void apply_rope<_Float16>( const uint64_t head_size,
+                                    const uint64_t n_kv_heads,
+                                    const uint64_t gqa_size,
+                                    const uint64_t curr_batch_size,
+                                    const uint32_t* token_positions,
+                                    const _Float16* freq_cis_real,
+                                    const _Float16* freq_cis_imag,
+                                    _Float16* state_q,
+                                    _Float16* state_k );
+
+template void copy_kv_cache<_Float16>( _Float16* context_pointers[],
+                                       const _Float16* state_k,
+                                       const _Float16* state_v,
+                                       const uint64_t dim,
+                                       const uint64_t n_layers,
+                                       const uint64_t batch_size,
+                                       const uint32_t* token_positions );
+
+template void accum<float>( float* a, const float* b, const uint64_t size, const uint64_t batch_size );
+template void argmax<float>( uint32_t* output, const float* v, const uint64_t n, const uint64_t batch_size );
+template void silu<float>( float* hb, float* hb2, const uint64_t hidden_dim, const uint64_t batch_size );
+
+template void rmsnorm<float>( float* o,
+                              const float* x,
+                              const float* weight,
+                              const uint64_t size,
+                              const uint64_t batch_size );
+
+template void matmul<float>( float* xout,
+                             const float* x,
+                             const float* w,
+                             const uint64_t b,
+                             const uint64_t s,
+                             const uint64_t r );
+
+template void soft_sample<float>( float* v,
+                                  const std::vector<float>& temp_s,
+                                  const uint64_t vocab_size,
+                                  const uint64_t batch_size );
+
+template void attention_0_gemm<float>( const float* query,
+                                       const float* const context_pointers[],
+                                       float* att,
+                                       const uint64_t n_layers,
+                                       const uint64_t seq_len,
+                                       const uint64_t head_size,
+                                       const uint64_t n_kv_heads,
+                                       const uint64_t gqa_size,
+                                       const uint64_t batch_size,
+                                       const uint32_t* token_positions );
+
+template void attention_2_gemm<float>( const float* att,
+                                       const float* const context_pointers[],
+                                       float* xb,
+                                       const uint64_t n_layers,
+                                       const uint64_t seq_len,
+                                       const uint64_t head_size,
+                                       const uint64_t n_kv_heads,
+                                       const uint64_t gqa_size,
+                                       const uint64_t batch_size,
+                                       const uint32_t* token_positions );
+
+template void attention_softmax<float>( float* att,
+                                        const uint32_t* token_positions,
+                                        const uint64_t seq_len,
+                                        const uint64_t n_heads,
+                                        float* temp_buffer,
+                                        const uint64_t batch_size );
+
+template void apply_rope<float>( const uint64_t head_size,
+                                 const uint64_t n_kv_heads,
+                                 const uint64_t gqa_size,
+                                 const uint64_t curr_batch_size,
+                                 const uint32_t* token_positions,
+                                 const float* freq_cis_real,
+                                 const float* freq_cis_imag,
+                                 float* state_q,
+                                 float* state_k );
+
+template void copy_kv_cache<float>( float* context_pointers[],
+                                    const float* state_k,
+                                    const float* state_v,
+                                    const uint64_t dim,
+                                    const uint64_t n_layers,
+                                    const uint64_t batch_size,
+                                    const uint32_t* token_positions );
 
 } // namespace glinthawk::models::common::cpu

@@ -17,7 +17,7 @@ template<typename DType>
 void accum( DType* a, const DType* b, const uint64_t size, const uint64_t batch_size );
 
 template<typename DType>
-void rmsnorm( DType* o, const DType* x, DType* a, const DType* weight, const uint64_t size, const uint64_t batch_size );
+void rmsnorm( DType* o, const DType* x, const DType* weight, const uint64_t size, const uint64_t batch_size );
 
 template<typename DType>
 void matmul( DType* xout, const DType* x, const DType* w, const uint64_t b, const uint64_t s, const uint64_t r );
