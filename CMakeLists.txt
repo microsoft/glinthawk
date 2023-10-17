@@ -40,6 +40,8 @@ add_library ( glinthawk STATIC ${SOURCE} )
 link_libraries ( glinthawk )
 link_libraries ( glinthawk_proto )
 
+add_executable ( infer-cpu-layered src/frontend/infer-cpu-layered.cc )
+
 if ( CUDA_ENABLED )
   # add_executable ( profile-gpu src/frontend/profile-gpu.cc )
   add_executable ( infer-gpu src/frontend/infer-gpu.cc )
