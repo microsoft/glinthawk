@@ -58,7 +58,7 @@ unique_ptr<Llama2<DType>> Llama2<DType>::load( const filesystem::path& model_pat
                                                const int32_t end_layer,
                                                const uint64_t concurrency_limit )
 {
-  const string filename_suffix = "_" + dtype_str<DType>();
+  const string filename_suffix = "_"s + dtype_str<DType>();
   const auto config_path = model_path / "CONFIG";
   const auto base_path = model_path / ( "BASEWEIGHTS" + filename_suffix );
 
@@ -241,8 +241,8 @@ void Llama2<DType>::pass_end()
 template<typename DType>
 void extract_batch_token( RunState<DType>& state, const Config& config, const std::vector<float>& temp )
 {
-  ops::soft_sample( state.logits, temp, state.rng_state, config.vocab_size, temp.size() );
-  ops::argmax( &( state.argmax_pos[0] ), state.logits, state.x, config.vocab_size, temp.size() );
+  ops::soft_sample( state.logits, temp, config.vocab_size, temp.size() );
+  ops::argmax( &( state.argmax_pos[0] ), state.logits, config.vocab_size, temp.size() );
 }
 
 template<typename DType>

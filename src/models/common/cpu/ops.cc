@@ -1,74 +1,216 @@
 #include "ops.hh"
 
 #include <cmath>
+#include <cstdlib>
+#include <vector>
 
-#if defined( __AVX__ )
-#include <immintrin.h>
-#endif
+using namespace std;
 
-#if defined( __SSE3__ )
-#include <pmmintrin.h>
-#endif
+namespace glinthawk::models::common::cpu::ops {
 
-namespace glinthawk::models::common::cpu {
-
-void accum( float* a, const float* b, const uint64_t size )
+template<typename DType>
+void accum( DType* a, const DType* b, const uint64_t size, const uint64_t batch_size )
 {
-#if defined( __SSE3__ )
-  for ( uint64_t i = 0; i < size; i += 4 ) {
-    __m128 avec = _mm_load_ps( &a[i] );
-    __m128 bvec = _mm_load_ps( &b[i] );
-    avec = _mm_add_ps( avec, bvec );
-    _mm_store_ps( &a[i], avec );
+#pragma omp parallel for private( b )
+  for ( size_t b_idx = 0; b_idx < batch_size; b_idx++ ) {
+    for ( uint64_t i = 0; i < size; i++ ) {
+      a[b_idx * size + i] += b[b_idx * size + i];
+    }
   }
-#else
-  for ( uint64_t i = 0; i < size; i++ ) {
-    a[i] += b[i];
-  }
-#endif
 }
 
-void rmsnorm( float* output, const float* x, const float* weight, const uint64_t size )
+template<typename DType>
+void rmsnorm( DType* output, const DType* x, const DType* weight, const uint64_t size, const uint64_t batch_size )
 {
-#if defined( __SSE3__ )
-  __m128 ss = _mm_setzero_ps();
-  const __m128 epsilon = _mm_set1_ps( 1e-5f );
-  for ( uint64_t j = 0; j < size; j += 4 ) {
-    __m128 xvec = _mm_load_ps( &x[j] );
-    ss = _mm_add_ps( ss, _mm_mul_ps( xvec, xvec ) );
-  }
-  ss = _mm_hadd_ps( ss, ss );
-  ss = _mm_hadd_ps( ss, ss );
+  size_t b;
+#pragma omp parallel for private( b )
+  for ( b = 0; b < batch_size; b++ ) {
+    const DType* X = x + b * size;
+    const DType* W = weight + b * size;
+    const DType* O = output + b * size;
 
-  ss = _mm_div_ps( ss, _mm_set1_ps( static_cast<float>( size ) ) );
-  ss = _mm_add_ps( ss, epsilon );
-  ss = _mm_rsqrt_ps( ss ); // reciprocal of square root
+    // calculate sum of squares
+    DType ss = 0.0f;
+    for ( uint64_t j = 0; j < size; j++ ) {
+      ss += X[j] * X[j];
+    }
 
-  for ( uint64_t j = 0; j < size; j += 4 ) {
-    __m128 xvec = _mm_load_ps( &x[j] );
-    __m128 wvec = _mm_load_ps( &weight[j] );
-    __m128 res = _mm_mul_ps( wvec, _mm_mul_ps( ss, xvec ) );
-    _mm_store_ps( &output[j], res );
-  }
-#else
-  // calculate sum of squares
-  float ss = 0.0f;
-  for ( uint64_t j = 0; j < size; j++ ) {
-    ss += x[j] * x[j];
-  }
+    ss /= size;
+    ss += 1e-5f;
+    ss = 1.0f / sqrtf( ss );
 
-  ss /= size;
-  ss += 1e-5f;
-  ss = 1.0f / sqrtf( ss );
-
-  // normalize and scale
-  for ( uint64_t j = 0; j < size; j++ ) {
-    output[j] = weight[j] * ( ss * x[j] );
+    // normalize and scale
+    for ( uint64_t j = 0; j < size; j++ ) {
+      O[j] = W[j] * ( ss * X[j] );
+    }
   }
-#endif
 }
 
-void softmax( float* x, const uint64_t size )
+template<typename DType>
+void matmul( DType* xout, const DType* x, const DType* w, const uint64_t b, const uint64_t s, const uint64_t r )
+{
+  // x(b,s) @ W(s,r) -> xout(b,r)
+
+  size_t i;
+#pragma omp parallel for private( i )
+  for ( i = 0; i < b; ++i ) {
+    size_t j;
+#pragma omp parallel for private( j )
+    for ( j = 0; j < r; ++j ) {
+      DType sum = 0;
+      for ( uint64_t k = 0; k < s; ++k ) {
+        sum += x[i * s + k] * w[k * r + j];
+      }
+      xout[i * r + j] = sum;
+    }
+  }
+}
+
+template<typename DType>
+void silu( DType* hb, DType* hb2, const uint64_t hidden_dim, const uint64_t batch_size )
+{
+  size_t b;
+#pragma omp parallel for private( b )
+  for ( b = 0; b < batch_size; b++ ) {
+    size_t i;
+#pragma omp parallel for private( i )
+    for ( i = 0; i < hidden_dim; i++ ) {
+      hb[b * hidden_dim + i] = hb2[b * hidden_dim + i] * ( 1.0f / ( 1.0f + expf( -hb2[b * hidden_dim + i] ) ) );
+    }
+  }
+}
+
+template<typename DType>
+void simple_gemm_strided_batch( int m,
+                                int n,
+                                int k,
+                                float alpha,
+                                const DType* A,
+                                int lda,
+                                uint64_t strideA,
+                                const DType* B,
+                                int ldb,
+                                uint64_t strideB,
+                                float beta,
+                                DType* C,
+                                int ldc,
+                                uint64_t strideC,
+                                uint64_t batch_count )
+{
+  for ( uint64_t batch = 0; batch < batch_count; batch++ ) {
+    for ( int row = 0; row < m; row++ ) {
+      for ( int col = 0; col < n; col++ ) {
+        DType sum = 0.0;
+        for ( int i = 0; i < k; i++ ) {
+          sum += A[batch * strideA + row * lda + i] * B[batch * strideB + i * ldb + col];
+        }
+        C[batch * strideC + row * ldc + col] = alpha * sum + beta * C[batch * strideC + row * ldc + col];
+      }
+    }
+  }
+}
+
+template<typename DType>
+void attention_0_gemm( const DType* query,
+                       const DType* const context_pointers[],
+                       DType* att,
+                       const uint64_t n_layers,
+                       const uint64_t seq_len,
+                       const uint64_t head_size,
+                       const uint64_t n_kv_heads,
+                       const uint64_t gqa_size,
+                       const uint64_t batch_size,
+                       const uint32_t* token_positions )
+{
+  const float scale = 1.0f / sqrtf( head_size );
+
+  const uint64_t k = head_size;
+  const uint64_t n = gqa_size;
+
+  const uint64_t lda = n_layers * n_kv_heads * head_size * 2;
+  const uint64_t ldb = k;
+  const uint64_t ldc = seq_len;
+
+  const uint64_t strideA = head_size;
+  const uint64_t strideB = head_size * gqa_size;
+  const uint64_t strideC = seq_len * gqa_size;
+
+  const uint64_t batchCount = n_kv_heads;
+
+  const uint64_t dim_ = head_size * n_kv_heads * gqa_size;
+  const uint64_t att_dim_ = seq_len * n_kv_heads * gqa_size;
+
+  for ( size_t i = 0; i < batch_size; i++ ) {
+    const uint64_t m = token_positions[i] + 1;
+    simple_gemm_strided_batch( m,
+                               n,
+                               k,
+                               scale,
+                               context_pointers[i],
+                               lda,
+                               strideA,
+                               query + i * dim_,
+                               ldb,
+                               strideB,
+                               0.0f,
+                               att + i * att_dim_,
+                               ldc,
+                               strideC,
+                               batchCount );
+  }
+}
+
+template<typename DType>
+void attention_2_gemm( const DType* att,
+                       const DType* const context_pointers[],
+                       DType* xb,
+                       const uint64_t n_layers,
+                       const uint64_t seq_len,
+                       const uint64_t head_size,
+                       const uint64_t n_kv_heads,
+                       const uint64_t gqa_size,
+                       const uint64_t batch_size,
+                       const uint32_t* token_positions )
+{
+  const uint64_t m = head_size;
+  const uint64_t n = gqa_size;
+
+  const uint64_t lda = n_layers * n_kv_heads * head_size * 2;
+  const uint64_t ldb = seq_len;
+  const uint64_t ldc = m;
+
+  const uint64_t strideA = head_size;
+  const uint64_t strideB = seq_len * gqa_size;
+  const uint64_t strideC = head_size * gqa_size;
+
+  const uint64_t batchCount = n_kv_heads;
+
+  const uint64_t dim_ = head_size * n_kv_heads * gqa_size;
+  const uint64_t att_dim_ = seq_len * n_kv_heads * gqa_size;
+
+  for ( size_t i = 0; i < batch_size; i++ ) {
+    const uint64_t k = token_positions[i] + 1;
+
+    simple_gemm_strided_batch( m,
+                               n,
+                               k,
+                               1,
+                               context_pointers[i] + dim_,
+                               lda,
+                               strideA,
+                               att + i * att_dim_,
+                               ldb,
+                               strideB,
+                               0,
+                               xb + i * dim_,
+                               ldc,
+                               strideC,
+                               batchCount );
+  }
+}
+
+template<typename DType>
+void softmax( DType* x, const uint64_t size )
 {
   // find max value (for numerical stability)
   float max_val = x[0];
@@ -91,80 +233,141 @@ void softmax( float* x, const uint64_t size )
   }
 }
 
-// W(d,n) @ x(n,) -> xout(d,)
-void matmul( float* xout, const float* x, const float* w, const uint64_t n, const uint64_t d )
+template<typename DType>
+void attention_softmax( DType* att,
+                        const uint32_t* token_positions,
+                        const uint64_t seq_len,
+                        const uint64_t n_heads,
+                        [[maybe_unused]] DType* temp_buffer,
+                        const uint64_t batch_size )
 {
-  uint64_t i;
-#pragma omp parallel for private( i )
-#if 0 & defined( __AVX__ )
-  for ( i = 0; i < d; i++ ) {
-    __m256 val = _mm256_setzero_ps();
-    for ( uint64_t j = 0; j < n; j += 8 ) {
-      __m256 xvec = _mm256_load_ps( x + j );
-      __m256 wvec = _mm256_load_ps( w + i * n + j );
-      val = _mm256_add_ps( val, _mm256_mul_ps( xvec, wvec ) );
-    }
-    __m128 val_low = _mm256_castps256_ps128( val );
-    __m128 val_high = _mm256_extractf128_ps( val, 1 );
-    val_low = _mm_add_ps( val_low, val_high );
-
-    val_low = _mm_hadd_ps( val_low, val_low );
-    val_low = _mm_hadd_ps( val_low, val_low );
-    _mm_store_ss( &xout[i], val_low );
+  for ( uint64_t i = 0; i < batch_size; i++ ) {
+    DType* this_att = att + i * n_heads * seq_len;
+    softmax( this_att, token_positions[i] + 1 );
   }
-#elif defined( __SSE3__ )
-  for ( i = 0; i < d; i++ ) {
-    __m128 val = _mm_setzero_ps();
-    for ( uint64_t j = 0; j < n; j += 4 ) {
-      __m128 xvec = _mm_load_ps( x + j );
-      __m128 wvec = _mm_load_ps( w + i * n + j );
-      val = _mm_add_ps( val, _mm_mul_ps( xvec, wvec ) );
-    }
-    val = _mm_hadd_ps( val, val );
-    val = _mm_hadd_ps( val, val );
-    _mm_store_ss( &xout[i], val );
-  }
-#else
-  for ( i = 0; i < d; i++ ) {
-    float val = 0.0f;
-    for ( uint64_t j = 0; j < n; j++ ) {
-      val += w[i * n + j] * x[j];
-    }
-    xout[i] = val;
-  }
-#endif
 }
 
-uint32_t sample( const float* probabilities, const uint64_t n )
+template<typename DType>
+void do_rope( const uint64_t head_size,
+              const uint64_t gqa_size,
+              const DType* freq_cis_real_row,
+              const DType* freq_cis_imag_row,
+              DType* state_q,
+              DType* state_k,
+              const uint64_t head_q_num,
+              const uint64_t head_k_num,
+              const uint64_t elem_idx )
 {
-  // sample index from probabilities, they must sum to 1
-  float r = static_cast<float>( rand() ) / RAND_MAX;
-  float cdf = 0.0f;
+  // apply RoPE rotation to the q and k vectors for each head
+  // get the q and k vectors for this head
+  DType* q = state_q + head_q_num * head_size;
+  DType* k = state_k + head_k_num * head_size;
 
-  for ( uint64_t i = 0; i < n; i++ ) {
-    cdf += probabilities[i];
-    if ( r < cdf ) {
-      return i;
-    }
+  // rotate q and k by the freq_cis_real and freq_cis_imag
+  const DType q0 = q[elem_idx];
+  const DType q1 = q[elem_idx + 1];
+  const DType k0 = k[elem_idx];
+  const DType k1 = k[elem_idx + 1];
+  const DType fcr = freq_cis_real_row[elem_idx / 2];
+  const DType fci = freq_cis_imag_row[elem_idx / 2];
+  k[elem_idx] = k0 * fcr - k1 * fci;
+  k[elem_idx + 1] = k0 * fci + k1 * fcr;
+  for ( uint64_t i = 0; i < gqa_size; i++ ) {
+    q[i * head_size + elem_idx] = q0 * fcr - q1 * fci;
+    q[i * head_size + elem_idx + 1] = q0 * fci + q1 * fcr;
   }
-
-  return n - 1; // in case of rounding errors
 }
 
-uint32_t argmax( const float* v, const uint64_t n )
+template<typename DType>
+void apply_rope( const uint64_t head_size,
+                 const uint64_t n_kv_heads,
+                 const uint64_t gqa_size,
+                 const uint64_t batch_size,
+                 const uint32_t* token_positions,
+                 const DType* freq_cis_real,
+                 const DType* freq_cis_imag,
+                 DType* state_q,
+                 DType* state_k )
 {
-  // return argmax of v in elements 0..n
-  uint64_t max_i = 0;
-  float max_p = v[0];
+  for ( uint64_t i = 0; i < batch_size; i++ ) {
+    for ( uint64_t j = 0; j < n_kv_heads; j++ ) {
+      for ( uint64_t k = 0; k < head_size / 2; k++ ) {
+        const uint64_t head_q_num = gqa_size * j;
+        const uint64_t head_k_num = j;
+        const uint64_t elem_idx = 2 * k;
 
-  for ( uint64_t i = 1; i < n; i++ ) {
-    if ( v[i] > max_p ) {
-      max_i = i;
-      max_p = v[i];
+        do_rope( head_size,
+                 gqa_size,
+                 freq_cis_real + token_positions[i] * head_size / 2,
+                 freq_cis_imag + token_positions[i] * head_size / 2,
+                 state_q + i * n_kv_heads * gqa_size * head_size,
+                 state_k + i * n_kv_heads * head_size,
+                 head_q_num,
+                 head_k_num,
+                 elem_idx );
+      }
     }
   }
+}
 
-  return max_i;
+template<typename DType>
+void copy_kv_cache( DType* context_pointers[],
+                    const DType* state_k,
+                    const DType* state_v,
+                    const uint64_t dim,
+                    const uint64_t n_layers,
+                    const uint64_t batch_size,
+                    const uint32_t* token_positions )
+{
+  for ( size_t i = 0; i < batch_size; i++ ) {
+    DType* k_cache_pos = context_pointers[i] + token_positions[i] * n_layers * dim * 2;
+    DType* v_cache_pos = k_cache_pos + dim;
+
+    memcpy( k_cache_pos, state_k + i * dim, dim * sizeof( DType ) );
+    memcpy( v_cache_pos, state_v + i * dim, dim * sizeof( DType ) );
+  }
+}
+
+template<typename DType>
+void gumbel_fix( DType* array, float temp, const uint64_t vocab_size )
+{
+  for ( uint64_t i = 0; i < vocab_size; i++ ) {
+    float myrandf = static_cast<float>( rand() ) / RAND_MAX;
+    myrandf = logf( -logf( myrandf ) );
+    array[i] = array[i] / temp - myrandf;
+  }
+}
+
+template<typename DType>
+void soft_sample( DType* v, const vector<float>& temp_s, const uint64_t vocab_size, const uint64_t batch_size )
+{
+  for ( uint64_t i = 0; i < batch_size; i++ ) {
+    if ( temp_s[i] > 0 ) {
+      gumbel_fix( v + i * vocab_size, temp_s[i], vocab_size );
+    }
+  }
+}
+
+template<typename DType>
+void argmax( uint32_t* output, const DType* v, const uint64_t n, const uint64_t batch_size )
+{
+  uint64_t b;
+#pragma omp parallel for private( b )
+  for ( b = 0; b < batch_size; b++ ) {
+    const DType* this_v = v + b * n;
+
+    uint64_t max_i = 0;
+    float max_p = this_v[0];
+
+    for ( uint64_t i = 1; i < n; i++ ) {
+      if ( this_v[i] > max_p ) {
+        max_i = i;
+        max_p = this_v[i];
+      }
+    }
+
+    output[b] = max_i;
+  }
 }
 
 } // namespace glinthawk::models::common::cpu
