@@ -141,7 +141,7 @@ void Llama2<DType>::transformer_layer( const int32_t layer_num )
   const auto& layer_weights = this->layer_weights_[layer_num];
 
   // attention rmsnorm
-  ops::rmsnorm( this->state_.xb, this->state_.x, this->state_.xb2, layer_weights.rms_att_weight, dim, curr_conc_lvl );
+  ops::rmsnorm( this->state_.xb, this->state_.x, layer_weights.rms_att_weight, dim, curr_conc_lvl );
 
   // qkv matmuls for this position
   ops::matmul( this->state_.q, this->state_.xb, layer_weights.wq, curr_conc_lvl, dim, dim );
@@ -202,7 +202,7 @@ void Llama2<DType>::transformer_layer( const int32_t layer_num )
   ops::accum( this->state_.x, this->state_.xb2, dim, curr_conc_lvl );
 
   // ffn rmsnorm
-  ops::rmsnorm( this->state_.xb, this->state_.x, this->state_.xb2, layer_weights.rms_ffn_weight, dim, curr_conc_lvl );
+  ops::rmsnorm( this->state_.xb, this->state_.x, layer_weights.rms_ffn_weight, dim, curr_conc_lvl );
 
   // now for ffn in we have: self.w2(F.silu(self.w1(x)) * self.w3(x))
   // first calculate self.w1(x) and self.w3(x)
@@ -224,7 +224,6 @@ void Llama2<DType>::pass_end()
   // final rmsnorm
   ops::rmsnorm( this->state_.x,
                 this->state_.x,
-                this->state_.xb2,
                 this->base_weights_.rms_final_weight,
                 this->config_.dim,
                 this->state_.curr_concurrency_size );
