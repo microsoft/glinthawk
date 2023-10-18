@@ -2,7 +2,9 @@
 
 #include <models/common/cuda/ops.cuh>
 
+#include <iostream>
 #include <thrust/device_vector.h>
+#include <thrust/equal.h>
 #include <thrust/host_vector.h>
 #include <vector>
 
@@ -36,6 +38,24 @@ TYPED_TEST( OperationsCUDA, AccumBasic )
   for ( uint64_t i = 0; i < size * batch_size; ++i ) {
     ASSERT_EQ( result[i], static_cast<TypeParam>( 1.0f ) );
   }
+}
+
+TYPED_TEST( OperationsCUDA, MatMulBasic )
+{
+  const uint64_t a = 4;
+  const uint64_t b = 3;
+  const uint64_t c = 2;
+
+  thrust::device_vector<TypeParam> A { 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12 };
+  thrust::device_vector<TypeParam> B { 1, 2, 3, 4, 5, 6 };
+  thrust::device_vector<TypeParam> C( a * c, static_cast<TypeParam>( 0.0f ) );
+
+  ops::matmul( C.data().get(), A.data().get(), B.data().get(), a, b, c );
+
+  thrust::host_vector<TypeParam> result { C };
+  thrust::host_vector<TypeParam> expected { 14, 32, 32, 77, 50, 122, 68, 167 };
+
+  EXPECT_TRUE( thrust::equal( result.begin(), result.end(), expected.begin() ) );
 }
 
 int main( int argc, char* argv[] )
