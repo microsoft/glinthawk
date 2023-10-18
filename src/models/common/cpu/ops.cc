@@ -9,6 +9,7 @@ using namespace std;
 
 namespace glinthawk::models::common::cpu::ops {
 
+/// @brief Accumulate the values in b into a (a += b)
 template<typename DType>
 void accum( DType* a, const DType* b, const uint64_t size, const uint64_t batch_size )
 {
@@ -86,6 +87,8 @@ template<typename DType>
 void simple_gemm_strided_batch( int m,
                                 int n,
                                 int k,
+                                bool transpose_a,
+                                bool transpose_b,
                                 float alpha,
                                 const DType* A,
                                 int lda,
@@ -100,13 +103,21 @@ void simple_gemm_strided_batch( int m,
                                 uint64_t batch_count )
 {
   for ( uint64_t batch = 0; batch < batch_count; batch++ ) {
+    const DType* current_A = A + batch * strideA;
+    const DType* current_B = B + batch * strideB;
+    DType* current_C = C + batch * strideC;
+
     for ( int row = 0; row < m; row++ ) {
       for ( int col = 0; col < n; col++ ) {
         DType sum = 0.0;
-        for ( int i = 0; i < k; i++ ) {
-          sum += A[batch * strideA + row * lda + i] * B[batch * strideB + i * ldb + col];
+
+        for ( int p = 0; p < k; ++p ) {
+          const DType a_value = ( not transpose_a ) ? current_A[row * lda + p] : current_A[p * lda + row];
+          const DType b_value = ( not transpose_b ) ? current_B[p * ldb + col] : current_B[col * ldb + p];
+          sum += a_value * b_value;
         }
-        C[batch * strideC + row * ldc + col] = alpha * sum + beta * C[batch * strideC + row * ldc + col];
+
+        current_C[row * ldc + col] = alpha * sum + beta * current_C[row * ldc + col];
       }
     }
   }
@@ -147,6 +158,8 @@ void attention_0_gemm( const DType* query,
     simple_gemm_strided_batch( m,
                                n,
                                k,
+                               true,
+                               false,
                                scale,
                                context_pointers[i],
                                lda,
@@ -196,6 +209,8 @@ void attention_2_gemm( const DType* att,
     simple_gemm_strided_batch( m,
                                n,
                                k,
+                               false,
+                               false,
                                1,
                                context_pointers[i] + dim_,
                                lda,
