@@ -32,7 +32,7 @@ def export(config: Dict[str, int], state_dict: Dict[str, bytes], dest_dir: str, 
 
     def serialize(f, key: str):
         print(f"writing {key}...")
-        t = np.frombuffer(state_dict[key], dtype=np.float16).astype(dtype)
+        t = np.frombuffer(state_dict[key], dtype=np.float32).astype(dtype)
         f.write(memoryview(t))
         del state_dict[key]
 
@@ -43,7 +43,7 @@ def export(config: Dict[str, int], state_dict: Dict[str, bytes], dest_dir: str, 
         del state_dict[key]
 
     header = struct.pack(
-        "iiiiiii",
+        "=iiiiiii",
         config["dim"],
         config["hidden_dim"],
         config["n_layers"],
@@ -90,7 +90,7 @@ def load_bin(model_path: str) -> Tuple[Dict[str, int], Dict[str, bytes]]:
     with open(model_path, "rb") as fin:
         model = fin.read()
     state_dict = {}
-    config = struct.unpack("iiiiiii", model[:28])
+    config = struct.unpack("=iiiiiii", model[:28])
     config = {
         "dim": config[0],
         "hidden_dim": config[1],
@@ -100,9 +100,10 @@ def load_bin(model_path: str) -> Tuple[Dict[str, int], Dict[str, bytes]]:
         "vocab_size": config[5],
         "max_seq_len": config[6],
     }
+
     head_size = config["dim"] // config["n_heads"]
     ptr = 28
-    wd = 2
+    wd = 4
     state_dict["tok_embeddings.weight"] = model[ptr: ptr + abs(config["vocab_size"]) * config["dim"] * wd]
     ptr += abs(config["vocab_size"]) * config["dim"] * wd
 
