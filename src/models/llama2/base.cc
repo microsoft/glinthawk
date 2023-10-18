@@ -2,6 +2,7 @@
 
 #include <filesystem>
 #include <fstream>
+#include <limits>
 #include <sstream>
 #include <string>
 
@@ -29,8 +30,8 @@ DType* _advance_pointer( DType*& ptr, const size_t size )
 }
 
 Config::Config( const filesystem::path& config_file,
-                const int32_t start_layer,
-                const int32_t end_layer,
+                const uint32_t start_layer,
+                const uint32_t end_layer,
                 uint64_t concurrency_limit_ )
   : concurrency_limit( concurrency_limit_ )
 {
@@ -77,8 +78,8 @@ Config::Config( const filesystem::path& config_file,
   CHECK_GT( seq_len, 0 ) << "Sequence length must be positive.";
   CHECK_GT( concurrency_limit, 0 ) << "Max concurrent inference size must be positive.";
 
-  start_layer_num = start_layer;
-  end_layer_num = ( end_layer == -1 ) ? ( n_layers - 1 ) : end_layer;
+  this->start_layer_num = start_layer;
+  this->end_layer_num = ( end_layer == numeric_limits<uint32_t>::max() ) ? ( n_layers - 1 ) : end_layer;
 
   CHECK_GE( start_layer_num, 0 ) << "Start layer must be non-negative.";
   CHECK_LT( end_layer_num, n_layers ) << "End layer must be less than the number of layers.";
@@ -250,17 +251,20 @@ DType* InferenceContext<DType>::value( const Config& config, int layer_num, cons
 /* BaseLlama2 */
 
 template<typename DType, typename Context>
-BaseLlama2<DType, Context>::BaseLlama2( const Config& config,
-                                        unique_ptr<DType, void ( * )( DType* )>&& base_weights,
-                                        unique_ptr<DType, void ( * )( DType* )>&& layers_weights,
-                                        unique_ptr<DType, void ( * )( DType* )>&& run_state )
-  : base_weights_buffer_( move( base_weights ) )
-  , layers_buffer_( move( layers_weights ) )
-  , run_state_buffer_( move( run_state ) )
-  , config_( config )
-  , state_( config_, run_state_buffer_.get() )
-  , base_weights_( config_, base_weights_buffer_.get() )
-  , layer_weights_( [&] {
+void BaseLlama2<DType, Context>::init( const Config& config,
+                                       unique_ptr<DType, void ( * )( DType* )>&& base_weights,
+                                       unique_ptr<DType, void ( * )( DType* )>&& layers_weights,
+                                       unique_ptr<DType, void ( * )( DType* )>&& run_state )
+{
+  this->config_ = config;
+  this->base_weights_buffer_ = move( base_weights );
+  this->layers_buffer_ = move( layers_weights );
+  this->run_state_buffer_ = move( run_state );
+
+  this->state_ = RunState<DType> { config_, run_state_buffer_.get() };
+  this->base_weights_ = BaseWeights<DType> { config_, base_weights_buffer_.get() };
+
+  this->layer_weights_ = [&] {
     vector<LayerWeights<DType>> layers {};
     layers.resize( config_.n_layers );
 
@@ -274,8 +278,7 @@ BaseLlama2<DType, Context>::BaseLlama2( const Config& config,
     }
 
     return layers;
-  }() )
-{
+  }();
 }
 
 namespace glinthawk::models::llama2 {

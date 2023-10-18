@@ -17,9 +17,11 @@ constexpr size_t MAX_BATCH_SIZE = 1024;
 
 struct Config
 {
+  Config() {}
+
   Config( const std::filesystem::path& config_file,
-          const int32_t start_layer,
-          const int32_t end_layer,
+          const uint32_t start_layer,
+          const uint32_t end_layer,
           uint64_t concurrency_limit_ );
 
   std::string to_string() const;
@@ -64,6 +66,7 @@ public:
 template<typename DType>
 struct BaseWeights
 {
+  BaseWeights() = default;
   BaseWeights( const Config& config, const DType* base_weights );
 
   BaseWeights( const BaseWeights& ) = delete;
@@ -117,16 +120,17 @@ struct LayerWeights
 template<typename DType>
 struct RunState
 {
+  RunState() = default;
   RunState( const Config& config, DType* buffer );
+
   RunState( const RunState& ) = delete;
   RunState operator=( const RunState& ) = delete;
-
   RunState( RunState&& ) = default;
   RunState& operator=( RunState&& ) = default;
 
   static size_t state_size( const Config& config );
 
-  DType* buffer_;            // we use this buffer for everything, including activations
+  DType* buffer_ {};         // we use this buffer for everything, including activations
   DType* x {};               // activation at current time stamp (B, dim)
   DType* xb {};              // same, but inside a residual branch (B, dim)
   DType* xb2 {};             // an additional buffer just for convenience (B, dim)
@@ -141,7 +145,7 @@ struct RunState
   curandState* rng_state {}; // CURAND state (B, vocab_size)
 
   // This memory is on CPU
-  uint32_t argmax_pos[MAX_BATCH_SIZE] {};             // argmax results (B, )
+  uint32_t argmax_pos[MAX_BATCH_SIZE] {}; // argmax results (B, )
 
   // information about the current batch
   uint64_t curr_concurrency_size { 1 };
@@ -161,27 +165,28 @@ struct InferenceContext
 };
 
 template<typename DType, typename Context>
-class BaseLlama2 : public virtual glinthawk::models::Model<Context>
+class BaseLlama2 : public glinthawk::models::Model<Context>
 {
 protected:
-  std::unique_ptr<DType, void ( * )( DType* )> base_weights_buffer_;
-  std::unique_ptr<DType, void ( * )( DType* )> layers_buffer_;
-  std::unique_ptr<DType, void ( * )( DType* )> run_state_buffer_;
+  Config config_ {};
 
-  const Config config_;
+  std::unique_ptr<DType, void ( * )( DType* )> base_weights_buffer_ { nullptr, nullptr };
+  std::unique_ptr<DType, void ( * )( DType* )> layers_buffer_ { nullptr, nullptr };
+  std::unique_ptr<DType, void ( * )( DType* )> run_state_buffer_ { nullptr, nullptr };
 
-  RunState<DType> state_;
-  BaseWeights<DType> base_weights_;
-  std::vector<LayerWeights<DType>> layer_weights_;
+  RunState<DType> state_ {};
+  BaseWeights<DType> base_weights_ {};
+  std::vector<LayerWeights<DType>> layer_weights_ {};
 
-protected:
-  BaseLlama2( const Config& config,
-              std::unique_ptr<DType, void ( * )( DType* )>&& base_weights,
-              std::unique_ptr<DType, void ( * )( DType* )>&& layers_weights,
-              std::unique_ptr<DType, void ( * )( DType* )>&& run_state );
+  void init( const Config& config,
+             std::unique_ptr<DType, void ( * )( DType* )>&& base_weights,
+             std::unique_ptr<DType, void ( * )( DType* )>&& layers_weights,
+             std::unique_ptr<DType, void ( * )( DType* )>&& run_state );
+
+  BaseLlama2() = default;
 
 public:
-  ~BaseLlama2() override = default;
+  virtual ~BaseLlama2() = default;
 
   BaseLlama2( BaseLlama2&& ) = default;
   BaseLlama2& operator=( BaseLlama2&& ) = default;

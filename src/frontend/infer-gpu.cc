@@ -84,9 +84,9 @@ int main( int argc, char* argv[] )
       }
     }
 
-    auto llama = Llama2::load( model_dir_path, 0, -1, input_states.size() );
-    compute::ContextManager<Llama2> context_manager = compute::ContextManager<Llama2>( llama->config() );
-    const unsigned int seq_len = llama->config().seq_len;
+    Llama2 llama { model_dir_path, 0, UINT32_MAX, input_states.size() };
+    compute::ContextManager<Llama2> context_manager = compute::ContextManager<Llama2>( llama.config() );
+    const unsigned int seq_len = llama.config().seq_len;
 
     bool prompt_processed = false;
 
@@ -98,7 +98,7 @@ int main( int argc, char* argv[] )
         contexts.push_back( context_manager.get_context( state.prompt_id() ) );
       }
       GlobalScopeTimer<Timer::Category::TokenGeneration> _;
-      auto output_states = llama->forward( input_states, contexts );
+      auto output_states = llama.forward( input_states, contexts );
       input_states.clear();
 
       if ( not prompt_processed ) {

@@ -23,7 +23,7 @@ namespace glinthawk::models::llama2::cpu {
 template<typename DType>
 void basic_deleter( DType* ptr )
 {
-  delete[] ptr;
+  free( ptr );
 }
 
 template<typename DType>
@@ -40,23 +40,17 @@ string dtype_str()
 
 template<typename DType>
 Context<DType>::Context( const Config& config )
-  : storage_( unique_ptr<DType, void ( * )( DType* )> {
-    reinterpret_cast<DType*>( new uint8_t[InferenceContext<DType>::context_size( config )] ),
-    basic_deleter } )
+  : storage_( reinterpret_cast<DType*>( malloc( InferenceContext<DType>::context_size( config ) ) ),
+              basic_deleter<DType> )
 {
   this->buffer_ = storage_.get();
 }
 
 template<typename DType>
-Llama2<DType>::~Llama2()
-{
-}
-
-template<typename DType>
-unique_ptr<Llama2<DType>> Llama2<DType>::load( const filesystem::path& model_path,
-                                               const int32_t start_layer,
-                                               const int32_t end_layer,
-                                               const uint64_t concurrency_limit )
+Llama2<DType>::Llama2( const filesystem::path& model_path,
+                       const uint32_t start_layer,
+                       const uint32_t end_layer,
+                       const uint64_t concurrency_limit )
 {
   const string filename_suffix = "_"s + dtype_str<DType>();
   const auto config_path = model_path / "CONFIG";
@@ -68,15 +62,14 @@ unique_ptr<Llama2<DType>> Llama2<DType>::load( const filesystem::path& model_pat
   const auto base_size = BaseWeights<DType>::base_size( config );
   const auto layer_size = LayerWeights<DType>::layer_size( config );
 
-  // Allocate memory for the base weights
-  unique_ptr<DType, void ( * )( DType* )> base { reinterpret_cast<DType*>( new uint8_t[base_size] ), basic_deleter };
+  DType* run_state_buffer = reinterpret_cast<DType*>( malloc( run_state_size ) );
+  DType* base_weights_buffer = reinterpret_cast<DType*>( malloc( base_size ) );
+  DType* layers_buffer = reinterpret_cast<DType*>( malloc( layer_size * config.n_layers_loaded() ) );
 
-  // Allocate memory for the layers
-  unique_ptr<DType, void ( * )( DType* )> layers { reinterpret_cast<DType*>( new uint8_t[layer_size] ), basic_deleter };
-
-  // Allocate memory for the run state
-  unique_ptr<DType, void ( * )( DType* )> run_state { reinterpret_cast<DType*>( new uint8_t[run_state_size] ),
-                                                      basic_deleter };
+  // Allocate memory for the base weights, layers and run state
+  unique_ptr<DType, void ( * )( DType* )> base { base_weights_buffer, basic_deleter<DType> };
+  unique_ptr<DType, void ( * )( DType* )> layers { layers_buffer, basic_deleter<DType> };
+  unique_ptr<DType, void ( * )( DType* )> run_state { run_state_buffer, basic_deleter<DType> };
 
   // Load the model
 
@@ -107,10 +100,7 @@ unique_ptr<Llama2<DType>> Llama2<DType>::load( const filesystem::path& model_pat
     LOG( INFO ) << "Loaded layer " << i << " (" << layer_size << " bytes).";
   }
 
-  auto model
-    = unique_ptr<Llama2<DType>> { new Llama2<DType>( config, move( base ), move( layers ), move( run_state ) ) };
-
-  return model;
+  this->init( config, move( base ), move( layers ), move( run_state ) );
 }
 
 template<typename DType>

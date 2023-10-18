@@ -90,16 +90,17 @@ int main( int argc, char* argv[] )
 
       // load the model for the next layer
       const auto current_layer = states[0].next_layer();
-      auto llama
-        = Llama2::load( model_dir_path, current_layer, current_layer + LAYERS_AT_ONCE - 1, input_states.size() );
+      Llama2 llama {
+        model_dir_path, current_layer, static_cast<uint32_t>( current_layer + LAYERS_AT_ONCE - 1 ), input_states.size()
+      };
 
       if ( context_managers.empty() ) {
-        context_managers.resize( llama->config().n_layers );
+        context_managers.resize( llama.config().n_layers );
       }
 
       // do we have a context manager for the current layer?
       if ( context_managers[current_layer] == nullptr ) {
-        context_managers[current_layer] = make_shared<compute::ContextManager<Llama2>>( llama->config() );
+        context_managers[current_layer] = make_shared<compute::ContextManager<Llama2>>( llama.config() );
       }
 
       // get the contexts for the current layer
@@ -107,7 +108,7 @@ int main( int argc, char* argv[] )
         contexts.push_back( context_managers[current_layer]->get_context( state.prompt_id() ) );
       }
 
-      auto output_states = llama->forward( states, contexts );
+      auto output_states = llama.forward( states, contexts );
       input_states.clear();
 
       for ( const auto& state : output_states ) {

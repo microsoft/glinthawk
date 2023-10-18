@@ -58,10 +58,10 @@ Llama2<DType>::~Llama2()
 }
 
 template<typename DType>
-unique_ptr<Llama2<DType>> Llama2<DType>::load( const filesystem::path& model_path,
-                                               const int32_t start_layer,
-                                               const int32_t end_layer,
-                                               const uint64_t concurrency_limit )
+Llama2<DType>::Llama2( const filesystem::path& model_path,
+                       const uint32_t start_layer,
+                       const uint32_t end_layer,
+                       const uint64_t concurrency_limit )
 {
   ops::init( concurrency_limit );
 
@@ -150,13 +150,10 @@ unique_ptr<Llama2<DType>> Llama2<DType>::load( const filesystem::path& model_pat
     LOG( INFO ) << "Loaded layer " << i << " (" << layer_size << " bytes).";
   }
 
-  auto model
-    = unique_ptr<Llama2<DType>> { new Llama2<DType>( config, move( base ), move( layers ), move( run_state ) ) };
+  this->init( config, move( base ), move( layers ), move( run_state ) );
 
-  ops::setup_rng( model->state_.rng_state, 1234, config.vocab_size, config.concurrency_limit );
+  ops::setup_rng( this->state_.rng_state, 1234, config.vocab_size, config.concurrency_limit );
   cudaDeviceSynchronize();
-
-  return model;
 }
 
 template<typename DType>

@@ -2,6 +2,8 @@
 
 #include "models/llama2/base.hh"
 
+#include <limits>
+
 namespace glinthawk::models::llama2::cpu {
 
 template<typename DType>
@@ -32,21 +34,20 @@ private:
     const std::vector<std::reference_wrapper<const InferenceState>>& inference_states,
     const std::vector<std::shared_ptr<ContextType>>& contexts );
 
-protected:
+public:
   using BaseLlama2<DType, Context<DType>>::BaseLlama2;
 
-public:
-  static std::unique_ptr<Llama2<DType>> load( const std::filesystem::path& model_dir,
-                                              const int32_t start_layer = 0,
-                                              const int32_t end_layer = -1,
-                                              const uint64_t concurrency_limit = 1 );
+  Llama2( const std::filesystem::path& model_dir,
+          const uint32_t start_layer = 0,
+          const uint32_t end_layer = std::numeric_limits<uint32_t>::max(),
+          const uint64_t concurrency_limit = 1 );
 
   Llama2( const Llama2& ) = delete;
   Llama2& operator=( const Llama2& ) = delete;
   Llama2( Llama2&& ) = default;
   Llama2& operator=( Llama2&& ) = default;
 
-  ~Llama2();
+  virtual ~Llama2() {}
 
   InferenceState forward( const InferenceState& inference_state, std::shared_ptr<ContextType>& context ) override;
 
