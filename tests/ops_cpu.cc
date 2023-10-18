@@ -9,7 +9,9 @@ using namespace glinthawk::models::common::cpu;
 
 using DTypes = ::testing::Types<float, _Float16>;
 
-template<class> struct OperationsCPU : public ::testing::Test {};
+template<class>
+struct OperationsCPU : public ::testing::Test
+{};
 TYPED_TEST_SUITE( OperationsCPU, DTypes );
 
 TYPED_TEST( OperationsCPU, AccumBasic )
