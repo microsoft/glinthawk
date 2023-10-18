@@ -7,6 +7,9 @@ include ( etc/cflags.cmake )
 include ( etc/openmp.cmake )
 include ( etc/cuda.cmake )
 
+find_package ( GTest CONFIG REQUIRED )
+include ( GoogleTest )
+
 find_package ( OpenSSL REQUIRED )
 link_libraries ( OpenSSL::SSL )
 
@@ -50,3 +53,8 @@ if ( CUDA_ENABLED )
   add_executable ( worker-gpu src/frontend/worker-gpu.cc )
   add_executable ( kickoff src/frontend/kickoff.cc )
 endif ()
+
+# Tests
+add_executable ( test_ops_cpu tests/ops_cpu.cc )
+target_link_libraries ( test_ops_cpu GTest::gtest )
+gtest_discover_tests ( test_ops_cpu )
