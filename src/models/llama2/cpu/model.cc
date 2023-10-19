@@ -231,7 +231,7 @@ template<typename DType>
 void extract_batch_token( RunState<DType>& state, const Config& config, const std::vector<float>& temp )
 {
   ops::soft_sample( state.logits, temp, config.vocab_size, temp.size() );
-  ops::argmax( &( state.argmax_pos[0] ), state.logits, config.vocab_size, temp.size() );
+  ops::argmax( state.argmax_pos, state.logits, config.vocab_size, temp.size() );
 }
 
 template<typename DType>

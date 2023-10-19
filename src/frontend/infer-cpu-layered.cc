@@ -45,14 +45,13 @@ int main( int argc, char* argv[] )
     const filesystem::path model_dir_path { argv[1] };
     const filesystem::path tokenizer_path { argv[2] };
 
-    using Llama2 = models::llama2::cpu::Llama2<_Float16>;
+    using Llama2 = models::llama2::cpu::Llama2<float>;
     models::llama2::Vocabulary vocabulary { tokenizer_path };
 
     PromptID id;
     util::digest::sha256( "0", id );
 
-    vector<uint32_t> prompt_tokens { 1,   518,  25580, 29962, 25538, 2211,  25562, 363,  7952,
-                                     292, 9045, 29891, 29889, 518,   29914, 25580, 29962 };
+    vector<uint32_t> prompt_tokens { 1 };
 
     vector<string> input_states;
 
