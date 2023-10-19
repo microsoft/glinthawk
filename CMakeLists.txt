@@ -30,6 +30,7 @@ file ( GLOB SOURCE
   src/compute/*.cc
   src/message/*.cc
   src/worker/*.cc
+  src/prompt/*.cc
 )
 
 file ( GLOB_RECURSE MODELS_SOURCE
