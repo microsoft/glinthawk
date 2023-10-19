@@ -56,7 +56,7 @@ void ComputeKernel<Model>::bookkeeping_thread_func()
     auto context = context_manager_.get_context( action.prompt_id() );
 
     if ( not context ) {
-      LOG( ERROR ) << "Could not get context for prompt_id=" << action.prompt_id().to_string();
+      LOG( ERROR ) << "Could not get context for prompt_id=" << action.prompt_id().base58digest();
     }
 
     {

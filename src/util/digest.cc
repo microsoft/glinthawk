@@ -48,11 +48,20 @@ string encode_base_58( const string_view input )
   return result;
 }
 
-string sha256_base58( string_view input )
+std::string SHA256Hash::hexdigest() const
 {
-  SHA256Hash hash;
-  sha256( input, hash );
-  return encode_base_58( { reinterpret_cast<const char*>( hash.hash.data() ), SHA256_DIGEST_LENGTH } );
+  std::ostringstream result;
+
+  for ( const auto& byte : hash ) {
+    result << std::hex << std::setfill( '0' ) << std::setw( 2 ) << static_cast<int>( byte );
+  }
+
+  return result.str();
+}
+
+std::string SHA256Hash::base58digest() const
+{
+  return encode_base_58( { reinterpret_cast<const char*>( hash.data() ), SHA256_DIGEST_LENGTH } );
 }
 
 void sha256( const std::string_view input, SHA256Hash& hash )

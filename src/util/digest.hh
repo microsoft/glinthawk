@@ -4,11 +4,11 @@
 #include <compare>
 #include <cstring>
 #include <functional>
+#include <iomanip>
 #include <openssl/sha.h>
 #include <sstream>
 #include <string>
 #include <string_view>
-#include <iomanip>
 
 namespace glinthawk::util::digest {
 
@@ -34,19 +34,10 @@ struct SHA256Hash
 
   bool operator==( const SHA256Hash& other ) const = default;
 
-  std::string to_string() const
-  {
-    std::ostringstream result;
-
-    for ( const auto& byte : hash ) {
-      result << std::hex << std::setfill( '0' ) << std::setw( 2 ) << static_cast<int>( byte );
-    }
-
-    return result.str();
-  }
+  std::string hexdigest() const;
+  std::string base58digest() const;
 };
 
-std::string sha256_base58( std::string_view input );
 void sha256( const std::string_view input, SHA256Hash& hash );
 
 }
