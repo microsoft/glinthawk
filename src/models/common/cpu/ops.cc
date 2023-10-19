@@ -227,7 +227,7 @@ template<typename DType>
 void softmax( DType* x, const uint64_t size )
 {
   // find max value (for numerical stability)
-  float max_val = x[0];
+  DType max_val = x[0];
   for ( uint64_t i = 1; i < size; i++ ) {
     if ( x[i] > max_val ) {
       max_val = x[i];
@@ -235,7 +235,7 @@ void softmax( DType* x, const uint64_t size )
   }
 
   // exp and sum
-  float sum = 0.0f;
+  DType sum = 0.0f;
   for ( uint64_t i = 0; i < size; i++ ) {
     x[i] = expf( x[i] - max_val );
     sum += x[i];
@@ -257,7 +257,9 @@ void attention_softmax( DType* att,
 {
   for ( uint64_t i = 0; i < batch_size; i++ ) {
     DType* this_att = att + i * n_heads * seq_len;
-    softmax( this_att, token_positions[i] + 1 );
+    for ( size_t j = 0; j < n_heads; j++ ) {
+      softmax( this_att + j * seq_len, token_positions[i] + 1 );
+    }
   }
 }
 
