@@ -116,6 +116,8 @@ Vocabulary::Vocabulary( const filesystem::path& vocabulary_path )
   ifstream fin { vocabulary_path, ios::binary };
   int len = 0;
 
+  CHECK( fin.good() ) << "Failed to open vocabulary file: " << vocabulary_path;
+
   int i;
   for ( i = 0;; i++ ) {
     if ( not fin.read( reinterpret_cast<char*>( &len ), sizeof( int ) ) ) {
