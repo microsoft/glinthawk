@@ -43,7 +43,7 @@ add_library ( glinthawk STATIC ${SOURCE} )
 link_libraries ( glinthawk )
 link_libraries ( glinthawk_proto )
 
-add_executable ( infer-cpu-layered src/frontend/infer-cpu-layered.cc )
+add_executable ( infer-layered-cpu src/frontend/infer-layered-cpu.cc )
 
 # Tests
 add_executable ( test_ops_cpu tests/ops_cpu.cc )
@@ -52,11 +52,11 @@ gtest_discover_tests ( test_ops_cpu )
 
 
 if ( CUDA_ENABLED )
-  # add_executable ( profile-gpu src/frontend/profile-gpu.cc )
-  add_executable ( infer-gpu src/frontend/infer-gpu.cc )
-  add_executable ( infer-gpu-layered src/frontend/infer-gpu-layered.cc )
+  # add_executable ( profile-cuda src/frontend/profile-cuda.cc )
+  add_executable ( infer-cuda src/frontend/infer-cuda.cc )
+  add_executable ( infer-layered-cuda src/frontend/infer-layered-cuda.cc )
   add_executable ( profile-offload src/frontend/profile-offload.cc )
-  add_executable ( worker-gpu src/frontend/worker-gpu.cc )
+  add_executable ( worker-cuda src/frontend/worker-cuda.cc )
 
   # Tests
   add_executable ( test_ops_cuda tests/ops_cuda.cu )
