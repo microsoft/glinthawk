@@ -110,9 +110,12 @@ void silu( DType* hb, DType* hb2, const uint64_t hidden_dim, const uint64_t batc
 {
   size_t b;
   for ( b = 0; b < batch_size; b++ ) {
-    size_t i;
-    for ( i = 0; i < hidden_dim; i++ ) {
-      hb[b * hidden_dim + i] = hb2[b * hidden_dim + i] * ( 1.0f / ( 1.0f + expf( -hb2[b * hidden_dim + i] ) ) );
+    DType* current_hb = hb + b * hidden_dim;
+    DType* current_hb2 = hb2 + b * hidden_dim;
+
+    for ( size_t i = 0; i < hidden_dim; i++ ) {
+      const auto x = current_hb[i];
+      current_hb[i] = x * ( 1.0f / ( 1.0f + expf( -x ) ) ) * current_hb2[i];
     }
   }
 }
@@ -260,14 +263,14 @@ void attention_softmax( DType* att,
 
 template<typename DType>
 inline void do_rope( const uint64_t head_size,
-              const uint64_t gqa_size,
-              const DType* freq_cis_real_row,
-              const DType* freq_cis_imag_row,
-              DType* state_q,
-              DType* state_k,
-              const uint64_t head_q_num,
-              const uint64_t head_k_num,
-              const uint64_t elem_idx )
+                     const uint64_t gqa_size,
+                     const DType* freq_cis_real_row,
+                     const DType* freq_cis_imag_row,
+                     DType* state_q,
+                     DType* state_k,
+                     const uint64_t head_q_num,
+                     const uint64_t head_k_num,
+                     const uint64_t elem_idx )
 {
   // apply RoPE rotation to the q and k vectors for each head
   // get the q and k vectors for this head
