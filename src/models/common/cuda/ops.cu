@@ -545,7 +545,7 @@ template<>
 void accum<float>( float* a, const float* b, const uint64_t size, const uint64_t batch_size )
 {
   float alpha = 1.0f;
-  cublasSaxpy( cublas_handle_default, size * batch_size, &alpha, b, 1, a, 1 );
+  CHECK_CUBLAS( cublasSaxpy( cublas_handle_default, size * batch_size, &alpha, b, 1, a, 1 ) );
 }
 
 __global__ void accum_cuda( __half* a, const __half* b, const uint64_t size )
