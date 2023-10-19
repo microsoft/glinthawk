@@ -14,7 +14,6 @@ template<typename DType>
 void accum( DType* a, const DType* b, const uint64_t size, const uint64_t batch_size )
 {
   size_t b_idx;
-#pragma omp parallel for private( b_idx )
   for ( b_idx = 0; b_idx < batch_size; b_idx++ ) {
     for ( uint64_t i = 0; i < size; i++ ) {
       a[b_idx * size + i] += b[b_idx * size + i];
@@ -26,7 +25,6 @@ template<typename DType>
 void rmsnorm( DType* output, const DType* x, const DType* weight, const uint64_t size, const uint64_t batch_size )
 {
   size_t b;
-#pragma omp parallel for private( b )
   for ( b = 0; b < batch_size; b++ ) {
     const DType* X = x + b * size;
     const DType* W = weight + b * size;
@@ -50,45 +48,11 @@ void rmsnorm( DType* output, const DType* x, const DType* weight, const uint64_t
 }
 
 template<typename DType>
-void matmul( DType* xout, const DType* x, const DType* w, const uint64_t b, const uint64_t s, const uint64_t r )
-{
-  // x(b,s) @ W(s,r) -> xout(b,r)
-
-  size_t i;
-#pragma omp parallel for private( i )
-  for ( i = 0; i < b; ++i ) {
-    size_t j;
-#pragma omp parallel for private( j )
-    for ( j = 0; j < r; ++j ) {
-      DType sum = 0;
-      for ( uint64_t k = 0; k < s; ++k ) {
-        sum += x[i * s + k] * w[k * r + j];
-      }
-      xout[i * r + j] = sum;
-    }
-  }
-}
-
-template<typename DType>
-void silu( DType* hb, DType* hb2, const uint64_t hidden_dim, const uint64_t batch_size )
-{
-  size_t b;
-#pragma omp parallel for private( b )
-  for ( b = 0; b < batch_size; b++ ) {
-    size_t i;
-#pragma omp parallel for private( i )
-    for ( i = 0; i < hidden_dim; i++ ) {
-      hb[b * hidden_dim + i] = hb2[b * hidden_dim + i] * ( 1.0f / ( 1.0f + expf( -hb2[b * hidden_dim + i] ) ) );
-    }
-  }
-}
-
-template<typename DType>
 void simple_gemm_strided_batch( int m,
                                 int n,
                                 int k,
-                                bool transpose_a,
-                                bool transpose_b,
+                                const bool transpose_a,
+                                const bool transpose_b,
                                 float alpha,
                                 const DType* A,
                                 int lda,
@@ -112,13 +76,43 @@ void simple_gemm_strided_batch( int m,
         DType sum = 0.0;
 
         for ( int p = 0; p < k; ++p ) {
-          const DType a_value = ( not transpose_a ) ? current_A[row * lda + p] : current_A[p * lda + row];
-          const DType b_value = ( not transpose_b ) ? current_B[p * ldb + col] : current_B[col * ldb + p];
+          const DType a_value = ( not transpose_a ) ? current_A[p * lda + row] : current_A[row * lda + p];
+          const DType b_value = ( not transpose_b ) ? current_B[col * ldb + p] : current_B[p * ldb + col];
           sum += a_value * b_value;
         }
 
-        current_C[row * ldc + col] = alpha * sum + beta * current_C[row * ldc + col];
+        current_C[col * ldc + row] = alpha * sum + beta * current_C[col * ldc + row];
       }
+    }
+  }
+}
+
+template<typename DType>
+void matmul( DType* xout, const DType* x, const DType* w, const uint64_t b, const uint64_t s, const uint64_t r )
+{
+  // x(b,s) @ W(s,r) -> xout(b,r)
+  // OR
+  // W(r,s) @ x(s,b) -> xout(r,b)
+  // A(m,k) @ B(k,n) ->    C(m,n)
+
+  const uint64_t m = r;
+  const uint64_t n = b;
+  const uint64_t k = s;
+  const uint64_t lda = k;
+  const uint64_t ldb = k;
+  const uint64_t ldc = m;
+
+  simple_gemm_strided_batch( m, n, k, true, false, 1, w, lda, m * k, x, ldb, k * n, 0, xout, ldc, m * n, 1 );
+}
+
+template<typename DType>
+void silu( DType* hb, DType* hb2, const uint64_t hidden_dim, const uint64_t batch_size )
+{
+  size_t b;
+  for ( b = 0; b < batch_size; b++ ) {
+    size_t i;
+    for ( i = 0; i < hidden_dim; i++ ) {
+      hb[b * hidden_dim + i] = hb2[b * hidden_dim + i] * ( 1.0f / ( 1.0f + expf( -hb2[b * hidden_dim + i] ) ) );
     }
   }
 }
@@ -159,7 +153,7 @@ void attention_0_gemm( const DType* query,
                                n,
                                k,
                                true,
-                               false,
+                               true,
                                scale,
                                context_pointers[i],
                                lda,
@@ -265,7 +259,7 @@ void attention_softmax( DType* att,
 }
 
 template<typename DType>
-void do_rope( const uint64_t head_size,
+inline void do_rope( const uint64_t head_size,
               const uint64_t gqa_size,
               const DType* freq_cis_real_row,
               const DType* freq_cis_imag_row,
@@ -369,7 +363,6 @@ template<typename DType>
 void argmax( uint32_t* output, const DType* v, const uint64_t n, const uint64_t batch_size )
 {
   uint64_t b;
-#pragma omp parallel for private( b )
   for ( b = 0; b < batch_size; b++ ) {
     const DType* this_v = v + b * n;
 
