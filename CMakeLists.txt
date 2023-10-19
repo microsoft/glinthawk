@@ -57,7 +57,6 @@ if ( CUDA_ENABLED )
   add_executable ( infer-gpu-layered src/frontend/infer-gpu-layered.cc )
   add_executable ( profile-offload src/frontend/profile-offload.cc )
   add_executable ( worker-gpu src/frontend/worker-gpu.cc )
-  add_executable ( kickoff src/frontend/kickoff.cc )
 
   # Tests
   add_executable ( test_ops_cuda tests/ops_cuda.cu )
