@@ -27,6 +27,7 @@ include_directories ( SYSTEM lib )
 file ( GLOB SOURCE
   src/util/*.cc
   src/net/*.cc
+  src/net/http/*.cc
   src/compute/*.cc
   src/message/*.cc
   src/worker/*.cc
