@@ -33,16 +33,16 @@ TYPED_TEST( OperationsCPU, AccumBasic )
 TYPED_TEST( OperationsCPU, MatMulBasic )
 {
   const uint64_t a = 4;
-  const uint64_t b = 3;
-  const uint64_t c = 2;
+  const uint64_t b = 5;
+  const uint64_t c = 3;
 
-  vector<TypeParam> A { 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12 };
-  vector<TypeParam> B { 1, 2, 3, 4, 5, 6 };
+  vector<TypeParam> A { 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20 };
+  vector<TypeParam> B { 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15 };
   vector<TypeParam> C( a * c, static_cast<TypeParam>( 0.0f ) );
 
   ops::matmul( C.data(), A.data(), B.data(), a, b, c );
 
-  vector<TypeParam> expected { 14, 32, 32, 77, 50, 122, 68, 167 };
+  vector<TypeParam> expected { 55, 130, 205, 130, 330, 530, 205, 530, 855, 280, 730, 1180 };
 
   EXPECT_TRUE( equal( C.begin(), C.end(), expected.begin() ) );
 }
