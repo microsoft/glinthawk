@@ -9,6 +9,7 @@
 #include <unordered_map>
 
 #include "models/common/model.hh"
+#include "prompt/prompt.hh"
 #include "util/eventfd.hh"
 
 namespace glinthawk::compute {
@@ -44,6 +45,17 @@ public:
   }
 
   bool release( const glinthawk::PromptID& prompt_id ) { return contexts_.erase( prompt_id ) > 0; }
+};
+
+class PromptManager
+{
+private:
+  std::unordered_map<glinthawk::PromptID, std::shared_ptr<glinthawk::prompt::SerializedPrompt>> prompts_ {};
+  std::filesystem::path prompt_dir_ {};
+
+public:
+  PromptManager( const std::filesystem::path& prompt_dir );
+  std::shared_ptr<glinthawk::prompt::SerializedPrompt> get_prompt( const glinthawk::PromptID& prompt_id );
 };
 
 template<typename Model>
