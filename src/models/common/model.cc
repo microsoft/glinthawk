@@ -104,7 +104,7 @@ string InferenceState::to_string() const
 {
   ostringstream oss;
   oss << "InferenceState("
-      << "prompt_id=" << prompt_id_.to_string().substr( 0, 8 ) << ", "
+      << "prompt_id=" << prompt_id_.base58digest().substr( 0, 8 ) << ", "
       << "token=" << token_ << ", "
       << "token_pos=" << token_pos_ << ", "
       << "next_layer=" << next_layer_ << ", "
