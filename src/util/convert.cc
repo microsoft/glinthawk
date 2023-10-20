@@ -5,7 +5,8 @@
 #include <string_view>
 
 using namespace std;
-using namespace glinthawk::util;
+
+namespace glinthawk::util {
 
 uint64_t to_uint64( const std::string_view str, const int base )
 {
@@ -18,3 +19,5 @@ uint64_t to_uint64( const std::string_view str, const int base )
 
   return ret;
 }
+
+} // namespace glinthawk::util
