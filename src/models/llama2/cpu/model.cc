@@ -66,6 +66,8 @@ Llama2<DType>::Llama2( const filesystem::path& model_path,
   DType* base_weights_buffer = reinterpret_cast<DType*>( malloc( base_size ) );
   DType* layers_buffer = reinterpret_cast<DType*>( malloc( layer_size * config.n_layers_loaded() ) );
 
+  memset(run_state_buffer, 0, run_state_size);
+
   // Allocate memory for the base weights, layers and run state
   unique_ptr<DType, void ( * )( DType* )> base { base_weights_buffer, basic_deleter<DType> };
   unique_ptr<DType, void ( * )( DType* )> layers { layers_buffer, basic_deleter<DType> };

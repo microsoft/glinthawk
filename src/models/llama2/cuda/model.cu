@@ -117,6 +117,7 @@ Llama2<DType>::Llama2( const filesystem::path& model_path,
 
   // Allocate memory for the run state
   ops::CHECK_CUDA( cudaMalloc( &run_state_raw_ptr, run_state_size ) );
+  ops::CHECK_CUDA( cudaMemset( run_state_raw_ptr, 0, run_state_size ) );
   unique_ptr<DType, void ( * )( DType* )> run_state { run_state_raw_ptr, cuda_deleter };
 
   // Load the model

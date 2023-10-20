@@ -51,7 +51,8 @@ int main( int argc, char* argv[] )
     PromptID id;
     util::digest::sha256( "0", id );
 
-    vector<uint32_t> prompt_tokens { 1 };
+    vector<uint32_t> prompt_tokens { 1,   518,  25580, 29962, 25538, 2211,  25562, 363,  7952,
+                                     292, 9045, 29891, 29889, 518,   29914, 25580, 29962 };
 
     vector<string> input_states;
 

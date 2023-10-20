@@ -27,7 +27,6 @@ void rmsnorm( DType* output, const DType* x, const DType* weight, const uint64_t
   size_t b;
   for ( b = 0; b < batch_size; b++ ) {
     const DType* X = x + b * size;
-    const DType* W = weight + b * size;
     DType* O = output + b * size;
 
     // calculate sum of squares
@@ -42,7 +41,7 @@ void rmsnorm( DType* output, const DType* x, const DType* weight, const uint64_t
 
     // normalize and scale
     for ( uint64_t j = 0; j < size; j++ ) {
-      O[j] = W[j] * ( ss * X[j] );
+      O[j] = weight[j] * ( ss * X[j] );
     }
   }
 }
@@ -102,7 +101,7 @@ void matmul( DType* xout, const DType* x, const DType* w, const uint64_t b, cons
   const uint64_t ldb = k;
   const uint64_t ldc = m;
 
-  simple_gemm_strided_batch( m, n, k, true, false, 1, w, lda, m * k, x, ldb, k * n, 0, xout, ldc, m * n, 1 );
+  simple_gemm_strided_batch( m, n, k, true, false, 1, w, lda, 0, x, ldb, 0, 0, xout, ldc, 0, 1 );
 }
 
 template<typename DType>
@@ -197,6 +196,7 @@ void attention_2_gemm( const DType* att,
 
   const uint64_t batchCount = n_kv_heads;
 
+  const uint64_t kv_dim_ = head_size * n_kv_heads;
   const uint64_t dim_ = head_size * n_kv_heads * gqa_size;
   const uint64_t att_dim_ = seq_len * n_kv_heads * gqa_size;
 
@@ -209,7 +209,7 @@ void attention_2_gemm( const DType* att,
                                false,
                                false,
                                1,
-                               context_pointers[i] + dim_,
+                               context_pointers[i] + kv_dim_,
                                lda,
                                strideA,
                                att + i * att_dim_,
@@ -280,15 +280,17 @@ inline void do_rope( const uint64_t head_size,
   DType* k = state_k + head_k_num * head_size;
 
   // rotate q and k by the freq_cis_real and freq_cis_imag
-  const DType q0 = q[elem_idx];
-  const DType q1 = q[elem_idx + 1];
-  const DType k0 = k[elem_idx];
-  const DType k1 = k[elem_idx + 1];
   const DType fcr = freq_cis_real_row[elem_idx / 2];
   const DType fci = freq_cis_imag_row[elem_idx / 2];
+
+  const DType k0 = k[elem_idx];
+  const DType k1 = k[elem_idx + 1];
   k[elem_idx] = k0 * fcr - k1 * fci;
   k[elem_idx + 1] = k0 * fci + k1 * fcr;
+
   for ( uint64_t i = 0; i < gqa_size; i++ ) {
+    const DType q0 = q[i * head_size + elem_idx];
+    const DType q1 = q[i * head_size + elem_idx + 1];
     q[i * head_size + elem_idx] = q0 * fcr - q1 * fci;
     q[i * head_size + elem_idx + 1] = q0 * fci + q1 * fcr;
   }
