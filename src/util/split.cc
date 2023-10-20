@@ -4,7 +4,8 @@
 #include <string>
 
 using namespace std;
-using namespace glinthawk::util;
+
+namespace glinthawk::util {
 
 void split( const string_view str, const char ch_to_find, vector<string_view>& ret )
 {
@@ -20,3 +21,5 @@ void split( const string_view str, const char ch_to_find, vector<string_view>& r
 
   ret.emplace_back( str.substr( field_start ) );
 }
+
+} // namespace glinthawk::util
