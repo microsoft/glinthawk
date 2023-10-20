@@ -45,7 +45,7 @@ int main( int argc, char* argv[] )
     const filesystem::path model_dir_path { argv[1] };
     const filesystem::path tokenizer_path { argv[2] };
 
-    using Llama2 = models::llama2::cpu::Llama2<float>;
+    using Llama2 = models::llama2::cpu::Llama2<_Float16>;
     models::llama2::Vocabulary vocabulary { tokenizer_path };
 
     PromptID id;

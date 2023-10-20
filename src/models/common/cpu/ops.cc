@@ -13,10 +13,11 @@ namespace glinthawk::models::common::cpu::ops {
 template<typename DType>
 void accum( DType* a, const DType* b, const uint64_t size, const uint64_t batch_size )
 {
-  size_t b_idx;
+  uint64_t b_idx;
+#pragma omp parallel for private( b_idx )
   for ( b_idx = 0; b_idx < batch_size; b_idx++ ) {
     for ( uint64_t i = 0; i < size; i++ ) {
-      a[b_idx * size + i] = float(a[b_idx * size + i]) + float(b[b_idx * size + i]);
+      a[b_idx * size + i] = float( a[b_idx * size + i] ) + float( b[b_idx * size + i] );
     }
   }
 }
@@ -24,7 +25,8 @@ void accum( DType* a, const DType* b, const uint64_t size, const uint64_t batch_
 template<typename DType>
 void rmsnorm( DType* output, const DType* x, const DType* weight, const uint64_t size, const uint64_t batch_size )
 {
-  size_t b;
+  uint64_t b;
+#pragma omp parallel for private( b )
   for ( b = 0; b < batch_size; b++ ) {
     const DType* X = x + b * size;
     DType* O = output + b * size;
@@ -41,67 +43,76 @@ void rmsnorm( DType* output, const DType* x, const DType* weight, const uint64_t
 
     // normalize and scale
     for ( uint64_t j = 0; j < size; j++ ) {
-      O[j] = float(weight[j]) * ( ss * float(X[j]) );
+      O[j] = float( weight[j] ) * ( ss * float( X[j] ) );
     }
   }
 }
 
 template<typename DType>
-void simple_gemm_strided_batch( int m,
-                                int n,
-                                int k,
+void simple_gemm_strided_batch( uint64_t m,
+                                uint64_t n,
+                                uint64_t k,
                                 const bool transpose_a,
                                 const bool transpose_b,
                                 float alpha,
                                 const DType* A,
-                                int lda,
+                                uint64_t lda,
                                 uint64_t strideA,
                                 const DType* B,
-                                int ldb,
+                                uint64_t ldb,
                                 uint64_t strideB,
                                 float beta,
                                 DType* C,
-                                int ldc,
+                                uint64_t ldc,
                                 uint64_t strideC,
                                 uint64_t batch_count )
 {
-  for ( uint64_t batch = 0; batch < batch_count; batch++ ) {
+  uint64_t batch;
+#pragma omp parallel for private( batch )
+  for ( batch = 0; batch < batch_count; batch++ ) {
     const DType* current_A = A + batch * strideA;
     const DType* current_B = B + batch * strideB;
     DType* current_C = C + batch * strideC;
 
-    for ( int row = 0; row < m; row++ ) {
-      for ( int col = 0; col < n; col++ ) {
+    uint64_t row;
+#pragma omp parallel for private( row )
+    for ( row = 0; row < m; row++ ) {
+      uint64_t col;
+      for ( col = 0; col < n; col++ ) {
         float sum = 0.0;
 
-        for ( int p = 0; p < k; ++p ) {
+        for ( uint64_t p = 0; p < k; ++p ) {
           const float a_value = ( not transpose_a ) ? current_A[p * lda + row] : current_A[row * lda + p];
           const float b_value = ( not transpose_b ) ? current_B[col * ldb + p] : current_B[p * ldb + col];
           sum += a_value * b_value;
         }
 
-        current_C[col * ldc + row] = alpha * sum + beta * float(current_C[col * ldc + row]);
+        current_C[col * ldc + row] = alpha * sum + beta * float( current_C[col * ldc + row] );
       }
     }
   }
 }
 
 template<typename DType>
-void fast_matmul_row_major( int m,
-                  int n,
-                  int k,
-                  const DType* A,
-                  int lda,
-                  const DType* B,
-                  int ldb,
-                  DType* C,
-                  int ldc )
+void fast_matmul_row_major( uint64_t m,
+                            uint64_t n,
+                            uint64_t k,
+                            const DType* A,
+                            uint64_t lda,
+                            const DType* B,
+                            uint64_t ldb,
+                            DType* C,
+                            uint64_t ldc )
 {
-  for ( int row = 0; row < m; row++ ) {
-    for ( int col = 0; col < n; col++ ) {
+  uint64_t row;
+#pragma omp parallel for private( row )
+  for ( row = 0; row < m; row++ ) {
+    uint64_t col;
+#pragma omp parallel for private( col )
+    for ( col = 0; col < n; col++ ) {
       float sum = 0.0;
 
-      for ( int p = 0; p < k; ++p ) {
+      for ( uint64_t p = 0; p < k; ++p ) {
         const float a_value = A[row * lda + p];
         const float b_value = B[col * ldb + p];
         sum += a_value * b_value;
@@ -133,14 +144,15 @@ void matmul( DType* xout, const DType* x, const DType* w, const uint64_t b, cons
 template<typename DType>
 void silu( DType* hb, DType* hb2, const uint64_t hidden_dim, const uint64_t batch_size )
 {
-  size_t b;
+  uint64_t b;
+#pragma omp parallel for private( b )
   for ( b = 0; b < batch_size; b++ ) {
     DType* current_hb = hb + b * hidden_dim;
     DType* current_hb2 = hb2 + b * hidden_dim;
 
     for ( size_t i = 0; i < hidden_dim; i++ ) {
       const float x = current_hb[i];
-      current_hb[i] = x * ( 1.0f / ( 1.0f + expf( -x ) ) ) * float(current_hb2[i]);
+      current_hb[i] = x * ( 1.0f / ( 1.0f + expf( -x ) ) ) * float( current_hb2[i] );
     }
   }
 }
@@ -263,13 +275,13 @@ void softmax( DType* x, const uint64_t size )
   // exp and sum
   float sum = 0.0f;
   for ( uint64_t i = 0; i < size; i++ ) {
-    x[i] = expf( float(x[i] - max_val) );
-    sum += float(x[i]);
+    x[i] = expf( float( x[i] - max_val ) );
+    sum += float( x[i] );
   }
 
   // normalize
   for ( uint64_t i = 0; i < size; i++ ) {
-    x[i] = float(x[i]) / sum;
+    x[i] = float( x[i] ) / sum;
   }
 }
 
@@ -281,9 +293,12 @@ void attention_softmax( DType* att,
                         [[maybe_unused]] DType* temp_buffer,
                         const uint64_t batch_size )
 {
-  for ( uint64_t i = 0; i < batch_size; i++ ) {
+  uint64_t i;
+#pragma omp parallel for private( i )
+  for ( i = 0; i < batch_size; i++ ) {
     DType* this_att = att + i * n_heads * seq_len;
-    for ( size_t j = 0; j < n_heads; j++ ) {
+    uint64_t j;
+    for ( j = 0; j < n_heads; j++ ) {
       softmax( this_att + j * seq_len, token_positions[i] + 1 );
     }
   }
@@ -333,8 +348,12 @@ void apply_rope( const uint64_t head_size,
                  DType* state_q,
                  DType* state_k )
 {
-  for ( uint64_t i = 0; i < batch_size; i++ ) {
-    for ( uint64_t j = 0; j < n_kv_heads; j++ ) {
+  uint64_t i;
+#pragma omp parallel for private( i )
+  for ( i = 0; i < batch_size; i++ ) {
+    uint64_t j;
+#pragma omp parallel for private( j )
+    for ( j = 0; j < n_kv_heads; j++ ) {
       for ( uint64_t k = 0; k < head_size / 2; k++ ) {
         const uint64_t head_q_num = gqa_size * j;
         const uint64_t head_k_num = j;
@@ -363,7 +382,9 @@ void copy_kv_cache( DType* context_pointers[],
                     const uint64_t batch_size,
                     const uint32_t* token_positions )
 {
-  for ( size_t i = 0; i < batch_size; i++ ) {
+  uint64_t i;
+#pragma omp parallel for private( i )
+  for ( i = 0; i < batch_size; i++ ) {
     DType* k_cache_pos = context_pointers[i] + token_positions[i] * n_layers * dim * 2;
     DType* v_cache_pos = k_cache_pos + dim;
 
@@ -378,14 +399,16 @@ void gumbel_fix( DType* array, float temp, const uint64_t vocab_size )
   for ( uint64_t i = 0; i < vocab_size; i++ ) {
     float myrandf = static_cast<float>( rand() ) / RAND_MAX;
     myrandf = logf( -logf( myrandf ) );
-    array[i] = float(array[i]) / temp - myrandf;
+    array[i] = float( array[i] ) / temp - myrandf;
   }
 }
 
 template<typename DType>
 void soft_sample( DType* v, const vector<float>& temp_s, const uint64_t vocab_size, const uint64_t batch_size )
 {
-  for ( uint64_t i = 0; i < batch_size; i++ ) {
+  uint64_t i;
+#pragma omp parallel for private( i )
+  for ( i = 0; i < batch_size; i++ ) {
     if ( temp_s[i] > 0 ) {
       gumbel_fix( v + i * vocab_size, temp_s[i], vocab_size );
     }
@@ -396,6 +419,7 @@ template<typename DType>
 void argmax( uint32_t* output, const DType* v, const uint64_t n, const uint64_t batch_size )
 {
   uint64_t b;
+#pragma omp parallel for private( b )
   for ( b = 0; b < batch_size; b++ ) {
     const DType* this_v = v + b * n;
 
