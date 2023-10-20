@@ -2,6 +2,7 @@
 
 #include <type_traits>
 
+#include "secure_socket.hh"
 #include "socket.hh"
 #include "util/ring_buffer.hh"
 #include "util/simple_string_span.hh"
@@ -13,13 +14,30 @@ class SessionBase;
 
 /* base for TCPSession */
 template<class T>
-class SessionBase<T, std::enable_if_t<std::is_same<T, TCPSocket>::value>>
+class SessionBase<T, std::enable_if_t<std::is_same_v<T, TCPSocket>>>
 {
 protected:
   TCPSocket socket_;
 
 public:
   SessionBase( TCPSocket&& socket );
+};
+
+/* base for SSLSession */
+template<class T>
+class SessionBase<T, std::enable_if_t<std::is_same_v<T, TCPSocketBIO>>>
+{
+protected:
+  SSL_handle ssl_;
+  TCPSocketBIO socket_;
+
+  int get_error( const int return_value ) const;
+
+  bool write_waiting_on_read_ {};
+  bool read_waiting_on_write_ {};
+
+public:
+  SessionBase( SSL_handle&& ssl, TCPSocket&& socket );
 };
 
 /// @brief A session is a connection between two peers.
@@ -60,6 +78,16 @@ public:
   Session& operator=( Session&& ) = default;
 };
 
+class SimpleSSLSession : public SessionBase<TCPSocketBIO>
+{
+public:
+  SimpleSSLSession( SSL_handle&& ssl, TCPSocket&& socket );
+
+  size_t read( simple_string_span buffer );
+  size_t write( const std::string_view buffer );
+};
+
 using TCPSession = Session<TCPSocket>;
+using SSLSession = Session<TCPSocketBIO>;
 
 }
