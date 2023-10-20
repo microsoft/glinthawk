@@ -16,7 +16,7 @@ void accum( DType* a, const DType* b, const uint64_t size, const uint64_t batch_
   size_t b_idx;
   for ( b_idx = 0; b_idx < batch_size; b_idx++ ) {
     for ( uint64_t i = 0; i < size; i++ ) {
-      a[b_idx * size + i] += b[b_idx * size + i];
+      a[b_idx * size + i] = float(a[b_idx * size + i]) + float(b[b_idx * size + i]);
     }
   }
 }
@@ -30,9 +30,9 @@ void rmsnorm( DType* output, const DType* x, const DType* weight, const uint64_t
     DType* O = output + b * size;
 
     // calculate sum of squares
-    DType ss = 0.0f;
+    float ss = 0.0f;
     for ( uint64_t j = 0; j < size; j++ ) {
-      ss += X[j] * X[j];
+      ss += float( X[j] ) * float( X[j] );
     }
 
     ss /= size;
@@ -41,7 +41,7 @@ void rmsnorm( DType* output, const DType* x, const DType* weight, const uint64_t
 
     // normalize and scale
     for ( uint64_t j = 0; j < size; j++ ) {
-      O[j] = weight[j] * ( ss * X[j] );
+      O[j] = float(weight[j]) * ( ss * float(X[j]) );
     }
   }
 }
@@ -72,16 +72,42 @@ void simple_gemm_strided_batch( int m,
 
     for ( int row = 0; row < m; row++ ) {
       for ( int col = 0; col < n; col++ ) {
-        DType sum = 0.0;
+        float sum = 0.0;
 
         for ( int p = 0; p < k; ++p ) {
-          const DType a_value = ( not transpose_a ) ? current_A[p * lda + row] : current_A[row * lda + p];
-          const DType b_value = ( not transpose_b ) ? current_B[col * ldb + p] : current_B[p * ldb + col];
+          const float a_value = ( not transpose_a ) ? current_A[p * lda + row] : current_A[row * lda + p];
+          const float b_value = ( not transpose_b ) ? current_B[col * ldb + p] : current_B[p * ldb + col];
           sum += a_value * b_value;
         }
 
-        current_C[col * ldc + row] = alpha * sum + beta * current_C[col * ldc + row];
+        current_C[col * ldc + row] = alpha * sum + beta * float(current_C[col * ldc + row]);
       }
+    }
+  }
+}
+
+template<typename DType>
+void fast_matmul_row_major( int m,
+                  int n,
+                  int k,
+                  const DType* A,
+                  int lda,
+                  const DType* B,
+                  int ldb,
+                  DType* C,
+                  int ldc )
+{
+  for ( int row = 0; row < m; row++ ) {
+    for ( int col = 0; col < n; col++ ) {
+      float sum = 0.0;
+
+      for ( int p = 0; p < k; ++p ) {
+        const float a_value = A[row * lda + p];
+        const float b_value = B[col * ldb + p];
+        sum += a_value * b_value;
+      }
+
+      C[col * ldc + row] = sum;
     }
   }
 }
@@ -101,7 +127,7 @@ void matmul( DType* xout, const DType* x, const DType* w, const uint64_t b, cons
   const uint64_t ldb = k;
   const uint64_t ldc = m;
 
-  simple_gemm_strided_batch( m, n, k, true, false, 1, w, lda, 0, x, ldb, 0, 0, xout, ldc, 0, 1 );
+  fast_matmul_row_major( m, n, k, w, lda, x, ldb, xout, ldc );
 }
 
 template<typename DType>
@@ -113,8 +139,8 @@ void silu( DType* hb, DType* hb2, const uint64_t hidden_dim, const uint64_t batc
     DType* current_hb2 = hb2 + b * hidden_dim;
 
     for ( size_t i = 0; i < hidden_dim; i++ ) {
-      const auto x = current_hb[i];
-      current_hb[i] = x * ( 1.0f / ( 1.0f + expf( -x ) ) ) * current_hb2[i];
+      const float x = current_hb[i];
+      current_hb[i] = x * ( 1.0f / ( 1.0f + expf( -x ) ) ) * float(current_hb2[i]);
     }
   }
 }
@@ -235,15 +261,15 @@ void softmax( DType* x, const uint64_t size )
   }
 
   // exp and sum
-  DType sum = 0.0f;
+  float sum = 0.0f;
   for ( uint64_t i = 0; i < size; i++ ) {
-    x[i] = expf( x[i] - max_val );
-    sum += x[i];
+    x[i] = expf( float(x[i] - max_val) );
+    sum += float(x[i]);
   }
 
   // normalize
   for ( uint64_t i = 0; i < size; i++ ) {
-    x[i] /= sum;
+    x[i] = float(x[i]) / sum;
   }
 }
 
@@ -280,17 +306,17 @@ inline void do_rope( const uint64_t head_size,
   DType* k = state_k + head_k_num * head_size;
 
   // rotate q and k by the freq_cis_real and freq_cis_imag
-  const DType fcr = freq_cis_real_row[elem_idx / 2];
-  const DType fci = freq_cis_imag_row[elem_idx / 2];
+  const float fcr = freq_cis_real_row[elem_idx / 2];
+  const float fci = freq_cis_imag_row[elem_idx / 2];
 
-  const DType k0 = k[elem_idx];
-  const DType k1 = k[elem_idx + 1];
+  const float k0 = k[elem_idx];
+  const float k1 = k[elem_idx + 1];
   k[elem_idx] = k0 * fcr - k1 * fci;
   k[elem_idx + 1] = k0 * fci + k1 * fcr;
 
   for ( uint64_t i = 0; i < gqa_size; i++ ) {
-    const DType q0 = q[i * head_size + elem_idx];
-    const DType q1 = q[i * head_size + elem_idx + 1];
+    const float q0 = q[i * head_size + elem_idx];
+    const float q1 = q[i * head_size + elem_idx + 1];
     q[i * head_size + elem_idx] = q0 * fcr - q1 * fci;
     q[i * head_size + elem_idx + 1] = q0 * fci + q1 * fcr;
   }
@@ -352,7 +378,7 @@ void gumbel_fix( DType* array, float temp, const uint64_t vocab_size )
   for ( uint64_t i = 0; i < vocab_size; i++ ) {
     float myrandf = static_cast<float>( rand() ) / RAND_MAX;
     myrandf = logf( -logf( myrandf ) );
-    array[i] = array[i] / temp - myrandf;
+    array[i] = float(array[i]) / temp - myrandf;
   }
 }
 

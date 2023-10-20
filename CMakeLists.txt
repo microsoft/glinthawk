@@ -44,6 +44,7 @@ link_libraries ( glinthawk )
 link_libraries ( glinthawk_proto )
 
 add_executable ( infer-layered-cpu src/frontend/infer-layered-cpu.cc )
+add_executable ( infer-cpu src/frontend/infer-cpu.cc )
 
 # Tests
 add_executable ( test_ops_cpu tests/ops_cpu.cc )
