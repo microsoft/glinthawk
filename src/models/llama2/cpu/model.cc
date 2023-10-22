@@ -40,13 +40,10 @@ string dtype_str()
 
 template<typename DType>
 Context<DType>::Context( const Config& config )
+  : storage_( reinterpret_cast<DType*>( malloc( InferenceContext<DType>::context_size( config ) ) ),
+              basic_deleter<DType> )
 {
-  void* v_ptr = malloc( InferenceContext<DType>::context_size( config ) );
-  if (v_ptr != NULL) {
-    DType* ptr = reinterpret_cast<DType*>( v_ptr );
-    storage_ = unique_ptr<DType, void ( * )( DType* )>{ ptr, basic_deleter<DType> };
-    this->buffer_ = storage_.get();
-  }
+  this->buffer_ = storage_.get();
 }
 
 template<typename DType>

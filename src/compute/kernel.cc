@@ -37,14 +37,15 @@ void ComputeKernel<Model>::execution_thread_func()
       }
     }
 
-    vector<InferenceState> results = model_->forward( input_states, contexts );
+    auto results = model_->forward( input_states, contexts );
 
     {
       unique_lock<mutex> lock( outgoing_mutex_ );
       while ( !results.empty() ) {
         // TODO: possible move bug shenanigans
-        outgoing_.emplace( move( results.front() ) );
-        results.pop();
+        // TODO: we reverse the order, does it matter?
+        outgoing_.emplace( move( results.back() ) );
+        results.pop_back();
       }
     }
 
