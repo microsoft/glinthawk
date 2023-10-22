@@ -114,12 +114,12 @@ public:
   {
     bool released;
     {
-      std::unique_lock<std::mutex> lock( ctx_mgr_mutex_ );
+      std::lock_guard lock( ctx_mgr_mutex_ );
       released = context_manager_.release( state.prompt_id() );
     }
     if ( released ) {
       {
-        std::unique_lock<std::mutex> lock( waiting_mutex_ );
+        std::lock_guard lock( waiting_mutex_ );
         released_ += 1;
       }
 
