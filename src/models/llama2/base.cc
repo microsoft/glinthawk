@@ -248,6 +248,12 @@ DType* InferenceContext<DType>::value( const Config& config, int layer_num, cons
   return key( config, layer_num, token_num, head_num ) + config.kv_dim;
 }
 
+template<typename DType>
+bool InferenceContext<DType>::empty()
+{
+  return buffer_ == nullptr;
+}
+
 /* BaseLlama2 */
 
 template<typename DType, typename Context>

@@ -42,13 +42,13 @@ string dtype_str()
 
 template<typename DType>
 Context<DType>::Context( const Config& config )
-  : storage_( [&]() -> decltype( storage_ ) {
-    DType* ptr;
-    ops::CHECK_CUDA( cudaMalloc( &ptr, InferenceContext<DType>::context_size( config ) ) );
-    return { ptr, cuda_deleter };
-  }() )
 {
-  this->buffer_ = storage_.get();
+  DType* ptr;
+  const cudaError_t err = cudaMalloc( &ptr, InferenceContext<DType>::context_size( config ) );
+  if ( err != cudaSuccess ) {
+    storage_ = unique_ptr<DType, void ( * )( DType* )>{ ptr, cuda_deleter };
+    this->buffer_ = storage_.get();
+  }
 }
 
 template<typename DType>

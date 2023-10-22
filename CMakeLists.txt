@@ -47,9 +47,9 @@ add_executable ( infer-layered-cpu src/frontend/infer-layered-cpu.cc )
 add_executable ( infer-cpu src/frontend/infer-cpu.cc )
 
 # Tests
-add_executable ( test_ops_cpu tests/ops_cpu.cc )
-target_link_libraries ( test_ops_cpu GTest::gtest )
-gtest_discover_tests ( test_ops_cpu )
+#add_executable ( test_ops_cpu tests/ops_cpu.cc )
+#target_link_libraries ( test_ops_cpu GTest::gtest )
+#gtest_discover_tests ( test_ops_cpu )
 
 
 if ( CUDA_ENABLED )

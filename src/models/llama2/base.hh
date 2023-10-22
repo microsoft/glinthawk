@@ -162,6 +162,8 @@ struct InferenceContext
   DType* buffer_ { nullptr };
   DType* key( const Config& config, int layer_num, const int token_pos, const int head = 0 );
   DType* value( const Config& config, int layer_num, const int token_pos, const int head = 0 );
+
+  bool empty();
 };
 
 template<typename DType, typename Context>

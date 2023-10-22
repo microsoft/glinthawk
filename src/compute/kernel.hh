@@ -34,8 +34,23 @@ public:
     }
 
     auto context = std::make_shared<typename Model::ContextType>( config_ );
-    contexts_.emplace( prompt_id, context );
-    return context;
+
+    if (context.get() -> empty()){
+      return nullptr;
+    } else {
+      contexts_.emplace( prompt_id, context );
+      return context;
+    }
+  }
+
+  bool release( const glinthawk::PromptID& prompt_id )
+  {
+    auto it = contexts_.find( prompt_id );
+    if ( it != contexts_.end() ) {
+      contexts_.erase(prompt_id);
+      return true;
+    }
+    return false;
   }
 };
 
@@ -46,27 +61,35 @@ private:
   std::unique_ptr<Model> model_;
   ContextManager<Model> context_manager_;
 
+  const uint64_t target_batch_;
+  uint64_t released_;
+
   std::thread execution_thread_;
   std::thread bookkeeping_thread_;
+  std::thread backlog_thread_;
 
-  std::queue<glinthawk::models::InferenceState> incoming_ {}, outgoing_ {};
+  std::queue<glinthawk::models::InferenceState> incoming_ {}, waiting_ {}, outgoing_ {};
   std::queue<std::pair<glinthawk::models::InferenceState, std::shared_ptr<typename Model::ContextType>>> processing_ {};
-  std::mutex incoming_mutex_ {}, processing_mutex_ {}, outgoing_mutex_ {};
-  std::condition_variable incoming_cv_ {}, processing_cv_ {}, outgoing_cv_ {};
+  std::mutex incoming_mutex_ {}, waiting_mutex_ {}, ctx_mgr_mutex_ {}, processing_mutex_ {}, outgoing_mutex_ {};
+  std::condition_variable incoming_cv_ {}, waiting_cv_ {}, processing_cv_ {}, outgoing_cv_ {};
 
   EventFD event_fd_ {};
 
   void execution_thread_func();
   void bookkeeping_thread_func();
+  void backlog_thread_func();
 
   std::atomic<bool> running_ { true };
 
 public:
-  ComputeKernel( std::unique_ptr<Model>&& model )
+  ComputeKernel( std::unique_ptr<Model>&& model, const uint64_t target_batch )
     : model_( std::move( model ) )
     , context_manager_( model_->config() )
+    , target_batch_( target_batch )
+    , released_( 0 )
     , execution_thread_( &ComputeKernel::execution_thread_func, this )
     , bookkeeping_thread_( &ComputeKernel::bookkeeping_thread_func, this )
+    , backlog_thread_( &ComputeKernel::backlog_thread_func, this )
   {
   }
 
@@ -87,6 +110,23 @@ public:
     outgoing_.pop();
   }
 
+  void release( glinthawk::models::InferenceState& state )
+  {
+    bool released;
+    {
+      std::unique_lock<std::mutex> lock( ctx_mgr_mutex_ );
+      released = context_manager_.release( state.prompt_id() );
+    }
+    if ( released ) {
+      {
+        std::unique_lock<std::mutex> lock( waiting_mutex_ );
+        released_ += 1;
+      }
+
+      waiting_cv_.notify_one();
+    }
+  }
+
   EventFD& event_fd() { return event_fd_; }
 
   ~ComputeKernel()
@@ -94,6 +134,7 @@ public:
     running_ = false;
     execution_thread_.join();
     bookkeeping_thread_.join();
+    backlog_thread_.join();
   }
 };
 
