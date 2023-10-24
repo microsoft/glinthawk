@@ -20,7 +20,7 @@ def serialize(tokens, output_dir):
         serialized_data += struct.pack("<I", token)
 
     output_file = sha256_base58(serialized_data).decode()
-    output_path = os.path.join(output_dir, output_file)
+    output_path = os.path.join(output_dir, f'{output_file}.ghp')
 
     with open(output_path, "wb") as f:
         f.write(serialized_data)
