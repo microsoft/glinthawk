@@ -2,6 +2,11 @@ import uuid
 
 from django.db import models
 from django.contrib.auth.models import User
+from django.core.validators import FileExtensionValidator
+
+
+def job_directory_path(instance, filename):
+    return "raw/user_{0}/{1}".format(instance.created_by.id, str(instance.uuid) + ".zip")
 
 
 class Job(models.Model):
@@ -19,8 +24,13 @@ class Job(models.Model):
         max_length=32, choices=LanguageModel.choices, default=LanguageModel.LLAMA2_7B
     )
 
-    file = models.FileField(upload_to="raw/", blank=True, null=True)
-    url = models.URLField(blank=True, null=True)
+    file = models.FileField(
+        upload_to=job_directory_path,
+        blank=True,
+        null=True,
+        validators=[FileExtensionValidator(allowed_extensions=["zip"])],
+    )
+
     created_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True)
     created_at = models.DateTimeField(auto_now_add=True)
     completed_at = models.DateTimeField(null=True, blank=True)
