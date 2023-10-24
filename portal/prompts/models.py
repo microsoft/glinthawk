@@ -1,3 +1,5 @@
+import uuid
+
 from django.db import models
 from django.contrib.auth.models import User
 
@@ -8,6 +10,10 @@ class Job(models.Model):
         LLAMA2_7B_CHAT = "llama2_7b_chat", "LLaMa2 7B Chat"
         LLAMA2_70B = "llama2_70b", "LLaMa2 70B"
         LLAMA2_70B_CHAT = "llama2_70b_chat", "LLaMa2 70B Chat"
+
+    uuid = models.UUIDField(
+        unique=True, editable=False, primary_key=True, default=uuid.uuid4
+    )
 
     language_model = models.CharField(
         max_length=32, choices=LanguageModel.choices, default=LanguageModel.LLAMA2_7B

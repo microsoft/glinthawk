@@ -1,29 +1,20 @@
 from django.contrib.auth.models import User
-from rest_framework import serializers
+from rest_framework import serializers, exceptions
 
 import base58
 
-from .models import Prompt
+from .models import Job, Prompt
+
+class JobSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Job
+        fields = ["language_model", "file", "created_at", "completed_at"]
+
+    def create(self, validated_data):
+        validated_data["created_by"] = self.context["request"].user
+        return super().create(validated_data)
 
 class PromptSerializer(serializers.ModelSerializer):
     class Meta:
         model = Prompt
-        fields = ["hash", "status", "submitted_at", "preprocessed_at", "completed_at"]
-        read_only_fields = ["hash", "submitted_at"]
-
-class PromptSubmissionSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = Prompt
-        fields = ["text", "language_model"]
-        read_only_fields = ["hash", "submitted_at"]
-
-    def create(self, validated_data):
-        prompt_text = validated_data["text"]
-        return Prompt.objects.create(
-            user=self.context["request"].user,
-            hash=base58.b58encode(prompt_text).decode(),
-            container="test",
-            origin="test",
-            language_model=validated_data["language_model"],
-            status=1,
-        )
+        fields = ["job", "hash"]
