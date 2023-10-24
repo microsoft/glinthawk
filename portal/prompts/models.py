@@ -10,6 +10,13 @@ def job_directory_path(instance, filename):
 
 
 class Job(models.Model):
+    class Status(models.IntegerChoices):
+        SUBMITTED = 1, "Submitted"
+        PROCESSING = 2, "Processing"
+        PROCESSED = 3, "Processed"
+        COMPLETED = 4, "Completed"
+        FAILED = 5, "Failed"
+
     class LanguageModel(models.TextChoices):
         LLAMA2_7B = "llama2_7b", "LLaMa2 7B"
         LLAMA2_7B_CHAT = "llama2_7b_chat", "LLaMa2 7B Chat"
@@ -31,6 +38,7 @@ class Job(models.Model):
         validators=[FileExtensionValidator(allowed_extensions=["zip"])],
     )
 
+    status = models.IntegerField(choices=Status.choices, default=Status.SUBMITTED)
     created_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True)
     created_at = models.DateTimeField(auto_now_add=True)
     completed_at = models.DateTimeField(null=True, blank=True)
@@ -39,9 +47,9 @@ class Job(models.Model):
 class Prompt(models.Model):
     class Status(models.IntegerChoices):
         SUBMITTED = 1, "Submitted"
-        PREPROCESSING = 2, "Preprocessing"
-        PREPROCESSED = 3, "Preprocessed"
-        COMPLETED = 4, "Completed"
+        PROCESSING = 2, "Processing"
+        COMPLETED = 3, "Completed"
+        FAILED = 4, "Failed"
 
     job = models.ForeignKey(Job, on_delete=models.CASCADE, null=True)
     hash = models.CharField(max_length=64)
