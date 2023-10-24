@@ -1,38 +1,29 @@
 import base58
 
 from django.shortcuts import render
-from rest_framework import viewsets, permissions, generics
+from rest_framework import viewsets, permissions, generics, mixins
 
-from .models import Prompt
-from .serializers import PromptSerializer
+from .models import Job, Prompt
+from .serializers import JobSerializer, PromptSerializer
 
 
-class PromptViewSet(viewsets.ModelViewSet):
-    """
-    API endpoint that allows prompts to be viewed or edited.
-    """
-
-    queryset = Prompt.objects.all().order_by("submitted_at")
-    serializer_class = PromptSerializer
+class JobViewSet(
+    mixins.CreateModelMixin,
+    mixins.ListModelMixin,
+    mixins.UpdateModelMixin,
+    viewsets.GenericViewSet,
+):
+    queryset = Job.objects.all()
+    serializer_class = JobSerializer
     permission_classes = [permissions.IsAuthenticated]
 
 
-class SubmitPromptView(generics.CreateAPIView):
-    """
-    API endpoint that allows prompts to be submitted.
-    """
-
-    queryset = Prompt.objects.all().order_by("submitted_at")
+class PromptViewSet(
+    mixins.CreateModelMixin,
+    mixins.ListModelMixin,
+    viewsets.GenericViewSet,
+    mixins.UpdateModelMixin,
+):
+    queryset = Prompt.objects.all()
     serializer_class = PromptSerializer
-    permission_classes = [permissions.IsAuthenticated]
-
-    def perform_create(self, serializer):
-        prompt_text = serializer.validated_data["text"]
-        serializer.save(
-            user=self.request.user,
-            hash=base58.b58encode(prompt_text).decode(),
-            container="test",
-            origin="test",
-            language_model="llama2_7b",
-            status=1,
-        )
+    permission_classes = [permissions.IsAdminUser]
