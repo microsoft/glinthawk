@@ -19,13 +19,11 @@ def serialize(tokens, output_dir):
     for token in tokens:
         serialized_data += struct.pack("<I", token)
 
-    output_file = sha256_base58(serialized_data).decode()
-    output_path = os.path.join(output_dir, f'{output_file}.ghp')
+    output_hash = sha256_base58(serialized_data).decode()
 
-    with open(output_path, "wb") as f:
-        f.write(serialized_data)
+    logging.info("Serialized %d tokens to %s", len(tokens), output_hash)
 
-    logging.info("Serialized %d tokens to %s", len(tokens), output_file)
+    return output_hash, serialized_data
 
 def deserialize(input_path):
     """Deserialize a list of tokens from a byte string."""

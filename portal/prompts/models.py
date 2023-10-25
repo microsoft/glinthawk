@@ -1,4 +1,5 @@
 import uuid
+import celery
 
 from django.db import models
 from django.contrib.auth.models import User
@@ -6,7 +7,9 @@ from django.core.validators import FileExtensionValidator
 
 
 def job_directory_path(instance, filename):
-    return "raw/user_{0}/{1}".format(instance.created_by.id, str(instance.uuid) + ".zip")
+    return "raw/user_{0}/{1}".format(
+        instance.created_by.id, str(instance.uuid) + ".zip"
+    )
 
 
 class Job(models.Model):
@@ -43,6 +46,13 @@ class Job(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     completed_at = models.DateTimeField(null=True, blank=True)
 
+    def save(self, *args, **kwargs):
+        super().save(*args, **kwargs)
+        celery.current_app.send_task(
+            "prompts.tasks.prepare_prompts_for_job", args=[self.uuid],
+            countdown=5
+        )
+
 
 class Prompt(models.Model):
     class Status(models.IntegerChoices):
@@ -50,6 +60,10 @@ class Prompt(models.Model):
         PROCESSING = 2, "Processing"
         COMPLETED = 3, "Completed"
         FAILED = 4, "Failed"
+
+    uuid = models.UUIDField(
+        unique=True, editable=False, primary_key=True, default=uuid.uuid4
+    )
 
     job = models.ForeignKey(Job, on_delete=models.CASCADE, null=True)
     hash = models.CharField(max_length=64)
