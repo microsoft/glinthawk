@@ -155,7 +155,7 @@ Worker<Model>::Worker( const Address& worker_address,
         case Message::OpCode::InitializeWorker: {
           LOG( INFO ) << "Initializing worker with params=" << msg.payload();
           protobuf::InitializeWorker request;
-          core::protoutil::from_json( msg.payload(), request );
+          request.ParseFromString( msg.payload() );
 
           // TODO(sadjad): eventually allow for loading multiple models
           // const auto& model_name = request.model_name();

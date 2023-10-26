@@ -18,6 +18,8 @@ from dataclasses import dataclass, field
 from common.message import Message
 from common.inference import InferenceState
 
+from protobuf import glinthawk_pb2 as proto
+
 logging.basicConfig(level=logging.INFO)
 
 
@@ -113,7 +115,7 @@ async def message_processor():
 
             response = Message(
                 Message.OpCode.InitializeWorker,
-                json.dumps(initialization_message).encode(),
+                initialization_message.SerializeToString(),
             )
 
             asyncio.create_task(send_message(worker, response))

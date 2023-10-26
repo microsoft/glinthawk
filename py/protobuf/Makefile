@@ -1,2 +1,2 @@
 all:
-	protoc --python_out=. *.proto
+	protoc --python_out=. glinthawk.proto
