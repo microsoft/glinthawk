@@ -17,6 +17,8 @@ from dataclasses import dataclass, field
 from common.message import Message
 from common.inference import InferenceState
 
+from protobuf import glinthawk_pb2 as proto
+
 logging.basicConfig(level=logging.INFO)
 
 
@@ -94,15 +96,15 @@ async def message_processor():
             worker.start_layer = worker.id * model.layers_per_worker
             worker.end_layer = (worker.id + 1) * model.layers_per_worker - 1
 
-            initialization_message = {
-                "model_name": "something",
-                "start_layer": worker.start_layer,
-                "end_layer": worker.end_layer,
-            }
+            initialization_message = proto.InitializeWorker(
+                model_name=model.name,
+                start_layer=worker.start_layer,
+                end_layer=worker.end_layer,
+            )
 
             response = Message(
                 Message.OpCode.InitializeWorker,
-                json.dumps(initialization_message).encode(),
+                initialization_message.SerializeToString(),
             )
 
             asyncio.create_task(send_message(worker, response))
