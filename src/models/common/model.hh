@@ -92,25 +92,6 @@ private:
 public:
   InferenceState() {}
 
-  InferenceState( const PromptID prompt_id,
-                  const ModelID model_id,
-                  const uint32_t token,
-                  const uint32_t token_pos,
-                  const uint32_t next_layer,
-                  const float temperature,
-                  DataBuffer&& activations,
-                  const std::map<uint32_t, glinthawk::net::Address>& layer_workers )
-    : prompt_id_( prompt_id )
-    , model_id_( model_id )
-    , token_( token )
-    , token_pos_( token_pos )
-    , next_layer_( next_layer )
-    , temperature_( temperature )
-    , activations_( std::move( activations ) )
-    , layer_workers_( layer_workers )
-  {
-  }
-
   InferenceState( const std::string_view serialized_state );
   std::string serialize() const;
   std::string to_string() const;
