@@ -297,7 +297,7 @@ void extract_batch_token( RunState<DType>& state, const Config& config, const st
 }
 
 template<typename DType>
-vector<InferenceState> Llama2<DType>::forward( const vector<reference_wrapper<const InferenceState>>& inference_states,
+vector<InferenceState> Llama2<DType>::forward( vector<InferenceState>&& inference_states,
                                                const vector<shared_ptr<ContextType>>& contexts )
 {
   // TODO(sadjad): refactor the checks into a separate function
@@ -307,28 +307,28 @@ vector<InferenceState> Llama2<DType>::forward( const vector<reference_wrapper<co
     << "current batch cannot be larger than max concurrency size";
 
   for ( auto& item : inference_states ) {
-    CHECK_EQ( item.get().next_layer(), this->config_.start_layer_num ) << "next_layer must be the start layer";
+    CHECK_EQ( item.next_layer(), this->config_.start_layer_num ) << "next_layer must be the start layer";
   }
 
   for ( size_t i = 0; i < inference_states.size(); i++ ) {
-    this->state_.batch_token_positions[i] = inference_states[i].get().token_pos();
+    this->state_.batch_token_positions[i] = inference_states[i].token_pos();
     CHECK_LT( this->state_.batch_token_positions[i], this->config_.seq_len )
       << "token position cannot be larger than sequence length";
   }
 
   this->state_.curr_concurrency_size = inference_states.size();
 
-  if ( inference_states[0].get().next_layer() == 0 ) {
+  if ( inference_states[0].next_layer() == 0 ) {
     vector<uint32_t> token_vector;
     for ( size_t i = 0; i < inference_states.size(); i++ ) {
-      token_vector.push_back( inference_states[i].get().token() );
+      token_vector.push_back( inference_states[i].token() );
     }
     pass_begin( token_vector );
   } else {
     for ( size_t i = 0; i < inference_states.size(); i++ )
       // load the activations
       ops::CHECK_CUDA( cudaMemcpyAsync( this->state_.x + i * this->config_.dim,
-                                        inference_states[i].get().activations().ptr.get(),
+                                        inference_states[i].activations().ptr.get(),
                                         this->config_.dim * sizeof( DType ),
                                         cudaMemcpyHostToDevice ) );
   }
@@ -340,29 +340,27 @@ vector<InferenceState> Llama2<DType>::forward( const vector<reference_wrapper<co
     transformer_layer( layer_num );
   }
 
-  vector<InferenceState> token_vector;
+  vector<InferenceState> output_states;
 
   if ( this->config_.end_layer_num == this->config_.n_layers - 1 ) {
     pass_end();
 
     vector<float> batch_temps;
     for ( size_t i = 0; i < inference_states.size(); i++ )
-      batch_temps.push_back( inference_states[i].get().temperature() );
+      batch_temps.push_back( inference_states[i].temperature() );
 
     extract_batch_token( this->state_, this->config_, batch_temps );
 
-    for ( size_t i = 0; i < inference_states.size(); i++ )
-      token_vector.emplace_back( inference_states[i].get().prompt_id(),     // prompt_id
-                                 inference_states[i].get().model_id(),      // model_id
-                                 this->state_.argmax_pos[i],                // token
-                                 inference_states[i].get().token_pos() + 1, // token_pos
-                                 0,                                         // next_layer
-                                 inference_states[i].get().temperature(),   // temperature
-                                 DataBuffer {},                             // activations
-                                 inference_states[i].get().layer_workers()  // layer_workers
-      );
+    for ( size_t i = 0; i < inference_states.size(); i++ ) {
+      output_states.push_back( move( inference_states[i] ) );
+      auto& item = output_states.back();
+      item.set_token( this->state_.argmax_pos[i] );
+      item.set_token_pos( item.token_pos() + 1 );
+      item.set_next_layer( 0 );
+      item.set_activations( {} );
+    }
 
-    return token_vector;
+    return output_states;
   }
 
   for ( size_t i = 0; i < inference_states.size(); i++ ) {
@@ -376,38 +374,23 @@ vector<InferenceState> Llama2<DType>::forward( const vector<reference_wrapper<co
                                  this->config_.dim * sizeof( DType ),
                                  cudaMemcpyDeviceToHost ) );
 
-    token_vector.emplace_back( inference_states[i].get().prompt_id(),                    // prompt_id
-                               inference_states[i].get().model_id(),                     // model_id
-                               inference_states[i].get().token(),                        // token
-                               inference_states[i].get().token_pos(),                    // token_pos
-                               static_cast<uint32_t>( this->config_.end_layer_num ) + 1, // next_layer
-                               inference_states[i].get().temperature(),                  // temperature
-                               move( activations ),                                      // activations
-                               inference_states[i].get().layer_workers()                 // layer_workers
-    );
+    output_states.push_back( move( inference_states[i] ) );
+    auto& item = output_states.back();
+    item.set_next_layer( this->config_.end_layer_num + 1 );
+    item.set_activations( move( activations ) );
   }
 
-  return token_vector;
+  return output_states;
 }
 
 template<typename DType>
-vector<InferenceState> Llama2<DType>::forward( const vector<InferenceState>& inference_state_s,
-                                               const vector<shared_ptr<ContextType>>& context_s )
+InferenceState Llama2<DType>::forward( InferenceState&& inference_state, shared_ptr<ContextType> context )
 {
-  vector<reference_wrapper<const InferenceState>> res;
-  for ( auto& state : inference_state_s )
-    res.push_back( ref( state ) );
-  return forward( res, context_s );
-}
-
-template<typename DType>
-InferenceState Llama2<DType>::forward( const InferenceState& inference_state, shared_ptr<ContextType>& context )
-{
-  vector<reference_wrapper<const InferenceState>> token_vector;
-  token_vector.push_back( ref( inference_state ) );
+  vector<InferenceState> token_vector;
+  token_vector.push_back( move( inference_state ) );
   vector<shared_ptr<ContextType>> context_vector;
-  context_vector.push_back( context );
-  return move( forward( token_vector, context_vector )[0] );
+  context_vector.push_back( move( context ) );
+  return move( forward( move( token_vector ), context_vector )[0] );
 }
 
 template class Context<__half>;

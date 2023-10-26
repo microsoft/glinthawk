@@ -49,9 +49,9 @@ public:
 
   virtual ~Llama2() {}
 
-  InferenceState forward( const InferenceState& inference_state, std::shared_ptr<ContextType>& context ) override;
+  InferenceState forward( InferenceState&& inference_state, std::shared_ptr<ContextType> context ) override;
 
-  std::vector<InferenceState> forward( const std::vector<InferenceState>& inference_states,
+  std::vector<InferenceState> forward( std::vector<InferenceState>&& inference_states,
                                        const std::vector<std::shared_ptr<ContextType>>& contexts ) override;
 };
 
