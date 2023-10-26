@@ -143,9 +143,9 @@ class Model
 public:
   virtual ~Model() = default;
 
-  virtual InferenceState forward( const InferenceState& inference_state, std::shared_ptr<Context>& context ) = 0;
+  virtual InferenceState forward( InferenceState&& inference_state, std::shared_ptr<Context> context ) = 0;
 
-  virtual std::vector<InferenceState> forward( const std::vector<InferenceState>& inference_states,
+  virtual std::vector<InferenceState> forward( std::vector<InferenceState>&& inference_states,
                                                const std::vector<std::shared_ptr<Context>>& contexts )
     = 0;
 };

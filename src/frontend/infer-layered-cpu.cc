@@ -102,7 +102,7 @@ int main( int argc, char* argv[] )
         contexts.push_back( context_managers[current_layer]->get_context( state.prompt_id() ) );
       }
 
-      auto output_states = llama.forward( states, contexts );
+      auto output_states = llama.forward( move( states ), contexts );
       input_states.clear();
 
       for ( const auto& state : output_states ) {
