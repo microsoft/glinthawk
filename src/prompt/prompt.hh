@@ -51,7 +51,7 @@ public:
   PromptManager( std::unique_ptr<storage::BlobStore>&& blobstore );
 
   std::shared_ptr<Prompt> get( const PromptID& prompt_id );
-  void preload( const std::vector<PromptID>& prompt_ids );
+  void fetch( const std::vector<PromptID>& prompt_ids );
 };
 
 class CompletionManager

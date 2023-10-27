@@ -47,13 +47,15 @@ PromptManager::PromptManager( unique_ptr<storage::BlobStore>&& blobstore )
 shared_ptr<Prompt> PromptManager::get( const PromptID& prompt_id )
 {
   if ( prompts_.count( prompt_id ) == 0 ) {
-    LOG( FATAL ) << "Prompt " << prompt_id.base58digest() << " not loaded";
+    // XXX avoid this
+    LOG( WARNING ) << "Prompt " << prompt_id.base58digest() << " not loaded; fetching...";
+    fetch( { prompt_id } );
   }
 
   return prompts_.at( prompt_id );
 }
 
-void PromptManager::preload( const vector<PromptID>& prompt_ids )
+void PromptManager::fetch( const vector<PromptID>& prompt_ids )
 {
   vector<string> keys;
   for ( const auto& prompt_id : prompt_ids ) {
