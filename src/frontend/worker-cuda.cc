@@ -60,7 +60,7 @@ int main( int argc, char* argv[] )
   try {
     net::Address listen_addr { listen_ip, listen_port };
     net::Address coordinator_addr { coordinator_ip, coordinator_port };
-    core::Worker<Llama2> worker { listen_addr, coordinator_addr, model_path };
+    core::Worker<Llama2> worker { listen_addr, coordinator_addr, model_path, { nullptr } };
 
     worker.run();
   } catch ( const exception& e ) {

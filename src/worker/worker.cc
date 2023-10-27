@@ -69,8 +69,8 @@ void Worker<Model>::setup_compute_kernel( const filesystem::path& model_root,
 {
   CHECK_LE( start_layer, end_layer ) << "start_layer must be less than or equal to end_layer";
 
-  compute_kernel_
-    = make_unique<compute::ComputeKernel<Model>>( make_unique<Model>( model_root, start_layer, end_layer ) );
+  compute_kernel_ = make_unique<compute::ComputeKernel<Model>>(
+    make_unique<Model>( model_root, start_layer, end_layer ), blobstore_ );
 
   event_loop_.add_rule(
     "Compute Kernel",
@@ -107,7 +107,8 @@ void Worker<Model>::setup_compute_kernel( const filesystem::path& model_root,
 template<typename Model>
 Worker<Model>::Worker( const Address& worker_address,
                        const Address& coordinator_address,
-                       const std::filesystem::path& model_root )
+                       const std::filesystem::path& model_root,
+                       shared_ptr<storage::BlobStore> blobstore )
   : listen_address_( worker_address )
   , listen_socket_( [this]() -> TCPSocket {
     TCPSocket socket;
@@ -128,6 +129,7 @@ Worker<Model>::Worker( const Address& worker_address,
                     return socket;
                   }() )
   , model_root_( model_root )
+  , blobstore_( blobstore )
 {
   // handle fd failures gracefully
   event_loop_.set_fd_failure_callback( [] { LOG( ERROR ) << "FD failure callback called."; } );

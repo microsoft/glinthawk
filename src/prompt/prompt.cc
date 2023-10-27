@@ -39,7 +39,7 @@ Prompt::Prompt( const string_view serialized_prompt )
   }
 }
 
-PromptManager::PromptManager( unique_ptr<storage::BlobStore>&& blobstore )
+PromptManager::PromptManager( shared_ptr<storage::BlobStore> blobstore )
   : blobstore_( move( blobstore ) )
 {
 }
@@ -90,6 +90,11 @@ string Completion::serialize()
   }
 
   return serialized_completion;
+}
+
+CompletionManager::CompletionManager( std::shared_ptr<storage::BlobStore> blobstore )
+  : blobstore_( move( blobstore ) )
+{
 }
 
 shared_ptr<Completion> CompletionManager::get( const PromptID& prompt_id )

@@ -13,6 +13,7 @@
 #include "net/address.hh"
 #include "net/session.hh"
 #include "net/socket.hh"
+#include "storage/blobstore.hh"
 #include "util/eventloop.hh"
 
 namespace glinthawk::core {
@@ -46,6 +47,7 @@ private:
   std::map<net::Address, Peer> peers_ {};
   std::unique_ptr<compute::ComputeKernel<Model>> compute_kernel_ { nullptr };
   std::filesystem::path model_root_;
+  std::shared_ptr<glinthawk::storage::BlobStore> blobstore_;
 
   core::MessageHandler<net::TCPSession>::RuleCategories rule_categories_ {
     .session = event_loop_.add_category( "Worker session" ),
@@ -63,9 +65,11 @@ public:
   /// \param worker_address The address of the worker
   /// \param coordinator_address The address of the coordinator
   /// \param model_root The root directory of the model
+  /// \param blobstore The blobstore to use for fetching prompts and saving completions
   Worker( const net::Address& worker_address,
           const net::Address& coordinator_address,
-          const std::filesystem::path& model_root );
+          const std::filesystem::path& model_root,
+          std::shared_ptr<glinthawk::storage::BlobStore> blobstore );
 
   void run();
 };

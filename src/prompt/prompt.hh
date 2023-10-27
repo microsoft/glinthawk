@@ -44,11 +44,11 @@ public:
 class PromptManager
 {
 private:
-  std::unique_ptr<storage::BlobStore> blobstore_ {};
+  std::shared_ptr<storage::BlobStore> blobstore_ {};
   std::unordered_map<PromptID, std::shared_ptr<Prompt>> prompts_ {};
 
 public:
-  PromptManager( std::unique_ptr<storage::BlobStore>&& blobstore );
+  PromptManager( std::shared_ptr<storage::BlobStore> blobstore );
 
   std::shared_ptr<Prompt> get( const PromptID& prompt_id );
   void fetch( const std::vector<PromptID>& prompt_ids );
@@ -57,11 +57,11 @@ public:
 class CompletionManager
 {
 private:
-  std::unique_ptr<storage::BlobStore> blobstore_ {};
+  std::shared_ptr<storage::BlobStore> blobstore_ {};
   std::unordered_map<PromptID, std::shared_ptr<Completion>> completions_ {};
 
 public:
-  CompletionManager( std::unique_ptr<storage::BlobStore>&& blobstore );
+  CompletionManager( std::shared_ptr<storage::BlobStore> blobstore );
 
   std::shared_ptr<Completion> get( const PromptID& prompt_id );
 
