@@ -80,6 +80,7 @@ private:
   uint32_t token_ { 1 };
   uint32_t token_pos_ { 0 };
   uint32_t next_layer_ { 0 };
+  uint32_t prompt_length_ { 1 };
   float temperature_ { 0.0f };
 
   DataBuffer activations_ {};
@@ -102,6 +103,7 @@ public:
   uint32_t token() const { return token_; }
   uint32_t token_pos() const { return token_pos_; }
   uint32_t next_layer() const { return next_layer_; }
+  uint32_t prompt_length() const { return prompt_length_; }
   float temperature() const { return temperature_; }
   const decltype( layer_workers_ )& layer_workers() const { return layer_workers_; }
 
@@ -110,9 +112,10 @@ public:
   void set_token( const uint32_t token ) { token_ = token; }
   void set_token_pos( const uint32_t token_pos ) { token_pos_ = token_pos; }
   void set_next_layer( const uint32_t next_layer ) { next_layer_ = next_layer; }
+  void set_prompt_length( const uint32_t prompt_length ) { prompt_length_ = prompt_length; }
   void set_temperature( const float temperature ) { temperature_ = temperature; }
   void set_activations( DataBuffer&& activations ) { activations_ = std::move( activations ); }
-  void set_layer_workers( decltype( layer_workers_ )&& layer_workers ) { layer_workers_ = layer_workers; }
+  void set_layer_workers( const decltype( layer_workers_ )& layer_workers ) { layer_workers_ = layer_workers; }
 
   glinthawk::net::Address next_worker() const;
   const DataBuffer& activations() const { return activations_; }

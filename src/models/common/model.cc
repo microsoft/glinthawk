@@ -36,6 +36,7 @@ InferenceState::InferenceState( const string_view serialized )
   token_ = _get_and_advance<decltype( token_ )>( ptr );
   token_pos_ = _get_and_advance<decltype( token_pos_ )>( ptr );
   next_layer_ = _get_and_advance<decltype( next_layer_ )>( ptr );
+  prompt_length_ = _get_and_advance<decltype( prompt_length_ )>( ptr );
   temperature_ = _get_and_advance<decltype( temperature_ )>( ptr );
 
   activations_.dtype.dtype
@@ -74,6 +75,7 @@ string InferenceState::serialize() const
   _put_and_advance( ptr, token_ );
   _put_and_advance( ptr, token_pos_ );
   _put_and_advance( ptr, next_layer_ );
+  _put_and_advance( ptr, prompt_length_ );
   _put_and_advance( ptr, temperature_ );
 
   _put_and_advance( ptr, static_cast<underlying_type_t<SerializedDataType::Type>>( activations_.dtype.dtype ) );
@@ -101,6 +103,7 @@ string InferenceState::to_string() const
       << "token=" << token_ << ", "
       << "token_pos=" << token_pos_ << ", "
       << "next_layer=" << next_layer_ << ", "
+      << "prompt_len=" << prompt_length_ << ", "
       << "temperature=" << temperature_ << ", "
       << "activations.len=" << activations_.len << ", "
       << "peers={";
@@ -121,6 +124,7 @@ size_t InferenceState::serialized_size() const
          + sizeof( token_ )                                                         /* token_ */
          + sizeof( token_pos_ )                                                     /* token_pos_ */
          + sizeof( next_layer_ )                                                    /* next_layer_ */
+         + sizeof( prompt_length_ )                                                 /* prompt_length_ */
          + sizeof( temperature_ )                                                   /* temperature_ */
          + sizeof( SerializedDataType::Type )                                       /* activations_.dtype.dtype */
          + sizeof( activations_.len )                                               /* activations_.len */
