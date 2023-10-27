@@ -23,6 +23,7 @@ class InferenceState:
     token: int = 1  # BOS
     token_pos: int = 0
     next_layer: int = 0
+    prompt_length: int = 0
     temperature: float = 0.0
     finished: bool = False
 
@@ -56,12 +57,13 @@ class InferenceState:
             raise Exception("Invalid prompt id")
 
         message = struct.pack(
-            "=32sIIIIf?BQ",
+            "=32sIIIIIf?BQ",
             self.prompt_id,
             self.model_id,
             self.token,
             self.token_pos,
             self.next_layer,
+            self.prompt_length,
             self.temperature,
             self.finished,
             self.activations_dtype,
