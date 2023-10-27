@@ -11,23 +11,6 @@ using namespace glinthawk::models;
 using namespace glinthawk::compute;
 using namespace glinthawk::prompt;
 
-PromptManager::PromptManager( const filesystem::path& prompt_dir )
-  : prompt_dir_( prompt_dir )
-{
-}
-
-shared_ptr<SerializedPrompt> PromptManager::get_prompt( const glinthawk::PromptID& prompt_id )
-{
-  auto it = prompts_.find( prompt_id );
-  if ( it != prompts_.end() ) {
-    return it->second;
-  }
-
-  auto prompt = make_shared<SerializedPrompt>( prompt_dir_ / prompt_id.base58digest() );
-  prompts_.emplace( prompt_id, prompt );
-  return prompt;
-}
-
 template<typename Model>
 void ComputeKernel<Model>::execution_thread_func()
 {

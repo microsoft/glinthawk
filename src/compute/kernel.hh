@@ -40,17 +40,6 @@ public:
   }
 };
 
-class PromptManager
-{
-private:
-  std::unordered_map<glinthawk::PromptID, std::shared_ptr<glinthawk::prompt::SerializedPrompt>> prompts_ {};
-  std::filesystem::path prompt_dir_ {};
-
-public:
-  PromptManager( const std::filesystem::path& prompt_dir );
-  std::shared_ptr<glinthawk::prompt::SerializedPrompt> get_prompt( const glinthawk::PromptID& prompt_id );
-};
-
 template<typename Model>
 class ComputeKernel
 {
