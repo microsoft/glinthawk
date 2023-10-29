@@ -114,13 +114,15 @@ public:
     return true;
   }
 
-  void release( glinthawk::models::InferenceState& state )
+  void push_finished( glinthawk::models::InferenceState&& state )
   {
+    // Release the context
     bool released;
     {
       std::lock_guard lock( ctx_mgr_mutex_ );
       released = context_manager_.release( state.prompt_id() );
     }
+    // if released, notify waiting prompts
     if ( released ) {
       {
         std::lock_guard lock( waiting_mutex_ );
@@ -128,6 +130,27 @@ public:
       }
 
       waiting_cv_.notify_one();
+    }
+
+    // propagate the release message to the next worker, and remove self from propagation list
+    state.erase_from_workers( model_ -> config().start_layer_num );
+    state.set_next_layer( model_ -> config().end_layer_num + 1 );
+
+    {
+      std::lock_guard lock( outgoing_mutex_ );
+      outgoing_.emplace( std::move( state ) );
+    }
+
+    event_fd_.write_event();
+  }
+
+  void check_finished( glinthawk::models::InferenceState& state )
+  {
+    if ( state.next_layer() == 0 ) {
+      if ( state.token() == 2 or state.token_pos() >= model_ -> config().seq_len ) { // EOS or out of length
+        state.set_finished();
+        // TODO: should we send the finished message back to the coordinator?
+      }
     }
   }
 

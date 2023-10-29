@@ -37,6 +37,7 @@ InferenceState::InferenceState( const string_view serialized )
   token_pos_ = _get_and_advance<decltype( token_pos_ )>( ptr );
   next_layer_ = _get_and_advance<decltype( next_layer_ )>( ptr );
   temperature_ = _get_and_advance<decltype( temperature_ )>( ptr );
+  finished_ = _get_and_advance<decltype( finished_ )>( ptr );
 
   activations_.dtype.dtype
     = static_cast<SerializedDataType::Type>( _get_and_advance<underlying_type_t<SerializedDataType::Type>>( ptr ) );
@@ -63,6 +64,11 @@ net::Address InferenceState::next_worker() const
   return it->second;
 }
 
+void InferenceState::erase_from_workers( const uint32_t next_layer )
+{
+  layer_workers_.erase( next_layer );
+}
+
 string InferenceState::serialize() const
 {
   string result;
@@ -75,6 +81,7 @@ string InferenceState::serialize() const
   _put_and_advance( ptr, token_pos_ );
   _put_and_advance( ptr, next_layer_ );
   _put_and_advance( ptr, temperature_ );
+  _put_and_advance( ptr, finished_ );
 
   _put_and_advance( ptr, static_cast<underlying_type_t<SerializedDataType::Type>>( activations_.dtype.dtype ) );
   _put_and_advance( ptr, activations_.len );
@@ -102,6 +109,7 @@ string InferenceState::to_string() const
       << "token_pos=" << token_pos_ << ", "
       << "next_layer=" << next_layer_ << ", "
       << "temperature=" << temperature_ << ", "
+      << "finished=" << finished_ << ", "
       << "activations.len=" << activations_.len << ", "
       << "peers={";
 
@@ -122,6 +130,7 @@ size_t InferenceState::serialized_size() const
          + sizeof( token_pos_ )                                                     /* token_pos_ */
          + sizeof( next_layer_ )                                                    /* next_layer_ */
          + sizeof( temperature_ )                                                   /* temperature_ */
+         + sizeof( finished_ )                                                      /* finished_ */
          + sizeof( SerializedDataType::Type )                                       /* activations_.dtype.dtype */
          + sizeof( activations_.len )                                               /* activations_.len */
          + activations_.dtype.size() * activations_.len                             /* activations_ data */

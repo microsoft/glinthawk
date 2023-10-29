@@ -81,6 +81,7 @@ private:
   uint32_t token_pos_ { 0 };
   uint32_t next_layer_ { 0 };
   float temperature_ { 0.0f };
+  bool finished_ { false };
 
   DataBuffer activations_ {};
 
@@ -122,6 +123,7 @@ public:
   uint32_t token_pos() const { return token_pos_; }
   uint32_t next_layer() const { return next_layer_; }
   float temperature() const { return temperature_; }
+  bool finished() const { return finished_; }
   const decltype( layer_workers_ )& layer_workers() const { return layer_workers_; }
 
   void set_prompt_id( const PromptID prompt_id ) { prompt_id_ = prompt_id; }
@@ -132,8 +134,10 @@ public:
   void set_temperature( const float temperature ) { temperature_ = temperature; }
   void set_activations( DataBuffer&& activations ) { activations_ = std::move( activations ); }
   void set_layer_workers( decltype( layer_workers_ )&& layer_workers ) { layer_workers_ = layer_workers; }
+  void set_finished( ) { finished_ = true; }
 
   glinthawk::net::Address next_worker() const;
+  void erase_from_workers( const uint32_t next_layer );
   const DataBuffer& activations() const { return activations_; }
 };
 

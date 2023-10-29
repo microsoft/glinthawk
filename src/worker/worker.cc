@@ -29,7 +29,14 @@ void Worker<Model>::setup_peer( std::map<net::Address, Peer>::iterator peer_it )
         case Message::OpCode::InferenceState: {
           auto state = models::InferenceState( msg.payload() );
           LOG( INFO ) << "Inference state: " << state.to_string();
-          this->compute_kernel_->push( move( state ) );
+
+          this->compute_kernel_->check_finished ( state );
+
+          if ( state.finished() ) {
+            this->compute_kernel_->push_finished( move ( state ) );
+          } else {
+            this->compute_kernel_->push( move( state ) );
+          }
           break;
         }
 
@@ -48,12 +55,6 @@ void Worker<Model>::setup_peer( std::map<net::Address, Peer>::iterator peer_it )
     [this, peer_it] {
       for ( auto& state : peer_it->second.outgoing_states ) {
         LOG( INFO ) << "Sending state to " << peer_it->first.to_string() << ": " << state.to_string();
-
-        if ( state.next_layer() == 0 ) {
-          if ( state.token() == 2 ) { // EOS
-            continue;
-          }
-        }
 
         peer_it->second.message_handler.push_message( Message( Message::OpCode::InferenceState, state.serialize() ) );
       }
@@ -84,6 +85,16 @@ void Worker<Model>::setup_compute_kernel( const filesystem::path& model_root,
       models::InferenceState state;
       while ( this->compute_kernel_->pop( state ) ) {
         LOG( INFO ) << "Got state from compute kernel: " << state.to_string();
+
+//        // little hack to test pull queue on one GPU without running out of memory.
+//        if (state.next_layer() == 10)
+//          state.set_next_layer( 22 );
+
+        // this was a release message, drop it as it has fully propagated
+        if ( state.layer_workers().empty() ){
+          LOG( INFO ) << "Dropping empty (release) inference state: " << state.to_string();
+          continue;
+        }
 
         const auto& next_worker = state.next_worker();
         auto peer_it = peers_.find( next_worker );

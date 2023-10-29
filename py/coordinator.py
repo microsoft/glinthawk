@@ -42,10 +42,11 @@ class Worker:
     model_name: str = ""
     start_layer: int = 0
     end_layer: int = 0
-    max_batch_size: int = 8
+    max_batch_size: int = 1
 
 
 model = ModelInfo(name="stories-110M-glint", n_layers=12, layers_per_worker=4)
+# model = ModelInfo(name="llama2-7b-chat", n_layers=20, layers_per_worker=10)
 workers = []
 layer_workers = {}
 incoming_messages = asyncio.Queue()
@@ -94,6 +95,13 @@ async def message_processor():
             # assinging layers to this worker
             worker.start_layer = worker.id * model.layers_per_worker
             worker.end_layer = (worker.id + 1) * model.layers_per_worker - 1
+            # A little trick to test GPU setup without running out of memory
+            # if worker.id == 0:
+            #     worker.start_layer = worker.id * model.layers_per_worker
+            #     worker.end_layer = (worker.id + 1) * model.layers_per_worker - 1
+            # else:
+            #     worker.start_layer = 22
+            #     worker.end_layer = 31
 
             initialization_message = {
                 "model_name": "something",
@@ -112,16 +120,18 @@ async def message_processor():
             layer_workers[worker.start_layer] = [worker.ip, worker.port]
 
             if len(layer_workers) == model.n_layers / model.layers_per_worker:
-                for batch_i in range(worker.max_batch_size * len(layer_workers)):
-                    # we're ready for lift-off
-                    state = InferenceState(layer_workers=layer_workers)
-                    message = Message(Message.OpCode.InferenceState, state.serialize())
+                for context_test in range(10):
+                    for batch_i in range(worker.max_batch_size * len(layer_workers)):
+                        # we're ready for lift-off
+                        state = InferenceState(layer_workers=layer_workers)
+                        message = Message(Message.OpCode.InferenceState, state.serialize())
 
-                    for w in workers:
-                        if w.start_layer == 0:
-                            logging.info(f"Sending InferenceState to {w.id}.")
-                            asyncio.create_task(send_message(w, message))
-                            break
+                        for w in workers:
+                            if w.start_layer == 0:
+                                logging.info(f"Sending InferenceState to {w.id}.")
+                                asyncio.create_task(send_message(w, message))
+                                break
+                    await asyncio.sleep(6)
 
 
 async def main(listen_address, listen_port):
