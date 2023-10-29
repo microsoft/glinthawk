@@ -30,6 +30,11 @@ void Worker<Model>::setup_peer( std::map<net::Address, Peer>::iterator peer_it )
           auto state = models::InferenceState( msg.payload() );
           LOG( INFO ) << "Inference state: " << state.to_string();
 
+          if ( state.next_layer() == 0 ) {
+            // We are the first layer, so send the result back to coordinator
+            coordinator_.message_handler.push_message( Message( Message::OpCode::InferenceState, state.serialize() ) );
+          }
+
           this->compute_kernel_->check_finished ( state );
 
           if ( state.finished() ) {

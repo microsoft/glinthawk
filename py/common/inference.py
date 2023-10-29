@@ -7,6 +7,9 @@ import datetime
 from typing import Mapping, Tuple, Any
 from dataclasses import dataclass, field
 
+SIZE_HEADER = struct.calcsize("=32sIIIIf?BQI")
+SIZE_MAP_ITEM = struct.calcsize("=I4sH")
+
 
 @dataclass
 class InferenceState:
@@ -30,6 +33,20 @@ class InferenceState:
     layer_workers: Mapping[int, Any] = field(
         default_factory=dict
     )  # layer -> (worker_ip, worker_port)
+
+    def load_from_payload(self, payload: bytes):
+        self.prompt_id, self.model_id, self.token, self.token_pos, self.next_layer, self.temperature, self.finished, \
+            self.activations_dtype, self.activations_len, len_layer_workers = struct.unpack("=32sIIIIf?BQI",
+                                                                                            payload[:SIZE_HEADER])
+
+        assert self.activations_len == 0, "Activations not yet supported"
+
+        len_left = len(payload) - SIZE_HEADER
+
+        while len_left > 0:
+            k, rev_v0, v_1 = struct.unpack("=I4sH", payload[-len_left:-len_left + SIZE_MAP_ITEM])
+            self.layer_workers[k] = [reversed(rev_v0), v_1]
+            len_left -= SIZE_HEADER
 
     def serialize(self) -> bytes:
         if self.activations_len != 0:

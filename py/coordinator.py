@@ -11,6 +11,7 @@ import socket
 import asyncio
 import logging
 import itertools
+from sentencepiece import SentencePieceProcessor
 
 from dataclasses import dataclass, field
 
@@ -42,7 +43,7 @@ class Worker:
     model_name: str = ""
     start_layer: int = 0
     end_layer: int = 0
-    max_concurrency_size: int = 20
+    max_concurrency_size: int = 1
 
 
 model = ModelInfo(name="stories-110M-glint", n_layers=12, layers_per_worker=4)
@@ -131,7 +132,11 @@ async def message_processor():
                                 logging.info(f"Sending InferenceState to {w.id}.")
                                 asyncio.create_task(send_message(w, message))
                                 break
-                    await asyncio.sleep(6)
+        elif message.opcode == Message.OpCode.InferenceState:
+            state = InferenceState()
+            state.load_from_payload(message.payload)
+            logging.info(
+                f"Worker {worker.id} returned token {tokenizer.decode([state.token])}(pos={state.token_pos}) for prompt {state.prompt_id.hex()[:8]}.")
 
 
 async def main(listen_address, listen_port):
@@ -143,10 +148,11 @@ async def main(listen_address, listen_port):
 
 
 if __name__ == "__main__":
-    if len(sys.argv) != 3:
-        sys.exit(f"Usage: {sys.argv[0]} <listen_address> <listen_port>")
+    if len(sys.argv) != 4:
+        sys.exit(f"Usage: {sys.argv[0]} tokenizer_path <listen_address> <listen_port>")
 
-    listen_address = sys.argv[1]
-    listen_port = int(sys.argv[2])
+    listen_address = sys.argv[2]
+    listen_port = int(sys.argv[3])
+    tokenizer = SentencePieceProcessor(model_file=sys.argv[1])
 
     asyncio.run(main(listen_address, listen_port))
