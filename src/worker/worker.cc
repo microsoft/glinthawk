@@ -68,12 +68,12 @@ template<typename Model>
 void Worker<Model>::setup_compute_kernel( const filesystem::path& model_root,
                                           const int start_layer,
                                           const int end_layer,
-                                          const int batch_size )
+                                          const int concurrency_size )
 {
   CHECK_LE( start_layer, end_layer ) << "start_layer must be less than or equal to end_layer";
 
   compute_kernel_ = make_unique<compute::ComputeKernel<Model>>(
-    make_unique<Model>( model_root, start_layer, end_layer, batch_size ), batch_size );
+    make_unique<Model>( model_root, start_layer, end_layer, concurrency_size ), concurrency_size );
 
   event_loop_.add_rule(
     "Compute Kernel",
@@ -89,12 +89,6 @@ void Worker<Model>::setup_compute_kernel( const filesystem::path& model_root,
 //        // little hack to test pull queue on one GPU without running out of memory.
 //        if (state.next_layer() == 10)
 //          state.set_next_layer( 22 );
-
-        // this was a release message, drop it as it has fully propagated
-        if ( state.layer_workers().empty() ){
-          LOG( INFO ) << "Dropping empty (release) inference state: " << state.to_string();
-          continue;
-        }
 
         const auto& next_worker = state.next_worker();
         auto peer_it = peers_.find( next_worker );
@@ -161,7 +155,7 @@ Worker<Model>::Worker( const Address& worker_address,
           // TODO(sadjad): eventually allow for loading multiple models
           // const auto& model_name = request.model_name();
 
-          setup_compute_kernel( model_root_, request.start_layer(), request.end_layer(), request.batch_size() );
+          setup_compute_kernel( model_root_, request.start_layer(), request.end_layer(), request.concurrency_size() );
 
           LOG( INFO ) << "Worker initialized.";
           break;

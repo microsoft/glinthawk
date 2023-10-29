@@ -43,15 +43,7 @@ public:
     }
   }
 
-  bool release( const glinthawk::PromptID& prompt_id )
-  {
-    auto it = contexts_.find( prompt_id );
-    if ( it != contexts_.end() ) {
-      contexts_.erase( prompt_id );
-      return true;
-    }
-    return false;
-  }
+  bool release( const glinthawk::PromptID& prompt_id ) { return contexts_.erase( prompt_id ) > 0; }
 };
 
 template<typename Model>
@@ -61,13 +53,13 @@ private:
   std::unique_ptr<Model> model_;
   ContextManager<Model> context_manager_;
 
-  const uint64_t target_batch_;
+  const uint64_t target_conc_size_;
   uint64_t released_;
 
   std::queue<glinthawk::models::InferenceState> incoming_ {}, waiting_ {}, outgoing_ {};
   std::queue<std::pair<glinthawk::models::InferenceState, std::shared_ptr<typename Model::ContextType>>> processing_ {};
   std::mutex incoming_mutex_ {}, waiting_mutex_ {}, ctx_mgr_mutex_ {}, processing_mutex_ {}, outgoing_mutex_ {};
-  std::condition_variable incoming_cv_ {}, waiting_cv_ {}, processing_cv_ {}, outgoing_cv_ {};
+  std::condition_variable incoming_cv_ {}, waiting_cv_ {}, processing_cv_ {};
 
   EventFD event_fd_ {};
 
@@ -82,10 +74,10 @@ private:
   std::thread backlog_thread_;
 
 public:
-  ComputeKernel( std::unique_ptr<Model>&& model, const uint64_t target_batch )
+  ComputeKernel( std::unique_ptr<Model>&& model, const uint64_t target_conc_size )
     : model_( std::move( model ) )
     , context_manager_( model_->config() )
-    , target_batch_( target_batch )
+    , target_conc_size_( target_conc_size )
     , released_( 0 )
     , running_( true )
     , execution_thread_( &ComputeKernel::execution_thread_func, this )
@@ -122,6 +114,7 @@ public:
       std::lock_guard lock( ctx_mgr_mutex_ );
       released = context_manager_.release( state.prompt_id() );
     }
+
     // if released, notify waiting prompts
     if ( released ) {
       {
@@ -132,25 +125,28 @@ public:
       waiting_cv_.notify_one();
     }
 
-    // propagate the release message to the next worker, and remove self from propagation list
-    state.erase_from_workers( model_ -> config().start_layer_num );
-    state.set_next_layer( model_ -> config().end_layer_num + 1 );
+    // do a "fake" forward: remove self from propagation list and set next worker
+    model_->dummy_forward( state );
 
-    {
-      std::lock_guard lock( outgoing_mutex_ );
-      outgoing_.emplace( std::move( state ) );
+    if ( state.layer_workers().empty() ) {
+      // drop release message as it has fully propagated
+      LOG( INFO ) << "Dropping empty (release) inference state: " << state.to_string();
+    } else {
+      // propagate the release message to the next worker
+      {
+        std::lock_guard lock( outgoing_mutex_ );
+        outgoing_.emplace( std::move( state ) );
+      }
+
+      event_fd_.write_event();
     }
-
-    event_fd_.write_event();
   }
 
   void check_finished( glinthawk::models::InferenceState& state )
   {
-    if ( state.next_layer() == 0 ) {
-      if ( state.token() == 2 or state.token_pos() >= model_ -> config().seq_len ) { // EOS or out of length
-        state.set_finished();
-        // TODO: should we send the finished message back to the coordinator?
-      }
+    if ( model_->is_finished( state ) ) {
+      state.set_finished();
+      // TODO: should we send the finished message back to the coordinator?
     }
   }
 

@@ -194,7 +194,9 @@ LayerWeights<DType>::LayerWeights( const Config& config, const DType* model )
 template<typename DType>
 size_t LayerWeights<DType>::layer_size( const Config& config )
 {
-  return sizeof( DType ) * ( 2 * config.dim + 2 * config.dim * config.dim + 2 * config.dim * config.kv_dim + 3 * config.dim * config.hidden_dim );
+  return sizeof( DType )
+         * ( 2 * config.dim + 2 * config.dim * config.dim + 2 * config.dim * config.kv_dim
+             + 3 * config.dim * config.hidden_dim );
 }
 
 /* RUN STATE */
@@ -285,6 +287,27 @@ void BaseLlama2<DType, Context>::init( const Config& config,
 
     return layers;
   }();
+}
+
+template<typename DType, typename Context>
+void BaseLlama2<DType, Context>::dummy_forward( InferenceState& inference_state )
+{
+  CHECK_EQ( inference_state.next_layer(), this->config_.start_layer_num );
+  inference_state.erase_from_workers( this->config().start_layer_num );
+  if ( this->config_.end_layer_num == this->config_.n_layers - 1 ) {
+    inference_state.set_next_layer( 0 );
+  } else {
+    inference_state.set_next_layer( this->config().end_layer_num + 1 );
+  }
+}
+
+template<typename DType, typename Context>
+bool BaseLlama2<DType, Context>::is_finished( const InferenceState& inference_state )
+{
+  CHECK_EQ( inference_state.next_layer(), this->config_.start_layer_num );
+  return ( inference_state.next_layer() == 0 )
+         and ( inference_state.token() == 2
+               or inference_state.token_pos() >= this->config_.seq_len ); // EOS or out of length
 }
 
 namespace glinthawk::models::llama2 {

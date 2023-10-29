@@ -200,6 +200,10 @@ public:
   using DataType = DType;
   using TokenizerType = Vocabulary;
 
+  void dummy_forward( InferenceState& inference_state ) override;
+
+  bool is_finished( const InferenceState& inference_state ) override;
+
   Config config() const { return config_; }
 };
 

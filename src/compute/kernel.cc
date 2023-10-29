@@ -27,9 +27,9 @@ void ComputeKernel<Model>::execution_thread_func()
 
     {
       unique_lock<mutex> lock( processing_mutex_ );
-      processing_cv_.wait( lock, [this] { return !( processing_.size() < target_batch_ ); } );
+      processing_cv_.wait( lock, [this] { return !( processing_.size() < target_conc_size_ ); } );
 
-      for ( size_t j = 0; j < target_batch_; j++ ) {
+      for ( size_t j = 0; j < target_conc_size_; j++ ) {
         action = move( processing_.front() );
         processing_.pop();
         // TODO: possible move bug shenanigans
@@ -41,12 +41,10 @@ void ComputeKernel<Model>::execution_thread_func()
     auto results = model_->forward( input_states, contexts );
 
     {
-      unique_lock<mutex> lock( outgoing_mutex_ );
-      while ( !results.empty() ) {
+      lock_guard lock( outgoing_mutex_ );
+      for ( auto& state : results ) {
         // TODO: possible move bug shenanigans
-        // TODO: we reverse the order, does it matter?
-        outgoing_.emplace( move( results.back() ) );
-        results.pop_back();
+        outgoing_.emplace( move( state ) );
       }
     }
 
@@ -72,7 +70,7 @@ void ComputeKernel<Model>::bookkeeping_thread_func()
     }
     {
       // let's get the context for this action
-      unique_lock<mutex> lock( ctx_mgr_mutex_ );
+      lock_guard lock( ctx_mgr_mutex_ );
       context = context_manager_.get_context( action.prompt_id() );
 
       //    if ( not context ) {
@@ -82,14 +80,14 @@ void ComputeKernel<Model>::bookkeeping_thread_func()
 
     if ( context ) {
       {
-        unique_lock<mutex> lock( processing_mutex_ );
+        lock_guard lock( processing_mutex_ );
         processing_.emplace( move( action ), context );
       }
 
       processing_cv_.notify_one();
     } else {
       {
-        unique_lock<mutex> lock( waiting_mutex_ );
+        lock_guard lock( waiting_mutex_ );
         waiting_.emplace( move( action ) );
       }
 
@@ -119,7 +117,7 @@ void ComputeKernel<Model>::backlog_thread_func()
 
     {
       // let's get the context for this action
-      unique_lock<mutex> lock( ctx_mgr_mutex_ );
+      lock_guard lock( ctx_mgr_mutex_ );
       context = context_manager_.get_context( action.prompt_id() );
 
       //    if ( not context ) {
@@ -129,14 +127,14 @@ void ComputeKernel<Model>::backlog_thread_func()
 
     if ( context ) {
       {
-        unique_lock<mutex> lock( processing_mutex_ );
+        lock_guard lock( processing_mutex_ );
         processing_.emplace( move( action ), context );
       }
 
       processing_cv_.notify_one();
     } else {
       {
-        unique_lock<mutex> lock( waiting_mutex_ );
+        lock_guard lock( waiting_mutex_ );
         waiting_.emplace( move( action ) );
       }
     }

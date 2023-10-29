@@ -134,7 +134,7 @@ public:
   void set_temperature( const float temperature ) { temperature_ = temperature; }
   void set_activations( DataBuffer&& activations ) { activations_ = std::move( activations ); }
   void set_layer_workers( decltype( layer_workers_ )&& layer_workers ) { layer_workers_ = layer_workers; }
-  void set_finished( ) { finished_ = true; }
+  void set_finished() { finished_ = true; }
 
   glinthawk::net::Address next_worker() const;
   void erase_from_workers( const uint32_t next_layer );
@@ -146,6 +146,10 @@ class Model
 {
 public:
   virtual ~Model() = default;
+
+  virtual void dummy_forward( InferenceState& inference_state ) = 0;
+
+  virtual bool is_finished( const InferenceState& inference_state ) = 0;
 
   virtual InferenceState forward( const InferenceState& inference_state, std::shared_ptr<Context>& context ) = 0;
 

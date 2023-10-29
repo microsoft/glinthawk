@@ -42,7 +42,7 @@ class Worker:
     model_name: str = ""
     start_layer: int = 0
     end_layer: int = 0
-    max_batch_size: int = 1
+    max_concurrency_size: int = 20
 
 
 model = ModelInfo(name="stories-110M-glint", n_layers=12, layers_per_worker=4)
@@ -107,7 +107,7 @@ async def message_processor():
                 "model_name": "something",
                 "start_layer": worker.start_layer,
                 "end_layer": worker.end_layer,
-                "batch_size": worker.max_batch_size,
+                "concurrency_size": worker.max_concurrency_size,
             }
 
             response = Message(
@@ -121,7 +121,7 @@ async def message_processor():
 
             if len(layer_workers) == model.n_layers / model.layers_per_worker:
                 for context_test in range(10):
-                    for batch_i in range(worker.max_batch_size * len(layer_workers)):
+                    for conc_i in range(worker.max_concurrency_size * len(layer_workers)):
                         # we're ready for lift-off
                         state = InferenceState(layer_workers=layer_workers)
                         message = Message(Message.OpCode.InferenceState, state.serialize())

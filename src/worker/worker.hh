@@ -58,7 +58,7 @@ private:
   void setup_compute_kernel( const std::filesystem::path& model_root,
                              const int start_layer,
                              const int end_layer,
-                             const int batch_size );
+                             const int concurrency_size );
 
 public:
   /// \brief Construct a new Worker object
