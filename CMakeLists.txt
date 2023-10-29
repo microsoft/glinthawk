@@ -45,6 +45,7 @@ link_libraries ( glinthawk_proto )
 
 add_executable ( infer-layered-cpu src/frontend/infer-layered-cpu.cc )
 add_executable ( infer-cpu src/frontend/infer-cpu.cc )
+add_executable ( worker-cpu src/frontend/worker-cpu.cc )
 
 # Tests
 #add_executable ( test_ops_cpu tests/ops_cpu.cc )
@@ -53,7 +54,7 @@ add_executable ( infer-cpu src/frontend/infer-cpu.cc )
 
 
 if ( CUDA_ENABLED )
-  # add_executable ( profile-cuda src/frontend/profile-cuda.cc )
+  add_executable ( profile-cuda src/frontend/profile-cuda.cc )
   add_executable ( infer-cuda src/frontend/infer-cuda.cc )
   add_executable ( infer-layered-cuda src/frontend/infer-layered-cuda.cc )
   add_executable ( profile-offload src/frontend/profile-offload.cc )

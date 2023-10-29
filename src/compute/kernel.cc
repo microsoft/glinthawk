@@ -2,6 +2,7 @@
 
 #include <glog/logging.h>
 
+#include "models/llama2/cpu/model.cc"
 #ifdef GLINTHAWK_CUDA_ENABLED
 #include "models/llama2/cuda/model.cuh"
 #endif
@@ -13,7 +14,7 @@ using namespace glinthawk::compute;
 template<typename Model>
 void ComputeKernel<Model>::execution_thread_func()
 {
-  LOG(INFO) << "ComputeKernel execution thread started.";
+  LOG( INFO ) << "ComputeKernel execution thread started.";
 
   pair<InferenceState, shared_ptr<typename Model::ContextType>> action;
   vector<InferenceState> input_states;
@@ -26,7 +27,7 @@ void ComputeKernel<Model>::execution_thread_func()
 
     {
       unique_lock<mutex> lock( processing_mutex_ );
-      processing_cv_.wait( lock, [this] { return !(processing_.size() < target_batch_); } );
+      processing_cv_.wait( lock, [this] { return !( processing_.size() < target_batch_ ); } );
 
       for ( size_t j = 0; j < target_batch_; j++ ) {
         action = move( processing_.front() );
@@ -56,7 +57,7 @@ void ComputeKernel<Model>::execution_thread_func()
 template<typename Model>
 void ComputeKernel<Model>::bookkeeping_thread_func()
 {
-  LOG(INFO) << "ComputeKernel bookkeeping thread started.";
+  LOG( INFO ) << "ComputeKernel bookkeeping thread started.";
 
   InferenceState action;
   shared_ptr<typename Model::ContextType> context;
@@ -79,8 +80,7 @@ void ComputeKernel<Model>::bookkeeping_thread_func()
       //    }
     }
 
-    if ( context )
-    {
+    if ( context ) {
       {
         unique_lock<mutex> lock( processing_mutex_ );
         processing_.emplace( move( action ), context );
@@ -101,7 +101,7 @@ void ComputeKernel<Model>::bookkeeping_thread_func()
 template<typename Model>
 void ComputeKernel<Model>::backlog_thread_func()
 {
-  LOG(INFO) << "ComputeKernel backlog thread started.";
+  LOG( INFO ) << "ComputeKernel backlog thread started.";
 
   InferenceState action;
   shared_ptr<typename Model::ContextType> context;
@@ -110,7 +110,7 @@ void ComputeKernel<Model>::backlog_thread_func()
     // let's get an action from the incoming_
     {
       unique_lock<mutex> lock( waiting_mutex_ );
-      while ( not ( released_ > 0  && !waiting_.empty() ) )
+      while ( not( released_ > 0 && !waiting_.empty() ) )
         waiting_cv_.wait( lock );
       action = move( waiting_.front() );
       waiting_.pop();
@@ -127,8 +127,7 @@ void ComputeKernel<Model>::backlog_thread_func()
       //    }
     }
 
-    if ( context )
-    {
+    if ( context ) {
       {
         unique_lock<mutex> lock( processing_mutex_ );
         processing_.emplace( move( action ), context );
@@ -147,3 +146,5 @@ void ComputeKernel<Model>::backlog_thread_func()
 #ifdef GLINTHAWK_CUDA_ENABLED
 template class glinthawk::compute::ComputeKernel<glinthawk::models::llama2::cuda::Llama2<__half>>;
 #endif
+template class glinthawk::compute::ComputeKernel<glinthawk::models::llama2::cpu::Llama2<_Float16>>;
+template class glinthawk::compute::ComputeKernel<glinthawk::models::llama2::cpu::Llama2<float>>;

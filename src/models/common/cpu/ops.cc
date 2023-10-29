@@ -69,7 +69,7 @@ void simple_gemm_strided_batch( uint64_t m,
 {
   uint64_t batch;
   uint64_t row;
-#pragma omp parallel for private( batch, row ) shared(A, B, C) collapse(2)
+#pragma omp parallel for private( batch, row ) shared( A, B, C ) collapse( 2 )
   for ( batch = 0; batch < batch_count; batch++ ) {
     for ( row = 0; row < m; row++ ) {
       uint64_t col;
@@ -104,7 +104,7 @@ void fast_matmul_row_major( uint64_t m,
 {
   uint64_t row;
   uint64_t col;
-#pragma omp parallel for private( row, col ) shared(A, B, C) collapse(2)
+#pragma omp parallel for private( row, col ) shared( A, B, C ) collapse( 2 )
   for ( row = 0; row < m; row++ ) {
     for ( col = 0; col < n; col++ ) {
       float sum = 0.0;
@@ -347,7 +347,7 @@ void apply_rope( const uint64_t head_size,
 {
   uint64_t i;
   uint64_t j;
-#pragma omp parallel for private( i, j ) collapse(2)
+#pragma omp parallel for private( i, j ) collapse( 2 )
   for ( i = 0; i < batch_size; i++ ) {
     for ( j = 0; j < n_kv_heads; j++ ) {
       for ( uint64_t k = 0; k < head_size / 2; k++ ) {

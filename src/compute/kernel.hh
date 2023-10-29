@@ -35,7 +35,7 @@ public:
 
     auto context = std::make_shared<typename Model::ContextType>( config_ );
 
-    if (context.get() -> empty()){
+    if ( context.get()->empty() ) {
       return nullptr;
     } else {
       contexts_.emplace( prompt_id, context );
@@ -47,7 +47,7 @@ public:
   {
     auto it = contexts_.find( prompt_id );
     if ( it != contexts_.end() ) {
-      contexts_.erase(prompt_id);
+      contexts_.erase( prompt_id );
       return true;
     }
     return false;
@@ -64,10 +64,6 @@ private:
   const uint64_t target_batch_;
   uint64_t released_;
 
-  std::thread execution_thread_;
-  std::thread bookkeeping_thread_;
-  std::thread backlog_thread_;
-
   std::queue<glinthawk::models::InferenceState> incoming_ {}, waiting_ {}, outgoing_ {};
   std::queue<std::pair<glinthawk::models::InferenceState, std::shared_ptr<typename Model::ContextType>>> processing_ {};
   std::mutex incoming_mutex_ {}, waiting_mutex_ {}, ctx_mgr_mutex_ {}, processing_mutex_ {}, outgoing_mutex_ {};
@@ -75,11 +71,15 @@ private:
 
   EventFD event_fd_ {};
 
+  std::atomic<bool> running_ { true };
+
   void execution_thread_func();
   void bookkeeping_thread_func();
   void backlog_thread_func();
 
-  std::atomic<bool> running_ { true };
+  std::thread execution_thread_;
+  std::thread bookkeeping_thread_;
+  std::thread backlog_thread_;
 
 public:
   ComputeKernel( std::unique_ptr<Model>&& model, const uint64_t target_batch )
@@ -87,6 +87,7 @@ public:
     , context_manager_( model_->config() )
     , target_batch_( target_batch )
     , released_( 0 )
+    , running_( true )
     , execution_thread_( &ComputeKernel::execution_thread_func, this )
     , bookkeeping_thread_( &ComputeKernel::bookkeeping_thread_func, this )
     , backlog_thread_( &ComputeKernel::backlog_thread_func, this )
@@ -103,11 +104,14 @@ public:
     incoming_cv_.notify_one();
   }
 
-  void pop( glinthawk::models::InferenceState& state )
+  bool pop( glinthawk::models::InferenceState& state )
   {
     std::lock_guard lock( outgoing_mutex_ );
+    if ( outgoing_.empty() )
+      return false;
     state = std::move( outgoing_.front() );
     outgoing_.pop();
+    return true;
   }
 
   void release( glinthawk::models::InferenceState& state )

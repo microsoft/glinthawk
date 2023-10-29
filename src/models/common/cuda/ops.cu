@@ -118,7 +118,7 @@ __global__ void reduce_norm_v2_square_batched( float* output, const __half* x, c
 
   const uint64_t global_tid = size * blockIdx.y + NRBS * 2 * blockIdx.x + threadIdx.x; // index within whole batch
   const uint64_t local_tid = NRBS * 2 * blockIdx.x + threadIdx.x;                      // index within array
-  const uint64_t tid = threadIdx.x;                                                   // index within block
+  const uint64_t tid = threadIdx.x;                                                    // index within block
 
   if ( local_tid < size ) {
     const float _x_f = __half2float( x[global_tid] );
@@ -150,7 +150,7 @@ __global__ void reduce_norm_v2_sum_batched( float* output, const float* x, const
 
   const uint64_t global_tid = size * blockIdx.y + NRBS * 2 * blockIdx.x + threadIdx.x; // index within whole batch
   const uint64_t local_tid = NRBS * 2 * blockIdx.x + threadIdx.x;                      // index within array
-  const uint64_t tid = threadIdx.x;                                                   // index within block
+  const uint64_t tid = threadIdx.x;                                                    // index within block
 
   if ( local_tid < size ) {
     s_out[tid] = x[global_tid];
@@ -371,12 +371,12 @@ __global__ void argmax_batched_init( uint32_t* output_arg, DType* output, const 
 {
   extern __shared__ float smem[];
 
-  DType *s_out = reinterpret_cast<DType*>(&smem[0]);
-  uint32_t *a_out = reinterpret_cast<uint32_t*>(s_out + AMRBS * 2);
+  DType* s_out = reinterpret_cast<DType*>( &smem[0] );
+  uint32_t* a_out = reinterpret_cast<uint32_t*>( s_out + AMRBS * 2 );
 
   const uint64_t global_tid = size * blockIdx.y + AMRBS * 2 * blockIdx.x + threadIdx.x; // index within whole batch
   const uint64_t local_tid = AMRBS * 2 * blockIdx.x + threadIdx.x;                      // index within array
-  const uint64_t tid = threadIdx.x;                                                   // index within block
+  const uint64_t tid = threadIdx.x;                                                     // index within block
 
   if ( local_tid < size ) {
     s_out[tid] = x[global_tid];
@@ -401,7 +401,7 @@ __global__ void argmax_batched_init( uint32_t* output_arg, DType* output, const 
 
   for ( unsigned int s = AMRBS; s > 1; s >>= 1 ) {
     if ( tid < s ) {
-      if (s_out[tid + s] > s_out[tid]){
+      if ( s_out[tid + s] > s_out[tid] ) {
         s_out[tid] = s_out[tid + s];
         a_out[tid] = a_out[tid + s];
       }
@@ -410,11 +410,10 @@ __global__ void argmax_batched_init( uint32_t* output_arg, DType* output, const 
   }
 
   if ( tid == 0 ) {
-    if (s_out[1] > s_out[0]){
+    if ( s_out[1] > s_out[0] ) {
       output[blockIdx.y * gridDim.x + blockIdx.x] = s_out[1];
       output_arg[blockIdx.y * gridDim.x + blockIdx.x] = a_out[1];
-    }
-    else {
+    } else {
       output[blockIdx.y * gridDim.x + blockIdx.x] = s_out[0];
       output_arg[blockIdx.y * gridDim.x + blockIdx.x] = a_out[0];
     }
@@ -422,16 +421,20 @@ __global__ void argmax_batched_init( uint32_t* output_arg, DType* output, const 
 }
 
 template<typename DType>
-__global__ void argmax_batched_next( uint32_t* output_arg, DType* output, const uint32_t* x_arg, const DType* x, const uint64_t size )
+__global__ void argmax_batched_next( uint32_t* output_arg,
+                                     DType* output,
+                                     const uint32_t* x_arg,
+                                     const DType* x,
+                                     const uint64_t size )
 {
   extern __shared__ float smem[];
 
-  DType *s_out = reinterpret_cast<DType*>(&smem[0]);
-  uint32_t *a_out = reinterpret_cast<uint32_t*>(s_out + AMRBS * 2);
+  DType* s_out = reinterpret_cast<DType*>( &smem[0] );
+  uint32_t* a_out = reinterpret_cast<uint32_t*>( s_out + AMRBS * 2 );
 
   const uint64_t global_tid = size * blockIdx.y + AMRBS * 2 * blockIdx.x + threadIdx.x; // index within whole batch
   const uint64_t local_tid = AMRBS * 2 * blockIdx.x + threadIdx.x;                      // index within array
-  const uint64_t tid = threadIdx.x;                                                   // index within block
+  const uint64_t tid = threadIdx.x;                                                     // index within block
 
   if ( local_tid < size ) {
     s_out[tid] = x[global_tid];
@@ -456,7 +459,7 @@ __global__ void argmax_batched_next( uint32_t* output_arg, DType* output, const 
 
   for ( unsigned int s = AMRBS; s > 1; s >>= 1 ) {
     if ( tid < s ) {
-      if (s_out[tid + s] > s_out[tid]){
+      if ( s_out[tid + s] > s_out[tid] ) {
         s_out[tid] = s_out[tid + s];
         a_out[tid] = a_out[tid + s];
       }
@@ -465,11 +468,10 @@ __global__ void argmax_batched_next( uint32_t* output_arg, DType* output, const 
   }
 
   if ( tid == 0 ) {
-    if (s_out[1] > s_out[0]){
+    if ( s_out[1] > s_out[0] ) {
       output[blockIdx.y * gridDim.x + blockIdx.x] = s_out[1];
       output_arg[blockIdx.y * gridDim.x + blockIdx.x] = a_out[1];
-    }
-    else {
+    } else {
       output[blockIdx.y * gridDim.x + blockIdx.x] = s_out[0];
       output_arg[blockIdx.y * gridDim.x + blockIdx.x] = a_out[0];
     }
@@ -488,7 +490,7 @@ void argmax_step_2( uint32_t* output_arg,
                     const uint64_t batch_size )
 {
   const uint64_t max_elems_per_block = AMRBS * 2;
-  const uint64_t shmem_size = (sizeof( DType ) + sizeof( uint32_t ) ) * max_elems_per_block;
+  const uint64_t shmem_size = ( sizeof( DType ) + sizeof( uint32_t ) ) * max_elems_per_block;
 
   const uint64_t grid_size = div_ceil( size, max_elems_per_block );
 
@@ -502,24 +504,21 @@ void argmax_step_2( uint32_t* output_arg,
 }
 
 template<typename DType>
-void argmax_step_1( uint32_t* output_arg,
-                    const DType* x,
-                    const uint64_t size,
-                    const uint64_t batch_size )
+void argmax_step_1( uint32_t* output_arg, const DType* x, const uint64_t size, const uint64_t batch_size )
 {
   const uint64_t max_elems_per_block = AMRBS * 2;
-  const uint64_t shmem_size = (sizeof( DType ) + sizeof( uint32_t ) ) * max_elems_per_block;
+  const uint64_t shmem_size = ( sizeof( DType ) + sizeof( uint32_t ) ) * max_elems_per_block;
 
   const uint64_t grid_size = div_ceil( size, max_elems_per_block );
 
   dim3 grids( grid_size, batch_size );
   if ( grid_size == 1 ) {
-    DType* output = reinterpret_cast<DType*>(output_arg + batch_size);
+    DType* output = reinterpret_cast<DType*>( output_arg + batch_size );
     argmax_batched_init<<<grids, AMRBS, shmem_size>>>( output_arg, output, x, size );
   } else {
-    DType* temp_1 = reinterpret_cast<DType*>(output_arg + batch_size);
+    DType* temp_1 = reinterpret_cast<DType*>( output_arg + batch_size );
     DType* temp_2 = temp_1 + batch_size * grid_size;
-    uint32_t* temp_1_arg = reinterpret_cast<uint32_t*>(temp_2 + batch_size * grid_size);
+    uint32_t* temp_1_arg = reinterpret_cast<uint32_t*>( temp_2 + batch_size * grid_size );
     uint32_t* temp_2_arg = temp_1_arg + batch_size * grid_size;
     argmax_batched_init<<<grids, AMRBS, shmem_size>>>( temp_1_arg, temp_1, x, size );
     argmax_step_2( output_arg, temp_1_arg, temp_1, temp_2_arg, temp_2, temp_1_arg, temp_1, grid_size, batch_size );
@@ -669,12 +668,12 @@ void apply_rope( const uint64_t head_size,
                  DType* state_k )
 {
   for ( uint64_t i = 0; i < curr_batch_size; i++ ) {
-    do_rope<<<n_kv_heads, head_size / 2>>>( head_size,
-                                            gqa_size,
-                                            freq_cis_real + token_positions[i] * head_size / 2,
-                                            freq_cis_imag + token_positions[i] * head_size / 2,
-                                            state_q + i * n_kv_heads * gqa_size * head_size,
-                                            state_k + i * n_kv_heads * head_size );
+    do_rope<<<n_kv_heads, head_size / 2, 0, streams[i]>>>( head_size,
+                                                           gqa_size,
+                                                           freq_cis_real + token_positions[i] * head_size / 2,
+                                                           freq_cis_imag + token_positions[i] * head_size / 2,
+                                                           state_q + i * n_kv_heads * gqa_size * head_size,
+                                                           state_k + i * n_kv_heads * head_size );
   }
 }
 
@@ -818,8 +817,16 @@ template void rmsnorm<__half>( __half* output,
                                const uint64_t size,
                                const uint64_t batch_size );
 
-template void argmax<float>( uint32_t* output, const float* v, float* temp, const uint64_t n, const uint64_t batch_size );
-template void argmax<__half>( uint32_t* output, const __half* v, __half* temp, const uint64_t n, const uint64_t batch_size );
+template void argmax<float>( uint32_t* output,
+                             const float* v,
+                             float* temp,
+                             const uint64_t n,
+                             const uint64_t batch_size );
+template void argmax<__half>( uint32_t* output,
+                              const __half* v,
+                              __half* temp,
+                              const uint64_t n,
+                              const uint64_t batch_size );
 
 template uint32_t argmax<float>( const float* v, const uint64_t n );
 template uint32_t argmax<__half>( const __half* v, const uint64_t n );

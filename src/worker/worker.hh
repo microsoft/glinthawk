@@ -55,7 +55,10 @@ private:
   };
 
   void setup_peer( std::map<net::Address, Peer>::iterator peer_it );
-  void setup_compute_kernel( const std::filesystem::path& model_root, const int start_layer, const int end_layer );
+  void setup_compute_kernel( const std::filesystem::path& model_root,
+                             const int start_layer,
+                             const int end_layer,
+                             const int batch_size );
 
 public:
   /// \brief Construct a new Worker object

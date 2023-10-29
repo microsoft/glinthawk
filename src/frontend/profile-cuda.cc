@@ -9,8 +9,12 @@
 #include <cuda_fp16.h>
 #include <glog/logging.h>
 
+#include "compute/kernel.hh"
 #include "models/llama2/cuda/model.cuh"
 #include "util/timer.hh"
+
+#define OOF_IMPL
+#include "oof/oof.hh"
 
 using namespace std;
 using namespace glinthawk;
@@ -23,7 +27,7 @@ static void signal_handler( int )
 
 void usage( const char* argv0 )
 {
-  cout << "Usage: " << argv0 << " <model_dir_path> <tokenizer_path> begin_slice end_slice batch_size" << endl;
+  cout << "Usage: " << argv0 << " <model_dir_path> begin_slice end_slice batch_size" << endl;
 }
 
 int main( int argc, char* argv[] )
@@ -32,7 +36,7 @@ int main( int argc, char* argv[] )
     abort();
   }
 
-  if ( argc != 6 ) {
+  if ( argc != 5 ) {
     usage( argv[0] );
     return EXIT_FAILURE;
   }
@@ -47,52 +51,54 @@ int main( int argc, char* argv[] )
 
   try {
     const filesystem::path model_dir_path { argv[1] };
-    const filesystem::path tokenizer_path { argv[2] };
 
-    const int start_slice = atoi( argv[3] );
-    const int end_slice = atoi( argv[4] );
-    const int batch_size = atoi( argv[5] );
+    const uint32_t start_slice = atoi( argv[2] );
+    const uint32_t end_slice = atoi( argv[3] );
+    const uint64_t batch_size = atoi( argv[4] );
 
-    const int dim = 4096;
-    const int seq_len = 2048;
+    using Llama2 = models::llama2::cuda::Llama2<__half>;
 
-    auto llama = models::llama2::cuda::Llama2<__half>::load( model_dir_path, start_slice, end_slice, batch_size );
-    models::llama2::Vocabulary vocabulary { tokenizer_path };
+    Llama2 llama { model_dir_path, start_slice, end_slice, batch_size };
+    compute::ContextManager<Llama2> context_manager = compute::ContextManager<Llama2>( llama.config() );
+    const uint64_t seq_len = llama.config().seq_len;
+    const uint64_t dim = llama.config().dim;
 
-    auto prompt_tokens_batch = vector<vector<models::InferenceState>>( seq_len );
-    for ( size_t i = 0; i < prompt_tokens_batch.size(); i++ ) {
-      prompt_tokens_batch[i] = vector<models::InferenceState>();
-      prompt_tokens_batch[i].reserve( batch_size );
+    auto input_states = vector<vector<models::InferenceState>>( seq_len );
+    auto contexts = vector<vector<shared_ptr<Llama2::ContextType>>>( seq_len );
 
-      for ( int j = 0; j < batch_size; j++ ) {
+    for ( size_t i = 0; i < input_states.size(); i++ ) {
+      input_states[i] = vector<models::InferenceState>();
+      input_states[i].reserve( batch_size );
+      contexts[i] = vector<shared_ptr<Llama2::ContextType>>();
+      contexts[i].reserve( batch_size );
+
+      for ( uint64_t j = 0; j < batch_size; j++ ) {
+        PromptID id;
+        util::digest::sha256( to_string( j ), id );
+
+        models::InferenceState state;
+
+        state.set_prompt_id( id );
+        state.set_token_pos( i );
+        state.set_next_layer( start_slice );
+        state.set_temperature( 0.0f );
         if ( start_slice == 0 ) {
-          prompt_tokens_batch[i].emplace_back( 1,                    // token
-                                               i,                    // token_pos
-                                               0,                    // next_layer
-                                               0.0,                  // temperature
-                                               models::DataBuffer {} // activations
-          );
+          state.set_token( 5 );
         } else {
           models::DataBuffer activations { models::SerializedDataType::Type::Float16,
                                            make_unique<uint8_t[]>( dim * sizeof( __half ) ),
                                            dim };
-          prompt_tokens_batch[i].emplace_back( 1,                       // token
-                                               i,                       // token_pos
-                                               start_slice,             // next_layer
-                                               0.0,                     // temperature
-                                               std::move( activations ) // activations
-          );
+          state.set_activations( move( activations ) );
         }
+
+        input_states[i].emplace_back( state.serialize() );
+        contexts[i].push_back( context_manager.get_context( id ) );
       }
     }
 
-    vector<uint32_t> prompt_ids_batch;
-    for ( int i = 0; i < batch_size; i++ )
-      prompt_ids_batch.push_back( i );
-
-    for ( size_t i = 0; i < prompt_tokens_batch.size(); i++ ) {
+    for ( size_t i = 0; i < input_states.size(); i++ ) {
       GlobalScopeTimer<Timer::Category::TokenGeneration> _;
-      llama->forward( prompt_tokens_batch[i], prompt_ids_batch );
+      llama.forward( input_states[i], contexts[i] );
     }
 
     cerr << endl << global_timer().summary() << endl;

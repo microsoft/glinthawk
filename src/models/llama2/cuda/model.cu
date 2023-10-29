@@ -50,7 +50,6 @@ Context<DType>::Context( const Config& config )
     } else {
       return { nullptr, cuda_deleter };
     }
-
   }() )
 {
   this->buffer_ = storage_.get();
@@ -77,17 +76,17 @@ Llama2<DType>::Llama2( const filesystem::path& model_path,
   llama2::Config config { config_path, start_layer, end_layer, concurrency_limit };
 
   CHECK_GT( 1025, config.n_heads ) << "Attention softmax has n_heads threads, and this cannot surpass 1024.";
-  CHECK_GT( 1 << 16, config.n_heads ) << "RoPE has n_heads blocks, and this cannot surpass 2^16.";
   CHECK_GT( 1025, config.dim / config.n_heads / 2 ) << "RoPE has head_size / 2 threads, and this cannot surpass 1024.";
-  CHECK_GT( 1 << 16, config.seq_len ) << "Attention softmax has seq_len blocks, and this cannot surpass 2^16.";
+  CHECK_GT( 1 << 31 - 1, config.n_heads ) << "RoPE has n_heads blocks, and this cannot surpass 2^16.";
+  CHECK_GT( 1 << 31 - 1, config.seq_len ) << "Attention softmax has seq_len blocks, and this cannot surpass 2^16.";
 
   CHECK_LT( ops::TPB, 1025 ) << "Threads per block cannot surpass 1024.";
-  CHECK_GT( 1 << 16, ops::div_ceil( config.dim * config.concurrency_limit, ops::TPB ) )
+  CHECK_GT( 1 << 31 - 1, ops::div_ceil( config.dim * config.concurrency_limit, ops::TPB ) )
     << "Accum blocks cannot surpass 2^16.";
-  CHECK_GT( 1 << 16, ops::div_ceil( config.hidden_dim * config.concurrency_limit, ops::TPB ) )
+  CHECK_GT( 1 << 31 - 1, ops::div_ceil( config.hidden_dim * config.concurrency_limit, ops::TPB ) )
     << "Silu blocks cannot surpass 2^16.";
-  CHECK_GT( 1 << 16, ops::div_ceil( config.vocab_size, ops::TPB ) ) << "CuRAND blocks cannot surpass 2^16.";
-  CHECK_GT( 1 << 16, ops::div_ceil( config.dim, ops::NRBS ) ) << "RMS Norm blocks cannot surpass 2^16.";
+  CHECK_GT( 1 << 31 - 1, ops::div_ceil( config.vocab_size, ops::TPB ) ) << "CuRAND blocks cannot surpass 2^16.";
+  CHECK_GT( 1 << 31 - 1, ops::div_ceil( config.dim, ops::NRBS ) ) << "RMS Norm blocks cannot surpass 2^16.";
   CHECK_GT( sizeof( DType ) * config.dim,
             sizeof( float )
               * ( ops::div_ceil( config.dim, 2 * ops::NRBS )

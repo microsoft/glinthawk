@@ -6,6 +6,7 @@
 
 #include "glinthawk.pb.h"
 
+#include "models/llama2/cpu/model.cc"
 #ifdef GLINTHAWK_CUDA_ENABLED
 #include "models/llama2/cuda/model.cuh"
 #endif
@@ -65,13 +66,13 @@ void Worker<Model>::setup_peer( std::map<net::Address, Peer>::iterator peer_it )
 template<typename Model>
 void Worker<Model>::setup_compute_kernel( const filesystem::path& model_root,
                                           const int start_layer,
-                                          const int end_layer )
+                                          const int end_layer,
+                                          const int batch_size )
 {
   CHECK_LE( start_layer, end_layer ) << "start_layer must be less than or equal to end_layer";
 
-  // TODO: add batch size here
-  compute_kernel_
-    = make_unique<compute::ComputeKernel<Model>>( make_unique<Model>( model_root, start_layer, end_layer ), 1 );
+  compute_kernel_ = make_unique<compute::ComputeKernel<Model>>(
+    make_unique<Model>( model_root, start_layer, end_layer, batch_size ), batch_size );
 
   event_loop_.add_rule(
     "Compute Kernel",
@@ -81,26 +82,27 @@ void Worker<Model>::setup_compute_kernel( const filesystem::path& model_root,
       this->compute_kernel_->event_fd().read_event();
 
       models::InferenceState state;
-      this->compute_kernel_->pop( state );
-      LOG( INFO ) << "Got state from compute kernel: " << state.to_string();
+      while ( this->compute_kernel_->pop( state ) ) {
+        LOG( INFO ) << "Got state from compute kernel: " << state.to_string();
 
-      const auto& next_worker = state.next_worker();
-      auto peer_it = peers_.find( next_worker );
-      bool peer_new = false;
+        const auto& next_worker = state.next_worker();
+        auto peer_it = peers_.find( next_worker );
+        bool peer_new = false;
 
-      // are we connected to this?
-      if ( peer_it == peers_.end() ) {
-        TCPSocket socket;
-        socket.set_blocking( false );
-        socket.connect( next_worker );
+        // are we connected to this?
+        if ( peer_it == peers_.end() ) {
+          TCPSocket socket;
+          socket.set_blocking( false );
+          socket.connect( next_worker );
 
-        tie( peer_it, peer_new ) = peers_.emplace(
-          piecewise_construct, forward_as_tuple( next_worker ), forward_as_tuple( next_worker, move( socket ) ) );
+          tie( peer_it, peer_new ) = peers_.emplace(
+            piecewise_construct, forward_as_tuple( next_worker ), forward_as_tuple( next_worker, move( socket ) ) );
 
-        setup_peer( peer_it );
+          setup_peer( peer_it );
+        }
+
+        peer_it->second.outgoing_states.push_back( move( state ) );
       }
-
-      peer_it->second.outgoing_states.push_back( move( state ) );
     },
     [this] { return this->compute_kernel_ != nullptr; } );
 }
@@ -148,7 +150,7 @@ Worker<Model>::Worker( const Address& worker_address,
           // TODO(sadjad): eventually allow for loading multiple models
           // const auto& model_name = request.model_name();
 
-          setup_compute_kernel( model_root_, request.start_layer(), request.end_layer() );
+          setup_compute_kernel( model_root_, request.start_layer(), request.end_layer(), request.batch_size() );
 
           LOG( INFO ) << "Worker initialized.";
           break;
@@ -215,5 +217,7 @@ namespace glinthawk::core {
 #ifdef GLINTHAWK_CUDA_ENABLED
 template class Worker<models::llama2::cuda::Llama2<__half>>;
 #endif
+template class Worker<models::llama2::cpu::Llama2<_Float16>>;
+template class Worker<models::llama2::cpu::Llama2<float>>;
 
 } // namespace glinthawk::core
