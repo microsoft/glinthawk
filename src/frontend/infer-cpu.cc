@@ -93,7 +93,7 @@ int main( int argc, char* argv[] )
         contexts.push_back( context_manager.get_context( state.prompt_id() ) );
       }
       GlobalScopeTimer<Timer::Category::TokenGeneration> _;
-      auto output_states = llama.forward( input_states, contexts );
+      auto output_states = llama.forward( move( input_states ), contexts );
       input_states.clear();
 
       if ( not prompt_processed ) {

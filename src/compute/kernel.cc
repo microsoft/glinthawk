@@ -39,7 +39,7 @@ void ComputeKernel<Model>::execution_thread_func()
       }
     }
 
-    auto results = model_->forward( input_states, contexts );
+    auto results = model_->forward( move( input_states ), contexts );
 
     {
       lock_guard lock( outgoing_mutex_ );

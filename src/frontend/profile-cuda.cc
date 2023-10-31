@@ -98,7 +98,7 @@ int main( int argc, char* argv[] )
 
     for ( size_t i = 0; i < input_states.size(); i++ ) {
       GlobalScopeTimer<Timer::Category::TokenGeneration> _;
-      llama.forward( input_states[i], contexts[i] );
+      llama.forward( move( input_states[i] ), contexts[i] );
     }
 
     cerr << endl << global_timer().summary() << endl;
