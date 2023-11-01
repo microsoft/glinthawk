@@ -13,6 +13,8 @@
 #include "net/address.hh"
 #include "net/session.hh"
 #include "net/socket.hh"
+#include "prompt/prompt.hh"
+#include "storage/blobstore.hh"
 #include "util/eventloop.hh"
 
 namespace glinthawk::core {
@@ -46,6 +48,10 @@ private:
   std::map<net::Address, Peer> peers_ {};
   std::unique_ptr<compute::ComputeKernel<Model>> compute_kernel_ { nullptr };
   std::filesystem::path model_root_;
+
+  std::shared_ptr<glinthawk::storage::BlobStore> blobstore_ { nullptr };
+  std::unique_ptr<glinthawk::prompt::PromptManager> prompt_manager_ { nullptr };
+  std::unique_ptr<glinthawk::prompt::CompletionManager> completion_manager_ { nullptr };
 
   core::MessageHandler<net::TCPSession>::RuleCategories rule_categories_ {
     .session = event_loop_.add_category( "Worker session" ),
