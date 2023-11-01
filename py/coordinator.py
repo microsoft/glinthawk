@@ -54,6 +54,8 @@ workers = []
 layer_workers = {}
 incoming_messages = asyncio.Queue()
 
+prompts_blobstore_uri = "file:///tmp/prompts/"
+
 
 async def handle_worker(reader, writer):
     global workers
@@ -111,6 +113,7 @@ async def message_processor():
                 start_layer=worker.start_layer,
                 end_layer=worker.end_layer,
                 concurrency_size=worker.max_concurrency_size,
+                blobstore_uri=prompts_blobstore_uri,
             )
 
             response = Message(

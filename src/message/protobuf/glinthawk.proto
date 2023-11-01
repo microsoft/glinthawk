@@ -8,4 +8,5 @@ message InitializeWorker
   uint32 start_layer = 2;
   uint32 end_layer = 3;
   uint32 concurrency_size = 4;
+  string blobstore_uri = 5;
 }

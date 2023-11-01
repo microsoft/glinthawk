@@ -46,8 +46,8 @@ private:
   Peer coordinator_;
 
   std::map<net::Address, Peer> peers_ {};
-  std::unique_ptr<compute::ComputeKernel<Model>> compute_kernel_ { nullptr };
   std::filesystem::path model_root_;
+  std::unique_ptr<compute::ComputeKernel<Model>> compute_kernel_ { nullptr };
 
   std::shared_ptr<glinthawk::storage::BlobStore> blobstore_ { nullptr };
   std::unique_ptr<glinthawk::prompt::PromptManager> prompt_manager_ { nullptr };

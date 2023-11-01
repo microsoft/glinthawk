@@ -13,7 +13,7 @@ _sym_db = _symbol_database.Default()
 
 
 
-DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x0fglinthawk.proto\x12\x12glinthawk.protobuf\"~\n\x10InitializeWorker\x12\x12\n\nmodel_name\x18\x01 \x01(\t\x12\x13\n\x0bstart_layer\x18\x02 \x01(\r\x12\x11\n\tend_layer\x18\x03 \x01(\r\x12\x18\n\x10\x63oncurrency_size\x18\x04 \x01(\r\x12\x14\n\x0c\x62lob_storage\x18\x05 \x01(\tb\x06proto3')
+DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x0fglinthawk.proto\x12\x12glinthawk.protobuf\"\x7f\n\x10InitializeWorker\x12\x12\n\nmodel_name\x18\x01 \x01(\t\x12\x13\n\x0bstart_layer\x18\x02 \x01(\r\x12\x11\n\tend_layer\x18\x03 \x01(\r\x12\x18\n\x10\x63oncurrency_size\x18\x04 \x01(\r\x12\x15\n\rblobstore_uri\x18\x05 \x01(\tb\x06proto3')
 
 _builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, globals())
 _builder.BuildTopDescriptorsAndMessages(DESCRIPTOR, 'glinthawk_pb2', globals())
@@ -21,5 +21,5 @@ if _descriptor._USE_C_DESCRIPTORS == False:
 
   DESCRIPTOR._options = None
   _INITIALIZEWORKER._serialized_start=39
-  _INITIALIZEWORKER._serialized_end=165
+  _INITIALIZEWORKER._serialized_end=166
 # @@protoc_insertion_point(module_scope)
