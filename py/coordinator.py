@@ -106,12 +106,12 @@ async def message_processor():
             #     worker.start_layer = 22
             #     worker.end_layer = 31
 
-            initialization_message = {
-                "model_name": "something",
-                "start_layer": worker.start_layer,
-                "end_layer": worker.end_layer,
-                "concurrency_size": worker.max_concurrency_size,
-            }
+            initialization_message = proto.InitializeWorker(
+                model_name=model.name,
+                start_layer=worker.start_layer,
+                end_layer=worker.end_layer,
+                concurrency_size=worker.max_concurrency_size,
+            )
 
             response = Message(
                 Message.OpCode.InitializeWorker,
@@ -124,10 +124,14 @@ async def message_processor():
 
             if len(layer_workers) == model.n_layers / model.layers_per_worker:
                 for context_test in range(10):
-                    for conc_i in range(worker.max_concurrency_size * len(layer_workers)):
+                    for conc_i in range(
+                        worker.max_concurrency_size * len(layer_workers)
+                    ):
                         # we're ready for lift-off
                         state = InferenceState(layer_workers=layer_workers)
-                        message = Message(Message.OpCode.InferenceState, state.serialize())
+                        message = Message(
+                            Message.OpCode.InferenceState, state.serialize()
+                        )
 
                         for w in workers:
                             if w.start_layer == 0:
@@ -138,7 +142,8 @@ async def message_processor():
             state = InferenceState()
             state.load_from_payload(message.payload)
             logging.info(
-                f"Worker {worker.id} returned token {tokenizer.decode([state.token])}(pos={state.token_pos}) for prompt {state.prompt_id.hex()[:8]}.")
+                f"Worker {worker.id} returned token {tokenizer.decode([state.token])}(pos={state.token_pos}) for prompt {state.prompt_id.hex()[:8]}."
+            )
 
 
 async def main(listen_address, listen_port):
