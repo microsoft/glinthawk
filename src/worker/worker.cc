@@ -35,10 +35,10 @@ void Worker<Model>::setup_peer( std::map<net::Address, Peer>::iterator peer_it )
             coordinator_.message_handler.push_message( Message( Message::OpCode::InferenceState, state.serialize() ) );
           }
 
-          this->compute_kernel_->check_finished ( state );
+          this->compute_kernel_->check_finished( state );
 
           if ( state.finished() ) {
-            this->compute_kernel_->push_finished( move ( state ) );
+            this->compute_kernel_->push_finished( move( state ) );
           } else {
             this->compute_kernel_->push( move( state ) );
           }
@@ -70,6 +70,17 @@ void Worker<Model>::setup_peer( std::map<net::Address, Peer>::iterator peer_it )
 }
 
 template<typename Model>
+void Worker<Model>::setup_blobstore( const string& blobstore_uri )
+{
+  auto blobstore = storage::BlobStore::create( blobstore_uri );
+  CHECK( blobstore ) << "Could not create blobstore.";
+
+  blobstore_ = move( blobstore );
+  prompt_manager_ = make_unique<prompt::PromptManager>( blobstore_ );
+  completion_manager_ = make_unique<prompt::CompletionManager>( blobstore_ );
+}
+
+template<typename Model>
 void Worker<Model>::setup_compute_kernel( const filesystem::path& model_root,
                                           const int start_layer,
                                           const int end_layer,
@@ -91,9 +102,9 @@ void Worker<Model>::setup_compute_kernel( const filesystem::path& model_root,
       while ( this->compute_kernel_->pop( state ) ) {
         LOG( INFO ) << "Got state from compute kernel: " << state.to_string();
 
-//        // little hack to test pull queue on one GPU without running out of memory.
-//        if (state.next_layer() == 10)
-//          state.set_next_layer( 22 );
+        // little hack to test pull queue on one GPU without running out of memory.
+        // if (state.next_layer() == 10)
+        //   state.set_next_layer( 22 );
 
         const auto& next_worker = state.next_worker();
         auto peer_it = peers_.find( next_worker );
@@ -161,6 +172,7 @@ Worker<Model>::Worker( const Address& worker_address,
           // const auto& model_name = request.model_name();
 
           setup_compute_kernel( model_root_, request.start_layer(), request.end_layer(), request.concurrency_size() );
+          setup_blobstore( request.blobstore_uri() );
 
           LOG( INFO ) << "Worker initialized.";
           break;

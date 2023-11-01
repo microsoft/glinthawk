@@ -61,6 +61,7 @@ private:
   };
 
   void setup_peer( std::map<net::Address, Peer>::iterator peer_it );
+  void setup_blobstore( const std::string& blobstore_uri );
   void setup_compute_kernel( const std::filesystem::path& model_root,
                              const int start_layer,
                              const int end_layer,
