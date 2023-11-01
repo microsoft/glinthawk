@@ -1,5 +1,6 @@
 #pragma once
 
+#include <memory>
 #include <string>
 #include <utility>
 #include <vector>
@@ -16,6 +17,9 @@ enum class OpResult
 
 class BlobStore
 {
+public:
+  static std::unique_ptr<BlobStore> create( const std::string& uri );
+
 public:
   BlobStore() {};
   virtual ~BlobStore() {}
