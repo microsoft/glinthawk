@@ -186,7 +186,6 @@ void Llama2<DType>::transformer_layer( const int32_t layer_num )
   const uint64_t n_heads = this->config_.n_heads;
   const uint64_t n_kv_heads = this->config_.n_kv_heads;
   const uint64_t seq_len = this->config_.seq_len;
-  const uint64_t n_layers_loaded = this->config_.n_layers_loaded();
   const uint64_t curr_conc_lvl = this->state_.curr_concurrency_size;
 
   const auto& layer_weights = this->layer_weights_[layer_num];
@@ -214,7 +213,6 @@ void Llama2<DType>::transformer_layer( const int32_t layer_num )
                       this->state_.k,
                       this->state_.v,
                       kv_dim,
-                      n_layers_loaded,
                       curr_conc_lvl,
                       this->state_.batch_token_positions );
 
@@ -222,7 +220,6 @@ void Llama2<DType>::transformer_layer( const int32_t layer_num )
   ops::attention_0_gemm( this->state_.q,
                          this->state_.batch_context_pointers,
                          this->state_.att,
-                         n_layers_loaded,
                          seq_len,
                          head_size,
                          n_kv_heads,
@@ -237,7 +234,6 @@ void Llama2<DType>::transformer_layer( const int32_t layer_num )
   ops::attention_2_gemm( this->state_.att,
                          this->state_.batch_context_pointers,
                          this->state_.xb,
-                         n_layers_loaded,
                          seq_len,
                          head_size,
                          n_kv_heads,

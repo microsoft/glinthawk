@@ -232,12 +232,11 @@ void copy_kv_cache( DType* context_pointers[],
                     const DType* state_k,
                     const DType* state_v,
                     const uint64_t kv_dim,
-                    const uint64_t n_layers,
                     const uint64_t batch_size,
                     const uint32_t* token_positions )
 {
   for ( size_t i = 0; i < batch_size; i++ ) {
-    DType* k_cache_pos = context_pointers[i] + token_positions[i] * n_layers * kv_dim * 2;
+    DType* k_cache_pos = context_pointers[i] + token_positions[i] * kv_dim * 2;
     DType* v_cache_pos = k_cache_pos + kv_dim;
 
     ops::CHECK_CUDA(
@@ -251,7 +250,6 @@ template<typename DType>
 void attention_0_gemm( const DType* query,
                        const DType* const context_pointers[],
                        DType* att,
-                       const uint64_t n_layers,
                        const uint64_t seq_len,
                        const uint64_t head_size,
                        const uint64_t n_kv_heads,
@@ -265,7 +263,7 @@ void attention_0_gemm( const DType* query,
   const uint64_t k = head_size;
   const uint64_t n = gqa_size;
 
-  const uint64_t lda = n_layers * n_kv_heads * head_size * 2;
+  const uint64_t lda = n_kv_heads * head_size * 2;
   const uint64_t ldb = k;
   const uint64_t ldc = seq_len;
 
@@ -310,7 +308,6 @@ template<typename DType>
 void attention_2_gemm( const DType* att,
                        const DType* const context_pointers[],
                        DType* xb,
-                       const uint64_t n_layers,
                        const uint64_t seq_len,
                        const uint64_t head_size,
                        const uint64_t n_kv_heads,
@@ -323,7 +320,7 @@ void attention_2_gemm( const DType* att,
   const uint64_t m = head_size;
   const uint64_t n = gqa_size;
 
-  const uint64_t lda = n_layers * n_kv_heads * head_size * 2;
+  const uint64_t lda = n_kv_heads * head_size * 2;
   const uint64_t ldb = seq_len;
   const uint64_t ldc = m;
 
@@ -864,7 +861,6 @@ template void silu<__half>( __half* _hb, __half* _hb2, const uint64_t hidden_dim
 template void attention_0_gemm<float>( const float* query,
                                        const float* const context_pointers[],
                                        float* att,
-                                       const uint64_t n_layers,
                                        const uint64_t seq_len,
                                        const uint64_t head_size,
                                        const uint64_t n_kv_heads,
@@ -875,7 +871,6 @@ template void attention_0_gemm<float>( const float* query,
 template void attention_0_gemm<__half>( const __half* query,
                                         const __half* const context_pointers[],
                                         __half* att,
-                                        const uint64_t n_layers,
                                         const uint64_t seq_len,
                                         const uint64_t head_size,
                                         const uint64_t n_kv_heads,
@@ -886,7 +881,6 @@ template void attention_0_gemm<__half>( const __half* query,
 template void attention_2_gemm<float>( const float* att,
                                        const float* const context_pointers[],
                                        float* xb,
-                                       const uint64_t n_layers,
                                        const uint64_t seq_len,
                                        const uint64_t head_size,
                                        const uint64_t n_kv_heads,
@@ -897,7 +891,6 @@ template void attention_2_gemm<float>( const float* att,
 template void attention_2_gemm<__half>( const __half* att,
                                         const __half* const context_pointers[],
                                         __half* xb,
-                                        const uint64_t n_layers,
                                         const uint64_t seq_len,
                                         const uint64_t head_size,
                                         const uint64_t n_kv_heads,
@@ -943,7 +936,6 @@ template void copy_kv_cache<float>( float* context_pointers[],
                                     const float* state_k,
                                     const float* state_v,
                                     const uint64_t dim,
-                                    const uint64_t n_layers,
                                     const uint64_t batch_size,
                                     const uint32_t* token_positions );
 
@@ -951,7 +943,6 @@ template void copy_kv_cache<__half>( __half* context_pointers[],
                                      const __half* state_k,
                                      const __half* state_v,
                                      const uint64_t dim,
-                                     const uint64_t n_layers,
                                      const uint64_t batch_size,
                                      const uint32_t* token_positions );
 

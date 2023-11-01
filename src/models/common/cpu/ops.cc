@@ -5,6 +5,8 @@
 #include <cstring>
 #include <vector>
 
+#include <glog/logging.h>
+
 using namespace std;
 
 namespace glinthawk::models::common::cpu::ops {
@@ -155,10 +157,176 @@ void silu( DType* hb, DType* hb2, const uint64_t hidden_dim, const uint64_t batc
 }
 
 template<typename DType>
+void attention_0_gemm_fast( const DType* query,
+                            const DType* const context_pointers[],
+                            DType* att,
+                            const uint64_t seq_len,
+                            const uint64_t head_size,
+                            const uint64_t n_kv_heads,
+                            const uint64_t gqa_size,
+                            const uint64_t batch_size,
+                            const uint32_t* token_positions )
+{
+  const float scale = 1.0f / sqrtf( head_size );
+
+  const uint64_t ld_key = n_kv_heads * head_size * 2;
+  const uint64_t ld_qry = head_size;
+  const uint64_t ld_att = seq_len;
+
+  const uint64_t stride_key = head_size;
+  const uint64_t stride_qry = head_size * gqa_size;
+  const uint64_t stride_att = seq_len * gqa_size;
+
+  const uint64_t dim_ = head_size * n_kv_heads * gqa_size;
+  const uint64_t att_dim_ = seq_len * n_kv_heads * gqa_size;
+
+  uint64_t i;
+  uint64_t kv_head;
+  uint64_t key_pos;
+  uint64_t query_gqa_head;
+
+#pragma omp parallel for private( i, kv_head, query_gqa_head ) shared( token_positions, context_pointers, query, att ) \
+  collapse( 3 )
+  for ( i = 0; i < batch_size; i++ ) {
+    for ( kv_head = 0; kv_head < n_kv_heads; kv_head++ ) {
+      for ( query_gqa_head = 0; query_gqa_head < gqa_size; query_gqa_head++ ) {
+        for ( key_pos = 0; key_pos < token_positions[i] + 1; key_pos++ ) {
+
+          const DType* current_key = context_pointers[i] + kv_head * stride_key + key_pos * ld_key;
+          const DType* current_query = query + i * dim_ + kv_head * stride_qry + query_gqa_head * ld_qry;
+          DType* current_att = att + i * att_dim_ + kv_head * stride_att;
+
+          float sum = 0.0;
+          for ( uint64_t p = 0; p < head_size; ++p ) {
+            const float a_value = current_key[p];
+            const float b_value = current_query[p];
+            sum += a_value * b_value;
+          }
+
+          current_att[query_gqa_head * ld_att + key_pos] = scale * sum;
+        }
+      }
+    }
+  }
+}
+
+template<typename DType>
+void attention_2_gemm_fast( const DType* att,
+                            const DType* const context_pointers[],
+                            DType* xb,
+                            const uint64_t seq_len,
+                            const uint64_t head_size,
+                            const uint64_t n_kv_heads,
+                            const uint64_t gqa_size,
+                            const uint64_t batch_size,
+                            const uint32_t* token_positions )
+{
+  const uint64_t ld_val = n_kv_heads * head_size * 2;
+  const uint64_t ld_att = seq_len;
+  const uint64_t ld_xb = head_size;
+
+  const uint64_t stride_val = head_size;
+  const uint64_t stride_att = seq_len * gqa_size;
+  const uint64_t stride_xb = head_size * gqa_size;
+
+  const uint64_t kv_dim_ = head_size * n_kv_heads;
+  const uint64_t dim_ = head_size * n_kv_heads * gqa_size;
+  const uint64_t att_dim_ = seq_len * n_kv_heads * gqa_size;
+
+  uint64_t i;
+  uint64_t kv_head;
+  uint64_t val_pos;
+  uint64_t p;
+  uint64_t att_gqa_head;
+  uint64_t round_index;
+
+  const size_t sum_len = 16;
+  float sum_s[sum_len];
+  uint64_t rounds = head_size / sum_len;
+  CHECK_EQ( head_size % sum_len, 0 ) << "Remainders are bad";
+
+#pragma omp parallel for private( i, kv_head, att_gqa_head, round_index, sum_s ) schedule( dynamic )                   \
+  shared( token_positions, context_pointers, att, xb ) collapse( 4 )
+  for ( i = 0; i < batch_size; i++ ) {
+    for ( kv_head = 0; kv_head < n_kv_heads; kv_head++ ) {
+      for ( att_gqa_head = 0; att_gqa_head < gqa_size; att_gqa_head++ ) {
+        for ( round_index = 0; round_index < rounds; round_index++ ) {
+
+          std::memset( sum_s, 0, sizeof( float ) * sum_len );
+          const DType* current_att = att + i * att_dim_ + kv_head * stride_att + att_gqa_head * ld_att;
+          const DType* current_value = context_pointers[i] + kv_dim_ + kv_head * stride_val + round_index * sum_len;
+
+          for ( p = 0; p < token_positions[i] + 1; ++p ) {
+            const float b_value = current_att[p];
+
+            for ( val_pos = 0; val_pos < sum_len; val_pos++ ) {
+              const float a_value = current_value[val_pos];
+              sum_s[val_pos] += a_value * b_value;
+            }
+            current_value += ld_val;
+          }
+          DType* current_xb = xb + i * dim_ + kv_head * stride_xb + att_gqa_head * ld_xb + round_index * sum_len;
+          for ( val_pos = 0; val_pos < sum_len; val_pos++ ) {
+            current_xb[val_pos] = sum_s[val_pos];
+          }
+        }
+      }
+    }
+  }
+
+  //  // v2
+  //  std::memset( xb, 0, sizeof( DType ) * batch_size * dim_ );
+  //
+  // #pragma omp parallel for private( i, kv_head ) schedule ( dynamic ) shared( token_positions, context_pointers, att,
+  // xb ) collapse( 1 )
+  //  for ( i = 0; i < batch_size; i++ ) {
+  //    for ( kv_head = 0; kv_head < n_kv_heads; kv_head++ ) {
+  //      for ( p = 0; p < token_positions[i] + 1; ++p ) {
+  //
+  //        const DType* current_value = context_pointers[i] + kv_dim_ + kv_head * stride_val + p * ld_val;
+  //        const DType* current_att = att + i * att_dim_ + kv_head * stride_att;
+  //        DType* current_xb = xb + i * dim_ + kv_head * stride_xb;
+  //
+  //        for ( val_pos = 0; val_pos < head_size; val_pos++ ) {
+  //          const float a_value = current_value[val_pos];
+  //          for ( uint64_t att_gqa_head = 0; att_gqa_head < gqa_size; att_gqa_head++ ) {
+  //            const float b_value = current_att[att_gqa_head * ld_att + p];
+  //            current_xb[att_gqa_head * ld_xb + val_pos] += a_value * b_value;
+  //          }
+  //        }
+  //      }
+  //    }
+  //  }
+  //  uint64_t att_gqa_head;
+  //
+  // #pragma omp parallel for private( i, kv_head, att_gqa_head ) shared( token_positions, context_pointers, att, xb )
+  // collapse( 3 )
+  //  for ( i = 0; i < batch_size; i++ ) {
+  //    for ( kv_head = 0; kv_head < n_kv_heads; kv_head++ ) {
+  //      for ( att_gqa_head = 0; att_gqa_head < gqa_size; att_gqa_head++ ) {
+  //        for ( val_pos = 0; val_pos < head_size; val_pos++ ) {
+  //
+  //          const DType* current_value = context_pointers[i] + kv_dim_ + kv_head * stride_val;
+  //          const DType* current_att = att + i * att_dim_ + kv_head * stride_att;
+  //          DType* current_xb = xb + i * dim_ + kv_head * stride_xb;
+  //
+  //          float sum = 0;
+  //          for ( p = 0; p < token_positions[i] + 1; ++p ) {
+  //            const float a_value = current_value[p * ld_val + val_pos];
+  //            const float b_value = current_att[att_gqa_head * ld_att + p];
+  //            sum += a_value * b_value;
+  //          }
+  //          current_xb[att_gqa_head * ld_xb + val_pos] = sum;
+  //        }
+  //      }
+  //    }
+  //  }
+}
+
+template<typename DType>
 void attention_0_gemm( const DType* query,
                        const DType* const context_pointers[],
                        DType* att,
-                       const uint64_t n_layers,
                        const uint64_t seq_len,
                        const uint64_t head_size,
                        const uint64_t n_kv_heads,
@@ -171,7 +339,7 @@ void attention_0_gemm( const DType* query,
   const uint64_t k = head_size;
   const uint64_t n = gqa_size;
 
-  const uint64_t lda = n_layers * n_kv_heads * head_size * 2;
+  const uint64_t lda = n_kv_heads * head_size * 2;
   const uint64_t ldb = k;
   const uint64_t ldc = seq_len;
 
@@ -210,7 +378,6 @@ template<typename DType>
 void attention_2_gemm( const DType* att,
                        const DType* const context_pointers[],
                        DType* xb,
-                       const uint64_t n_layers,
                        const uint64_t seq_len,
                        const uint64_t head_size,
                        const uint64_t n_kv_heads,
@@ -221,7 +388,7 @@ void attention_2_gemm( const DType* att,
   const uint64_t m = head_size;
   const uint64_t n = gqa_size;
 
-  const uint64_t lda = n_layers * n_kv_heads * head_size * 2;
+  const uint64_t lda = n_kv_heads * head_size * 2;
   const uint64_t ldb = seq_len;
   const uint64_t ldc = m;
 
@@ -374,14 +541,13 @@ void copy_kv_cache( DType* context_pointers[],
                     const DType* state_k,
                     const DType* state_v,
                     const uint64_t dim,
-                    const uint64_t n_layers,
                     const uint64_t batch_size,
                     const uint32_t* token_positions )
 {
   uint64_t i;
 #pragma omp parallel for private( i )
   for ( i = 0; i < batch_size; i++ ) {
-    DType* k_cache_pos = context_pointers[i] + token_positions[i] * n_layers * dim * 2;
+    DType* k_cache_pos = context_pointers[i] + token_positions[i] * dim * 2;
     DType* v_cache_pos = k_cache_pos + dim;
 
     memcpy( k_cache_pos, state_k + i * dim, dim * sizeof( DType ) );
@@ -458,7 +624,6 @@ template void soft_sample<_Float16>( _Float16* v,
 template void attention_0_gemm<_Float16>( const _Float16* query,
                                           const _Float16* const context_pointers[],
                                           _Float16* att,
-                                          const uint64_t n_layers,
                                           const uint64_t seq_len,
                                           const uint64_t head_size,
                                           const uint64_t n_kv_heads,
@@ -469,13 +634,32 @@ template void attention_0_gemm<_Float16>( const _Float16* query,
 template void attention_2_gemm<_Float16>( const _Float16* att,
                                           const _Float16* const context_pointers[],
                                           _Float16* xb,
-                                          const uint64_t n_layers,
                                           const uint64_t seq_len,
                                           const uint64_t head_size,
                                           const uint64_t n_kv_heads,
                                           const uint64_t gqa_size,
                                           const uint64_t batch_size,
                                           const uint32_t* token_positions );
+
+template void attention_0_gemm_fast<_Float16>( const _Float16* query,
+                                               const _Float16* const context_pointers[],
+                                               _Float16* att,
+                                               const uint64_t seq_len,
+                                               const uint64_t head_size,
+                                               const uint64_t n_kv_heads,
+                                               const uint64_t gqa_size,
+                                               const uint64_t batch_size,
+                                               const uint32_t* token_positions );
+
+template void attention_2_gemm_fast<_Float16>( const _Float16* att,
+                                               const _Float16* const context_pointers[],
+                                               _Float16* xb,
+                                               const uint64_t seq_len,
+                                               const uint64_t head_size,
+                                               const uint64_t n_kv_heads,
+                                               const uint64_t gqa_size,
+                                               const uint64_t batch_size,
+                                               const uint32_t* token_positions );
 
 template void attention_softmax<_Float16>( _Float16* att,
                                            const uint32_t* token_positions,
@@ -498,7 +682,6 @@ template void copy_kv_cache<_Float16>( _Float16* context_pointers[],
                                        const _Float16* state_k,
                                        const _Float16* state_v,
                                        const uint64_t dim,
-                                       const uint64_t n_layers,
                                        const uint64_t batch_size,
                                        const uint32_t* token_positions );
 
@@ -527,7 +710,6 @@ template void soft_sample<float>( float* v,
 template void attention_0_gemm<float>( const float* query,
                                        const float* const context_pointers[],
                                        float* att,
-                                       const uint64_t n_layers,
                                        const uint64_t seq_len,
                                        const uint64_t head_size,
                                        const uint64_t n_kv_heads,
@@ -538,13 +720,32 @@ template void attention_0_gemm<float>( const float* query,
 template void attention_2_gemm<float>( const float* att,
                                        const float* const context_pointers[],
                                        float* xb,
-                                       const uint64_t n_layers,
                                        const uint64_t seq_len,
                                        const uint64_t head_size,
                                        const uint64_t n_kv_heads,
                                        const uint64_t gqa_size,
                                        const uint64_t batch_size,
                                        const uint32_t* token_positions );
+
+template void attention_0_gemm_fast<float>( const float* query,
+                                            const float* const context_pointers[],
+                                            float* att,
+                                            const uint64_t seq_len,
+                                            const uint64_t head_size,
+                                            const uint64_t n_kv_heads,
+                                            const uint64_t gqa_size,
+                                            const uint64_t batch_size,
+                                            const uint32_t* token_positions );
+
+template void attention_2_gemm_fast<float>( const float* att,
+                                            const float* const context_pointers[],
+                                            float* xb,
+                                            const uint64_t seq_len,
+                                            const uint64_t head_size,
+                                            const uint64_t n_kv_heads,
+                                            const uint64_t gqa_size,
+                                            const uint64_t batch_size,
+                                            const uint32_t* token_positions );
 
 template void attention_softmax<float>( float* att,
                                         const uint32_t* token_positions,
@@ -567,7 +768,6 @@ template void copy_kv_cache<float>( float* context_pointers[],
                                     const float* state_k,
                                     const float* state_v,
                                     const uint64_t dim,
-                                    const uint64_t n_layers,
                                     const uint64_t batch_size,
                                     const uint32_t* token_positions );
 

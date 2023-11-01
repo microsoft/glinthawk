@@ -242,8 +242,8 @@ size_t InferenceContext<DType>::context_size( const Config& config )
 template<typename DType>
 DType* InferenceContext<DType>::key( const Config& config, int layer_num, const int token_num, const int head_num )
 {
-  return buffer_ + token_num * ( config.n_layers_loaded() * config.kv_dim * 2 )
-         + ( layer_num - config.start_layer_num ) * ( config.kv_dim * 2 ) + head_num * ( config.dim / config.n_heads );
+  return buffer_ + ( layer_num - config.start_layer_num ) * (config.seq_len * config.kv_dim * 2) +
+         token_num * ( config.kv_dim * 2 ) + head_num * ( config.dim / config.n_heads );
 }
 
 template<typename DType>

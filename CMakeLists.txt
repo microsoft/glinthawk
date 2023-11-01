@@ -47,6 +47,7 @@ add_library ( glinthawk STATIC ${SOURCE} )
 link_libraries ( glinthawk )
 link_libraries ( glinthawk_proto )
 
+add_executable ( profile-cpu src/frontend/profile-cpu.cc )
 add_executable ( infer-layered-cpu src/frontend/infer-layered-cpu.cc )
 add_executable ( infer-cpu src/frontend/infer-cpu.cc )
 add_executable ( worker-cpu src/frontend/worker-cpu.cc )
