@@ -29,6 +29,7 @@ file ( GLOB SOURCE
   src/net/*.cc
   src/net/http/*.cc
   src/storage/*.cc
+  src/storage/local/*.cc
   src/storage/azure/*.cc
   src/compute/*.cc
   src/message/*.cc

@@ -11,6 +11,7 @@ enum class OpResult
   OK,
   NotFound,
   Error,
+  InvalidKey,
 };
 
 class BlobStore
