@@ -44,7 +44,7 @@ PromptManager::PromptManager( shared_ptr<storage::BlobStore> blobstore )
 {
 }
 
-shared_ptr<Prompt> PromptManager::get( const PromptID& prompt_id )
+const Prompt& PromptManager::get( const PromptID& prompt_id )
 {
   if ( prompts_.count( prompt_id ) == 0 ) {
     // XXX avoid this
@@ -67,14 +67,14 @@ void PromptManager::fetch( const vector<PromptID>& prompt_ids )
 
   for ( size_t i = 0; i < results.size(); i++ ) {
     if ( results[i].first == storage::OpResult::OK ) {
-      prompts_[prompt_ids[i]] = make_shared<Prompt>( results[i].second );
+      prompts_.emplace( prompt_ids[i], results[i].second );
     } else {
       LOG( FATAL ) << "Failed to load prompt " << prompt_ids[i].base58digest();
     }
   }
 }
 
-string Completion::serialize()
+string Completion::serialize() const
 {
   CHECK( is_terminated_ ) << "Cannot serialize an incomplete completion";
 
@@ -97,22 +97,15 @@ CompletionManager::CompletionManager( shared_ptr<storage::BlobStore> blobstore )
 {
 }
 
-shared_ptr<Completion> CompletionManager::get( const PromptID& prompt_id )
-{
-  if ( completions_.count( prompt_id ) == 0 ) {
-    completions_[prompt_id] = make_shared<Completion>();
-  }
-
-  return completions_.at( prompt_id );
-}
+Completion& CompletionManager::get( const PromptID& prompt_id ) { return completions_[prompt_id]; }
 
 void CompletionManager::commit()
 {
   vector<pair<string, string>> key_values;
 
   for ( auto it = completions_.begin(); it != completions_.end(); ) {
-    if ( it->second->is_terminated() ) {
-      key_values.emplace_back( "completed/"s + it->first.base58digest() + ".ghc", it->second->serialize() );
+    if ( it->second.is_terminated() ) {
+      key_values.emplace_back( "completed/"s + it->first.base58digest() + ".ghc", it->second.serialize() );
       it = completions_.erase( it );
     } else {
       it++;

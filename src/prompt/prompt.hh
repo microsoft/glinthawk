@@ -23,6 +23,7 @@ protected:
 public:
   Prompt( const std::string_view serialized_prompt );
   uint32_t token( const uint32_t token_pos ) const { return tokens_.at( token_pos ); }
+  uint32_t token_count() const { return tokens_.size(); }
 };
 
 class Completion : public Prompt
@@ -34,23 +35,25 @@ public:
   Completion() {}
 
   void add_token( const uint32_t token ) { tokens_.push_back( token ); }
-  std::string serialize();
-  size_t length() { return tokens_.size(); }
+  size_t token_count() { return tokens_.size(); }
+  std::string serialize() const;
 
   void terminate() { is_terminated_ = true; }
-  bool is_terminated() { return is_terminated_; }
+  bool is_terminated() const { return is_terminated_; }
 };
 
 class PromptManager
 {
 private:
   std::shared_ptr<storage::BlobStore> blobstore_ {};
-  std::unordered_map<PromptID, std::shared_ptr<Prompt>> prompts_ {};
+  std::unordered_map<PromptID, Prompt> prompts_ {};
 
 public:
   PromptManager( std::shared_ptr<storage::BlobStore> blobstore );
 
-  std::shared_ptr<Prompt> get( const PromptID& prompt_id );
+  const Prompt& get( const PromptID& prompt_id );
+
+  /// @brief Fetch the given prompts from the blobstore
   void fetch( const std::vector<PromptID>& prompt_ids );
 };
 
@@ -58,14 +61,15 @@ class CompletionManager
 {
 private:
   std::shared_ptr<storage::BlobStore> blobstore_ {};
-  std::unordered_map<PromptID, std::shared_ptr<Completion>> completions_ {};
+  std::unordered_map<PromptID, Completion> completions_ {};
 
 public:
   CompletionManager( std::shared_ptr<storage::BlobStore> blobstore );
 
-  std::shared_ptr<Completion> get( const PromptID& prompt_id );
+  Completion& get( const PromptID& prompt_id );
 
-  void commit(); // upload all terminated completions to blobstore
+  /// @brief Upload the completed terminated completions to the blobstore
+  void commit();
 };
 
 } // namespace glinthawk::prompt
