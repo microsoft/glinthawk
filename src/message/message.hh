@@ -21,11 +21,12 @@ public:
 
     InitializeWorker,
     InferenceState,
+    ProcessPrompts,
 
-    COUNT
+    __COUNT
   };
 
-  static constexpr char const* OPCODE_NAMES[static_cast<int>( OpCode::COUNT )] = {
+  static constexpr char const* OPCODE_NAMES[static_cast<int>( OpCode::__COUNT )] = {
     "",
     "Hey",
     "Ping",
@@ -33,6 +34,7 @@ public:
 
     "InitializeWorker",
     "InferenceState",
+    "ProcessPrompts",
   };
 
   constexpr static size_t HEADER_LENGTH = 5;

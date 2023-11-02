@@ -10,3 +10,8 @@ message InitializeWorker
   uint32 concurrency_size = 4;
   string blobstore_uri = 5;
 }
+
+message ProcessPrompts
+{
+  repeated string prompt_ids = 1;
+}

@@ -78,6 +78,8 @@ void Worker<Model>::setup_blobstore( const string& blobstore_uri )
   blobstore_ = move( blobstore );
   prompt_manager_ = make_unique<prompt::PromptManager>( blobstore_ );
   completion_manager_ = make_unique<prompt::CompletionManager>( blobstore_ );
+
+  LOG( INFO ) << "Blobstore setup complete.";
 }
 
 template<typename Model>
@@ -239,6 +241,7 @@ namespace glinthawk::core {
 #ifdef GLINTHAWK_CUDA_ENABLED
 template class Worker<models::llama2::cuda::Llama2<__half>>;
 #endif
+
 template class Worker<models::llama2::cpu::Llama2<_Float16>>;
 template class Worker<models::llama2::cpu::Llama2<float>>;
 

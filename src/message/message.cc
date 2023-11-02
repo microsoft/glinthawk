@@ -11,7 +11,7 @@
 using namespace std;
 using namespace glinthawk::core;
 
-constexpr char const* Message::OPCODE_NAMES[static_cast<int>( Message::OpCode::COUNT )];
+constexpr char const* Message::OPCODE_NAMES[static_cast<int>( Message::OpCode::__COUNT )];
 
 Message::Message( const string_view& header, string&& payload )
   : payload_( move( payload ) )
@@ -23,7 +23,7 @@ Message::Message( const string_view& header, string&& payload )
   payload_length_ = get_field<uint32_t>( header );
   opcode_ = static_cast<OpCode>( header[4] );
 
-  if ( static_cast<int>( opcode_ ) >= static_cast<int>( OpCode::COUNT ) ) {
+  if ( static_cast<int>( opcode_ ) >= static_cast<int>( OpCode::__COUNT ) ) {
     throw out_of_range( "invalid opcode" );
   }
 }
@@ -33,7 +33,7 @@ Message::Message( const OpCode opcode, string&& payload )
   , opcode_( opcode )
   , payload_( move( payload ) )
 {
-  if ( static_cast<int>( opcode_ ) >= static_cast<int>( OpCode::COUNT ) ) {
+  if ( static_cast<int>( opcode_ ) >= static_cast<int>( OpCode::__COUNT ) ) {
     throw out_of_range( "invalid opcode" );
   }
 }
