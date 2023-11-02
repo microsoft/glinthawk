@@ -36,6 +36,8 @@ struct SHA256Hash
 
   std::string hexdigest() const;
   std::string base58digest() const;
+
+  static SHA256Hash from_base58digest( const std::string_view base58digest );
 };
 
 void sha256( const std::string_view input, SHA256Hash& hash );
