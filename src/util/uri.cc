@@ -13,7 +13,7 @@ using namespace glinthawk::util;
 ParsedURI::ParsedURI( const std::string& uri )
 {
   const static regex uri_regex {
-    R"RAWSTR((([A-Za-z0-9]+)://)?(([^:\n\r]+):([^@\n\r]+)@)?(([^?:/\n\r]+):?(\d*))/?([^?\n\r]+)?\??([^#\n\r]*)?#?([^\n\r]*))RAWSTR",
+    R"RAWSTR((([A-Za-z0-9]+)://)?(([^:\n\r]+):([^@\n\r]+)@)?(([^?:/\n\r]+):?(\d*))?/?([^?\n\r]+)?\??([^#\n\r]*)?#?([^\n\r]*))RAWSTR",
     regex::optimize
   };
 
