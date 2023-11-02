@@ -37,7 +37,7 @@ HTTPRequest BlobStore::make_request( const Op operation, const std::string& key,
   vector<HTTPHeader> header { { "Host", container_uri_.host } };
 
   if ( not payload.empty() ) {
-    header.emplace_back( "Content-Length", to_string( payload.size() ) );
+    header.emplace_back( "Content-Length", ::to_string( payload.size() ) );
   }
 
   switch ( operation ) {
@@ -271,3 +271,5 @@ vector<OpResult> BlobStore::remove( const vector<string>& keys )
 
   return results;
 }
+
+string BlobStore::to_string() const { return "azure://"s + container_uri_.host + "/" + container_uri_.path; }

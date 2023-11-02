@@ -22,6 +22,8 @@ public:
   virtual std::vector<std::pair<OpResult, std::string>> get( const std::vector<std::string>& keys ) override;
   virtual std::vector<OpResult> put( const std::vector<std::pair<std::string, std::string>>& kvs ) override;
   virtual std::vector<OpResult> remove( const std::vector<std::string>& keys ) override;
+
+  virtual std::string to_string() const override;
 };
 
 } // namespace glinthawk::storage::local

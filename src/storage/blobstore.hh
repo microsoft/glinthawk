@@ -31,6 +31,8 @@ public:
   virtual std::vector<std::pair<OpResult, std::string>> get( const std::vector<std::string>& keys ) = 0;
   virtual std::vector<OpResult> put( const std::vector<std::pair<std::string, std::string>>& kvs ) = 0;
   virtual std::vector<OpResult> remove( const std::vector<std::string>& keys ) = 0;
+
+  virtual std::string to_string() const = 0;
 };
 
 } // namespace glinthawk::storage

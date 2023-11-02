@@ -128,3 +128,5 @@ vector<OpResult> BlobStore::remove( const vector<string>& keys )
 
   return results;
 }
+
+string BlobStore::to_string() const { return "file://"s + root_.string(); }
