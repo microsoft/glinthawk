@@ -184,127 +184,40 @@ void attention_0_gemm_fast( const DType* query,
   uint64_t kv_head;
   uint64_t key_pos;
   uint64_t query_gqa_head;
+  uint64_t p;
+  const size_t sum_len = 8;
+  float sum_s[sum_len];
+  CHECK_GE( sum_len, gqa_size ) << "Accounting for GQAs";
 
-//    #pragma omp parallel for private( i, kv_head, query_gqa_head ) shared( token_positions, context_pointers, query, att ) collapse( 3 )
-//      for ( i = 0; i < batch_size; i++ ) {
-//        for ( kv_head = 0; kv_head < n_kv_heads; kv_head++ ) {
-//          for ( query_gqa_head = 0; query_gqa_head < gqa_size; query_gqa_head++ ) {
-//
-//            const DType* current_key = context_pointers[i] + kv_head * stride_key;
-//            const DType* current_query = query + i * dim_ + kv_head * stride_qry + query_gqa_head * ld_qry;
-//            DType* current_att = att + i * att_dim_ + kv_head * stride_att + query_gqa_head * ld_att;
-//            for ( key_pos = 0; key_pos < token_positions[i] + 1; key_pos++ ) {
-//
-//              float sum = 0.0;
-//              for ( uint64_t p = 0; p < head_size; ++p ) {
-//                const float a_value = current_key[p];
-//                const float b_value = current_query[p];
-//                sum += a_value * b_value;
-//              }
-//
-//              current_att[key_pos] = scale * sum;
-//              current_key += ld_key;
-//            }
-//          }
-//        }
-//      }
+#pragma omp parallel for private( i, kv_head, p, sum_s, key_pos, query_gqa_head ) collapse( 3 )
+  for ( i = 0; i < batch_size; i++ ) {
+    for ( kv_head = 0; kv_head < n_kv_heads; kv_head++ ) {
+      for ( key_pos = 0; key_pos < seq_len; key_pos++ ) {
 
-  //  const size_t sum_len = 8;
-  //  float sum_s[sum_len];
-  //  CHECK_GE( sum_len, gqa_size ) << "Remainders are bad";
-  //
-  // #pragma omp parallel for private( i, kv_head, sum_s, query_gqa_head, key_pos ) shared( token_positions, context_pointers, query, att ) collapse( 2 )
-  //  for ( i = 0; i < batch_size; i++ ) {
-  //    for ( kv_head = 0; kv_head < n_kv_heads; kv_head++ ) {
-  //
-  //      std::memset( sum_s, 0, sizeof( float ) * sum_len );
-  //      const DType* current_key = context_pointers[i] + kv_head * stride_key;
-  //      const DType* current_query = query + i * dim_ + kv_head * stride_qry;
-  //      DType* current_att = att + i * att_dim_ + kv_head * stride_att;
-  //      for ( key_pos = 0; key_pos < token_positions[i] + 1; key_pos++ ) {
-  //
-  //        for ( uint64_t p = 0; p < head_size; ++p ) {
-  //          const float a_value = current_key[p];
-  //
-  //          for ( query_gqa_head = 0; query_gqa_head < gqa_size; query_gqa_head++ ) {
-  //            const float b_value = current_query[query_gqa_head * ld_qry + p];
-  //            sum_s[query_gqa_head] += a_value * b_value;
-  //          }
-  //        }
-  //
-  //        for ( query_gqa_head = 0; query_gqa_head < gqa_size; query_gqa_head++ ) {
-  //          current_att[query_gqa_head * ld_att + key_pos] = scale * sum_s[query_gqa_head];
-  //        }
-  //        current_key += ld_key;
-  //      }
-  //    }
-  //  }
+        if ( key_pos >= token_positions[i] + 1 ) {
+          continue;
+        }
 
-    uint64_t p;
-    const size_t sum_len = 8;
-    float sum_s[sum_len];
-    CHECK_GE( sum_len, gqa_size ) << "Accounting for GQAs";
+        std::memset( sum_s, 0, sizeof( float ) * gqa_size );
+        const DType* current_key = context_pointers[i] + kv_head * stride_key + key_pos * ld_key;
+        const DType* current_query = query + i * dim_ + kv_head * stride_qry;
+        DType* current_att = att + i * att_dim_ + kv_head * stride_att;
 
-   #pragma omp parallel for private( i, kv_head, p, sum_s, key_pos, query_gqa_head ) schedule(static) \
-  shared( token_positions, context_pointers, query, att ) collapse( 3 )
-    for ( i = 0; i < batch_size; i++ ) {
-      for ( kv_head = 0; kv_head < n_kv_heads; kv_head++ ) {
-        for ( key_pos = 0; key_pos < seq_len; key_pos++ ) {
-
-          if ( key_pos >= token_positions[i] + 1 ) {
-            continue;
-          }
-
-          std::memset( sum_s, 0, sizeof( float ) * gqa_size );
-          const DType* current_key = context_pointers[i] + kv_head * stride_key + key_pos * ld_key;
-          const DType* current_query = query + i * dim_ + kv_head * stride_qry;
-          DType* current_att = att + i * att_dim_ + kv_head * stride_att;
-
-          for ( p = 0; p < head_size; ++p ) {
-            const float a_value = current_key[p];
-
-            for ( query_gqa_head = 0; query_gqa_head < gqa_size; query_gqa_head++ ) {
-              const float b_value = current_query[query_gqa_head * ld_qry + p];
-              sum_s[query_gqa_head] += a_value * b_value;
-            }
-          }
+        for ( p = 0; p < head_size; ++p ) {
+          const float a_value = current_key[p];
 
           for ( query_gqa_head = 0; query_gqa_head < gqa_size; query_gqa_head++ ) {
-            current_att[query_gqa_head * ld_att + key_pos] = scale * sum_s[query_gqa_head];
+            const float b_value = current_query[query_gqa_head * ld_qry + p];
+            sum_s[query_gqa_head] += a_value * b_value;
           }
+        }
+
+        for ( query_gqa_head = 0; query_gqa_head < gqa_size; query_gqa_head++ ) {
+          current_att[query_gqa_head * ld_att + key_pos] = scale * sum_s[query_gqa_head];
         }
       }
     }
-
-//  uint64_t p;
-
-//#pragma omp parallel for private( i, kv_head, p, key_pos, query_gqa_head ) schedule( static ) shared( token_positions, context_pointers, query, att ) collapse( 4 )
-//  for ( i = 0; i < batch_size; i++ ) {
-//    for ( kv_head = 0; kv_head < n_kv_heads; kv_head++ ) {
-//      for ( query_gqa_head = 0; query_gqa_head < gqa_size; query_gqa_head++ ) {
-//        for ( key_pos = 0; key_pos < seq_len; key_pos++ ) {
-//
-//          if ( key_pos >= token_positions[i] + 1 ) {
-//            continue;
-//          }
-//
-//          const DType* current_key = context_pointers[i] + kv_head * stride_key + key_pos * ld_key;
-//          const DType* current_query = query + i * dim_ + kv_head * stride_qry + query_gqa_head * ld_qry;
-//          DType* current_att = att + i * att_dim_ + kv_head * stride_att + query_gqa_head * ld_att;
-//
-//          float sum = 0.0f;
-//          for ( p = 0; p < head_size; ++p ) {
-//            const float a_value = current_key[p];
-//
-//            const float b_value = current_query[p];
-//            sum += a_value * b_value;
-//          }
-//
-//          current_att[key_pos] = scale * sum;
-//        }
-//      }
-//    }
-//  }
+  }
 }
 
 template<typename DType>
@@ -507,12 +420,12 @@ void attention_softmax( DType* att,
                         const uint64_t batch_size )
 {
   uint64_t i;
-#pragma omp parallel for private( i )
+  uint64_t j;
+   #pragma omp parallel for private( i, j ) collapse( 2 )
   for ( i = 0; i < batch_size; i++ ) {
-    DType* this_att = att + i * n_heads * seq_len;
-    uint64_t j;
     for ( j = 0; j < n_heads; j++ ) {
-      softmax( this_att + j * seq_len, token_positions[i] + 1 );
+      DType* this_att = att + i * n_heads * seq_len + j * seq_len;
+      softmax( this_att, token_positions[i] + 1 );
     }
   }
 }
