@@ -67,6 +67,11 @@ private:
                              const int end_layer,
                              const int concurrency_size );
 
+  void listen_callback();
+  void handle_compute_kernel_event();
+  bool handle_coordinator_message( core::Message&& msg );
+  bool handle_peer_message( core::Message&& msg );
+
 public:
   /// \brief Construct a new Worker object
   ///
