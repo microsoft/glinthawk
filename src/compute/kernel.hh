@@ -97,6 +97,18 @@ public:
     incoming_cv_.notify_one();
   }
 
+  void push( std::vector<glinthawk::models::InferenceState>&& state )
+  {
+    {
+      std::lock_guard lock( incoming_mutex_ );
+      for ( auto& s : state ) {
+        incoming_.push( std::move( s ) );
+      }
+    }
+
+    incoming_cv_.notify_one();
+  }
+
   bool pop( glinthawk::models::InferenceState& state )
   {
     std::lock_guard lock( outgoing_mutex_ );
