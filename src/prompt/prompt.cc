@@ -59,7 +59,7 @@ void PromptManager::fetch( const vector<PromptID>& prompt_ids )
 {
   vector<string> keys;
   for ( const auto& prompt_id : prompt_ids ) {
-    keys.push_back( "raw/"s + prompt_id.base58digest() + ".ghp" );
+    keys.push_back( "processed/"s + prompt_id.base58digest() + ".ghp" );
   }
 
   auto results = blobstore_->get( keys );

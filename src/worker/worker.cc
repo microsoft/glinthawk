@@ -3,6 +3,8 @@
 #include <glog/logging.h>
 
 #include "message/util.hh"
+#include "models/common/model.hh"
+#include "util/digest.hh"
 
 #include "glinthawk.pb.h"
 
@@ -73,13 +75,13 @@ template<typename Model>
 void Worker<Model>::setup_blobstore( const string& blobstore_uri )
 {
   auto blobstore = storage::BlobStore::create( blobstore_uri );
-  CHECK( blobstore ) << "Could not create blobstore.";
+  CHECK( blobstore ) << "Could not create blobstore: " << blobstore_uri;
 
   blobstore_ = move( blobstore );
   prompt_manager_ = make_unique<prompt::PromptManager>( blobstore_ );
   completion_manager_ = make_unique<prompt::CompletionManager>( blobstore_ );
 
-  LOG( INFO ) << "Blobstore setup complete.";
+  LOG( INFO ) << "Blobstore setup complete: " << blobstore_->to_string();
 }
 
 template<typename Model>
@@ -166,15 +168,15 @@ Worker<Model>::Worker( const Address& worker_address,
 
       switch ( msg.opcode() ) {
         case Message::OpCode::InitializeWorker: {
-          LOG( INFO ) << "Initializing worker with params=" << msg.payload();
-          protobuf::InitializeWorker request;
-          request.ParseFromString( msg.payload() );
+          protobuf::InitializeWorker proto;
+          proto.ParseFromString( msg.payload() );
+          LOG( INFO ) << "Initializing worker with params=" << proto.ShortDebugString();
 
-          // TODO(sadjad): eventually allow for loading multiple models
-          // const auto& model_name = request.model_name();
+          // TODO(sadjad): eventually allow for loading different models
+          // const auto& model_name = proto.model_name();
 
-          setup_compute_kernel( model_root_, request.start_layer(), request.end_layer(), request.concurrency_size() );
-          setup_blobstore( request.blobstore_uri() );
+          setup_compute_kernel( model_root_, proto.start_layer(), proto.end_layer(), proto.concurrency_size() );
+          setup_blobstore( proto.blobstore_uri() );
 
           LOG( INFO ) << "Worker initialized.";
           break;
@@ -185,6 +187,28 @@ Worker<Model>::Worker( const Address& worker_address,
           auto state = models::InferenceState( msg.payload() );
           LOG( INFO ) << "Inference state: " << state.to_string();
           this->compute_kernel_->push( move( state ) );
+        break;
+        }
+
+        case Message::OpCode::ProcessPrompts: {
+          if ( not this->prompt_manager_ ) {
+            // XXX(sadjad): should do something better here
+            LOG( ERROR ) << "Got prompts, but prompt manager not initialized.";
+            break;
+          }
+
+          protobuf::ProcessPrompts proto;
+          proto.ParseFromString( msg.payload() );
+          LOG( INFO ) << "Got prompts from the coordinator: " << proto.prompt_ids_size() << " prompt(s)";
+
+          vector<PromptID> prompt_ids;
+          for ( int i = 0; i < proto.prompt_ids_size(); i++ ) {
+            prompt_ids.push_back( PromptID::from_base58digest( proto.prompt_ids( i ) ) );
+          }
+
+          this->prompt_manager_->fetch( prompt_ids );
+          LOG( INFO ) << "Fetched prompts from blobstore.";
+
           break;
         }
 
