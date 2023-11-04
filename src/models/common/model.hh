@@ -117,7 +117,7 @@ public:
   void set_prompt_length( const uint32_t prompt_length ) { prompt_length_ = prompt_length; }
   void set_temperature( const float temperature ) { temperature_ = temperature; }
   void set_activations( DataBuffer&& activations ) { activations_ = std::move( activations ); }
-  void set_layer_workers( decltype( layer_workers_ )&& layer_workers ) { layer_workers_ = layer_workers; }
+  void set_layer_workers( const decltype( layer_workers_ )& layer_workers ) { layer_workers_ = layer_workers; }
   void set_finished() { finished_ = true; }
 
   glinthawk::net::Address next_worker() const;

@@ -69,6 +69,19 @@ layer_workers = {}
 incoming_messages = asyncio.Queue()
 
 
+def create_routing_message():
+    global layer_workers
+    message = proto.SetRoute()
+    for layer, worker in layer_workers.items():
+        sub_msg = proto.SetRoute.LayerToAddress()
+        sub_msg.layer_num = layer
+        sub_msg.ip = socket.inet_ntoa(worker.ip)
+        sub_msg.port = worker.port
+        message.layer_to_address.append(sub_msg)
+
+    return message
+
+
 async def handle_worker(reader, writer):
     global workers
 
@@ -138,10 +151,23 @@ async def message_processor():
                 )
             )
 
-            if worker.start_layer == 0:
+            layer_workers[worker.start_layer] = worker
+
+            if len(layer_workers) == model.n_layers / model.layers_per_worker:
+                # all layers have been assigned
                 asyncio.create_task(
                     send_message(
-                        worker,
+                        layer_workers[0],
+                        Message(
+                            Message.OpCode.SetRoute,
+                            create_routing_message().SerializeToString(),
+                        ),
+                    )
+                )
+
+                asyncio.create_task(
+                    send_message(
+                        layer_workers[0],
                         Message(
                             Message.OpCode.ProcessPrompts,
                             proto.ProcessPrompts(
@@ -150,25 +176,6 @@ async def message_processor():
                         ),
                     )
                 )
-
-            layer_workers[worker.start_layer] = [worker.ip, worker.port]
-
-            if len(layer_workers) == model.n_layers / model.layers_per_worker:
-                for context_test in range(10):
-                    for conc_i in range(
-                        worker.max_concurrency_size * len(layer_workers)
-                    ):
-                        # we're ready for lift-off
-                        state = InferenceState(layer_workers=layer_workers)
-                        message = Message(
-                            Message.OpCode.InferenceState, state.serialize()
-                        )
-
-                        for w in workers:
-                            if w.start_layer == 0:
-                                logging.info(f"Sending InferenceState to {w.id}.")
-                                asyncio.create_task(send_message(w, message))
-                                break
 
         elif message.opcode == Message.OpCode.InferenceState:
             state = InferenceState()

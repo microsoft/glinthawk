@@ -15,3 +15,15 @@ message ProcessPrompts
 {
   repeated string prompt_ids = 1;
 }
+
+message SetRoute
+{
+  message LayerToAddress
+  {
+    uint32 layer_num = 1;
+    string ip = 2;
+    uint32 port = 3;
+  }
+
+  repeated LayerToAddress layer_to_address = 1;
+}

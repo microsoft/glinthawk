@@ -161,6 +161,21 @@ bool Worker<Model>::handle_coordinator_message( core::Message&& msg )
       break;
     }
 
+    case Message::OpCode::SetRoute: {
+      protobuf::SetRoute proto;
+      proto.ParseFromString( msg.payload() );
+      LOG( INFO ) << "Setting route: " << proto.ShortDebugString();
+
+      for ( int i = 0; i < proto.layer_to_address_size(); i++ ) {
+        const auto& route = proto.layer_to_address( i );
+        current_route_.emplace( route.layer_num(), Address { route.ip(), static_cast<uint16_t>( route.port() ) } );
+      }
+
+      LOG( INFO ) << "Route set; will be used for future prompts.";
+
+      break;
+    }
+
     case Message::OpCode::ProcessPrompts: {
       if ( not this->prompt_manager_ ) {
         // XXX(sadjad): should do something better here

@@ -22,6 +22,7 @@ public:
     InitializeWorker,
     InferenceState,
     ProcessPrompts,
+    SetRoute,
 
     __COUNT
   };
@@ -35,6 +36,7 @@ public:
     "InitializeWorker",
     "InferenceState",
     "ProcessPrompts",
+    "SetRoute",
   };
 
   constexpr static size_t HEADER_LENGTH = 5;

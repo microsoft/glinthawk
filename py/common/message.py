@@ -17,6 +17,7 @@ class Message:
         InitializeWorker = enum.auto()
         InferenceState = enum.auto()
         ProcessPrompts = enum.auto()
+        SetRoute = enum.auto()
 
     def __init__(self, opcode: Union[OpCode, int], payload: bytes):
         if isinstance(opcode, int):
