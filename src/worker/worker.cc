@@ -166,6 +166,8 @@ bool Worker<Model>::handle_coordinator_message( core::Message&& msg )
       proto.ParseFromString( msg.payload() );
       LOG( INFO ) << "Setting route: " << proto.ShortDebugString();
 
+      current_route_.clear();
+
       for ( int i = 0; i < proto.layer_to_address_size(); i++ ) {
         const auto& route = proto.layer_to_address( i );
         current_route_.emplace( route.layer_num(), Address { route.ip(), static_cast<uint16_t>( route.port() ) } );
