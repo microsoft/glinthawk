@@ -239,14 +239,10 @@ void attention_0_gemm_fast( const DType* query,
   }
 }
 
-template<typename DType>
+template<typename DType, uint64_t seq_len, uint64_t head_size, uint64_t n_kv_heads, uint64_t gqa_size, size_t sum_len>
 void attention_2_gemm_fast( const DType* att,
                             const DType* const context_pointers[],
                             DType* xb,
-                            const uint64_t seq_len,
-                            const uint64_t head_size,
-                            const uint64_t n_kv_heads,
-                            const uint64_t gqa_size,
                             const uint64_t batch_size,
                             const uint32_t* token_positions )
 {
@@ -269,7 +265,6 @@ void attention_2_gemm_fast( const DType* att,
   uint64_t att_gqa_head;
   uint64_t round_index;
 
-  const size_t sum_len = 16;
   float sum_s[sum_len];
   uint64_t rounds = head_size / sum_len;
   CHECK_EQ( head_size % sum_len, 0 ) << "Remainders are bad";
@@ -304,23 +299,27 @@ void attention_2_gemm_fast( const DType* att,
   }
 }
 
-// template<typename DType>
-// void attention_2_gemm_fast( const DType* att,
-//                             const DType* const context_pointers[],
-//                             DType* xb,
-//                             const uint64_t seq_len,
-//                             const uint64_t head_size,
-//                             const uint64_t n_kv_heads,
-//                             const uint64_t gqa_size,
-//                             const uint64_t batch_size,
-//                             const uint32_t* token_positions )
-//{
-//   if (seq_len == 2048 and head_size == 128 and n_kv_heads == 8 and gqa_size == 8) {           // Llama-2-70B
-//     attention_2_gemm_fast<DType, 2048, 128, 8, 8>(att, context_pointers, xb, batch_size, token_positions);
-//   } else {
-//     throw runtime_error("Unknown model, no hardcoded function available");
-//   }
-// }
+ template<typename DType>
+ void attention_2_gemm_fast( const DType* att,
+                             const DType* const context_pointers[],
+                             DType* xb,
+                             const uint64_t seq_len,
+                             const uint64_t head_size,
+                             const uint64_t n_kv_heads,
+                             const uint64_t gqa_size,
+                             const uint64_t batch_size,
+                             const uint32_t* token_positions )
+{
+   if (seq_len == 2048 and head_size == 128 and n_kv_heads == 8 and gqa_size == 8) {           // Llama-2-70B
+     attention_2_gemm_fast<DType, 2048, 128, 8, 8, 128>(att, context_pointers, xb, batch_size, token_positions);
+   } else if ( seq_len == 2048 and head_size == 128 and n_kv_heads == 40 and gqa_size == 1 ) { // Llama-2-13B
+     attention_2_gemm_fast<DType, 2048, 128, 40, 1, 128>( att, context_pointers, xb, batch_size, token_positions );
+   } else if ( seq_len == 2048 and head_size == 128 and n_kv_heads == 32 and gqa_size == 1 ) { // Llama-2-7B
+     attention_2_gemm_fast<DType, 2048, 128, 32, 1, 128>( att, context_pointers, xb, batch_size, token_positions );
+   } else {
+     throw runtime_error("Unknown model, no hardcoded function available");
+   }
+ }
 
 template<typename DType>
 void attention_0_gemm( const DType* query,
