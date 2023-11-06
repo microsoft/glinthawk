@@ -24,6 +24,8 @@ public:
   Prompt( const std::string_view serialized_prompt );
   uint32_t token( const uint32_t token_pos ) const { return tokens_.at( token_pos ); }
   uint32_t token_count() const { return tokens_.size(); }
+
+  const std::vector<uint32_t>& tokens() const { return tokens_; }
 };
 
 class Completion : public Prompt

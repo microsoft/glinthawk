@@ -1,5 +1,7 @@
 #include "worker.hh"
 
+#include <chrono>
+
 #include <glog/logging.h>
 
 #include "message/util.hh"
@@ -156,6 +158,7 @@ bool Worker<Model>::handle_coordinator_message( core::Message&& msg )
     case Message::OpCode::InferenceState: {
       // got an inference state from the coordinator
       auto state = models::InferenceState( msg.payload() );
+      LOG( WARNING ) << "Got inference state from coordinator; this behavior is deprecated.";
       LOG( INFO ) << "Inference state: " << state.to_string();
       this->compute_kernel_->push( move( state ) );
       break;
@@ -196,6 +199,20 @@ bool Worker<Model>::handle_coordinator_message( core::Message&& msg )
 
       this->prompt_manager_->fetch( prompt_ids );
       LOG( INFO ) << "Fetched prompts from blobstore.";
+
+      for ( auto& pid : prompt_ids ) {
+        prompt_queue_.enqueue( pid );
+      }
+
+      // make sure the prompt preparation thread is running
+      if ( not prompt_preparation_thread_.joinable() ) {
+        prompt_preparation_thread_ = thread( bind( &Worker<Model>::prompt_preparation_thread_func, this ) );
+      }
+
+      // also run the completion commiting thread
+      if ( not completion_commit_thread_.joinable() ) {
+        completion_commit_thread_ = thread( bind( &Worker<Model>::completion_commit_thread_func, this ) );
+      }
 
       break;
     }
@@ -252,12 +269,33 @@ bool Worker<Model>::handle_peer_message( core::Message&& msg )
       auto state = models::InferenceState( msg.payload() );
       LOG( INFO ) << "Inference state: " << state.to_string();
 
-      if ( state.next_layer() == 0 ) {
-        // We are the first layer, so send the result back to coordinator
-        coordinator_.message_handler.push_message( Message( Message::OpCode::InferenceState, state.serialize() ) );
-      }
-
       this->compute_kernel_->check_finished( state );
+
+      if ( state.next_layer() == 0 ) {
+        // We are the first layer: if this inference state contains a generated token, we should save it.
+        // otherwise, we load the next token from the prompt.
+
+        if ( state.token_pos() >= state.prompt_length() ) {
+          /* we're done processing the prompt */
+          auto& completion = this->completion_manager_->get( state.prompt_id() );
+          completion.add_token( state.token() );
+
+          if ( state.finished() ) {
+            completion.terminate();
+
+            // telling the coordinator we completed this prompt
+            // XXX(sadjad): revisit this later
+            protobuf::PromptCompleted proto;
+            proto.add_prompt_ids( state.prompt_id().base58digest() );
+            this->coordinator_.message_handler.push_message(
+              Message( Message::OpCode::PromptCompleted, proto.SerializeAsString() ) );
+          }
+        } else {
+          /* we're still processing the prompt, load the next token */
+          auto& prompt = this->prompt_manager_->get( state.prompt_id() );
+          state.set_token( prompt.token( state.token_pos() ) );
+        }
+      }
 
       if ( state.finished() ) {
         this->compute_kernel_->push_finished( move( state ) );
@@ -280,6 +318,59 @@ template<typename Model>
 void Worker<Model>::run()
 {
   while ( event_loop_.wait_next_event( -1 ) != EventLoop::Result::Exit ) {
+  }
+}
+
+template<typename Model>
+void Worker<Model>::prompt_preparation_thread_func()
+{
+  while ( running_ ) {
+    vector<InferenceState> states {};
+    PromptID prompt_id;
+
+    if ( prompt_queue_.wait_dequeue_timed( prompt_id, chrono::seconds { 1 } ) ) {
+      LOG( INFO ) << "Preparing states for the prompt: " << prompt_id.base58digest();
+
+      auto prompt = prompt_manager_->get( prompt_id );
+
+      InferenceState state {};
+      state.set_prompt_id( prompt_id );
+      state.set_token( prompt.token( 0 ) );
+      state.set_token_pos( 0 );
+      state.set_next_layer( 0 );
+      state.set_prompt_length( prompt.token_count() );
+      state.set_temperature( 0.0f );
+      state.set_layer_workers( current_route_ );
+
+      LOG( INFO ) << "Pushing states to compute kernel: " << states.size();
+      this->compute_kernel_->push( move( state ) );
+    }
+  }
+}
+
+template<typename Model>
+void Worker<Model>::completion_commit_thread_func()
+{
+  while ( running_ ) {
+    completion_manager_->commit();
+
+    // XXX(sadjad): make this configurable
+    this_thread::sleep_for( chrono::seconds { 5 } );
+  }
+}
+
+template<typename Model>
+Worker<Model>::~Worker()
+{
+  LOG( INFO ) << "Worker shutting down.";
+  running_ = false;
+
+  if ( prompt_preparation_thread_.joinable() ) {
+    prompt_preparation_thread_.join();
+  }
+
+  if ( completion_commit_thread_.joinable() ) {
+    completion_commit_thread_.join();
   }
 }
 

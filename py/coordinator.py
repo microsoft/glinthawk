@@ -17,7 +17,7 @@ from dataclasses import dataclass, field
 from common.message import Message
 from common.inference import InferenceState
 
-from protobuf import glinthawk_pb2 as proto
+from protobuf import glinthawk_pb2 as glinthawk_pb
 
 logging.basicConfig(level=logging.INFO)
 
@@ -71,9 +71,9 @@ incoming_messages = asyncio.Queue()
 
 def create_routing_message():
     global layer_workers
-    message = proto.SetRoute()
+    message = glinthawk_pb.SetRoute()
     for layer, worker in layer_workers.items():
-        sub_msg = proto.SetRoute.LayerToAddress()
+        sub_msg = glinthawk_pb.SetRoute.LayerToAddress()
         sub_msg.layer_num = layer
         sub_msg.ip = socket.inet_ntoa(worker.ip)
         sub_msg.port = worker.port
@@ -133,7 +133,7 @@ async def message_processor():
             #     worker.start_layer = 22
             #     worker.end_layer = 31
 
-            initialization_message = proto.InitializeWorker(
+            initialization_message = glinthawk_pb.InitializeWorker(
                 model_name=model.name,
                 start_layer=worker.start_layer,
                 end_layer=worker.end_layer,
@@ -170,7 +170,7 @@ async def message_processor():
                         layer_workers[0],
                         Message(
                             Message.OpCode.ProcessPrompts,
-                            proto.ProcessPrompts(
+                            glinthawk_pb.ProcessPrompts(
                                 prompt_ids=prompts
                             ).SerializeToString(),
                         ),
@@ -183,6 +183,12 @@ async def message_processor():
             logging.info(
                 f"Worker {worker.id} returned token {state.token}(pos={state.token_pos}) for prompt {state.prompt_id.hex()[:8]}."
             )
+
+        elif message.opcode == Message.OpCode.PromptCompleted:
+            proto = glinthawk_pb.PromptCompleted()
+            proto.ParseFromString(message.payload)
+            for id in proto.prompt_ids:
+                logging.info(f"Prompt {id[:8]} completed.")
 
 
 async def main(listen_address, listen_port):

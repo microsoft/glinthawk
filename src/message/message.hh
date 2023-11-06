@@ -24,6 +24,8 @@ public:
     ProcessPrompts,
     SetRoute,
 
+    PromptCompleted,
+
     __COUNT
   };
 
@@ -37,6 +39,8 @@ public:
     "InferenceState",
     "ProcessPrompts",
     "SetRoute",
+
+    "PromptCompleted",
   };
 
   constexpr static size_t HEADER_LENGTH = 5;

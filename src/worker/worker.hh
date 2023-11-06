@@ -1,10 +1,12 @@
 #pragma once
 
+#include <atomic>
 #include <filesystem>
 #include <list>
 #include <map>
 #include <memory>
 #include <optional>
+#include <thread>
 
 #include "compute/kernel.hh"
 #include "message/handler.hh"
@@ -16,6 +18,8 @@
 #include "prompt/prompt.hh"
 #include "storage/blobstore.hh"
 #include "util/eventloop.hh"
+
+#include "concurrentqueue/blockingconcurrentqueue.h"
 
 namespace glinthawk::core {
 
@@ -38,6 +42,8 @@ private:
   };
 
 private:
+  std::atomic_bool running_ { true };
+
   EventLoop event_loop_ {};
   net::Address listen_address_;
   net::TCPSocket listen_socket_;
@@ -62,6 +68,10 @@ private:
     .response = event_loop_.add_category( "Worker response" ),
   };
 
+  moodycamel::BlockingConcurrentQueue<glinthawk::PromptID> prompt_queue_ {};
+  std::thread prompt_preparation_thread_ {};
+  std::thread completion_commit_thread_ {};
+
   void setup_peer( std::map<net::Address, Peer>::iterator peer_it );
   void setup_blobstore( const std::string& blobstore_uri );
   void setup_compute_kernel( const std::filesystem::path& model_root,
@@ -74,6 +84,9 @@ private:
   bool handle_coordinator_message( core::Message&& msg );
   bool handle_peer_message( core::Message&& msg );
 
+  void prompt_preparation_thread_func();
+  void completion_commit_thread_func();
+
 public:
   /// \brief Construct a new Worker object
   ///
@@ -83,6 +96,8 @@ public:
   Worker( const net::Address& worker_address,
           const net::Address& coordinator_address,
           const std::filesystem::path& model_root );
+
+  ~Worker();
 
   void run();
 };

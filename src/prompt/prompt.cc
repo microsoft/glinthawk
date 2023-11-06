@@ -112,6 +112,11 @@ void CompletionManager::commit()
     }
   }
 
+  if ( key_values.empty() ) {
+    // nothing to commit
+    return;
+  }
+
   auto results = blobstore_->put( key_values );
   CHECK( results.size() == key_values.size() ) << "Failed to commit all completions";
 

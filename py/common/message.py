@@ -19,6 +19,8 @@ class Message:
         ProcessPrompts = enum.auto()
         SetRoute = enum.auto()
 
+        PromptCompleted = enum.auto()
+
     def __init__(self, opcode: Union[OpCode, int], payload: bytes):
         if isinstance(opcode, int):
             self.opcode = Message.OpCode(opcode)

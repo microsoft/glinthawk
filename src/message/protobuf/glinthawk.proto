@@ -11,10 +11,9 @@ message InitializeWorker
   string blobstore_uri = 5;
 }
 
-message ProcessPrompts
-{
-  repeated string prompt_ids = 1;
-}
+message ProcessPrompts { repeated string prompt_ids = 1; }
+
+message PromptCompleted { repeated string prompt_ids = 1; }
 
 message SetRoute
 {
