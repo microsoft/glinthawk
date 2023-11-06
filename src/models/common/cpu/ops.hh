@@ -57,10 +57,6 @@ template<typename DType>
 void attention_0_gemm_fast( const DType* query,
                             const DType* const context_pointers[],
                             DType* att,
-                            const uint64_t seq_len,
-                            const uint64_t head_size,
-                            const uint64_t n_kv_heads,
-                            const uint64_t gqa_size,
                             const uint64_t batch_size,
                             const uint32_t* token_positions );
 
@@ -68,20 +64,11 @@ template<typename DType>
 void attention_2_gemm_fast( const DType* att,
                             const DType* const context_pointers[],
                             DType* xb,
-                            const uint64_t seq_len,
-                            const uint64_t head_size,
-                            const uint64_t n_kv_heads,
-                            const uint64_t gqa_size,
                             const uint64_t batch_size,
                             const uint32_t* token_positions );
 
 template<typename DType>
-void attention_softmax( DType* att,
-                        const uint32_t* token_positions,
-                        const uint64_t seq_len,
-                        const uint64_t n_heads,
-                        DType* temp_buffer,
-                        const uint64_t batch_size );
+void attention_softmax( DType* att, const uint32_t* token_positions, const uint64_t batch_size );
 
 template<typename DType>
 void apply_rope( const uint64_t head_size,

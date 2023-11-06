@@ -16,10 +16,11 @@ template<typename DType>
 void accum( DType* a, const DType* b, const uint64_t size, const uint64_t batch_size )
 {
   uint64_t b_idx;
-#pragma omp parallel for private( b_idx )
+  uint64_t i;
+#pragma omp parallel for private( b_idx, i ) collapse( 2 )
   for ( b_idx = 0; b_idx < batch_size; b_idx++ ) {
-    for ( uint64_t i = 0; i < size; i++ ) {
-      a[b_idx * size + i] = DType ( float( a[b_idx * size + i] ) + float( b[b_idx * size + i] ) );
+    for ( i = 0; i < size; i++ ) {
+      a[b_idx * size + i] = DType( float( a[b_idx * size + i] ) + float( b[b_idx * size + i] ) );
     }
   }
 }
@@ -45,7 +46,7 @@ void rmsnorm( DType* output, const DType* x, const DType* weight, const uint64_t
 
     // normalize and scale
     for ( uint64_t j = 0; j < size; j++ ) {
-      O[j] = DType ( float( weight[j] ) * ( ss * float( X[j] ) ) );
+      O[j] = DType( float( weight[j] ) * ( ss * float( X[j] ) ) );
     }
   }
 }
@@ -87,7 +88,7 @@ void simple_gemm_strided_batch( uint64_t m,
           sum += a_value * b_value;
         }
 
-        current_C[col * ldc + row] = DType ( alpha * sum + beta * float( current_C[col * ldc + row] ) );
+        current_C[col * ldc + row] = DType( alpha * sum + beta * float( current_C[col * ldc + row] ) );
       }
     }
   }
@@ -117,7 +118,7 @@ void fast_matmul_row_major( uint64_t m,
         sum += a_value * b_value;
       }
 
-      C[col * ldc + row] = DType ( sum );
+      C[col * ldc + row] = DType( sum );
     }
   }
 }
@@ -151,7 +152,7 @@ void silu( DType* hb, DType* hb2, const uint64_t hidden_dim, const uint64_t batc
 
     for ( size_t i = 0; i < hidden_dim; i++ ) {
       const float x = current_hb[i];
-      current_hb[i] = DType ( x * ( 1.0f / ( 1.0f + expf( -x ) ) ) * float( current_hb2[i] ) );
+      current_hb[i] = DType( x * ( 1.0f / ( 1.0f + expf( -x ) ) ) * float( current_hb2[i] ) );
     }
   }
 }
@@ -160,13 +161,14 @@ template<typename DType>
 void attention_0_gemm_fast( const DType* query,
                             const DType* const context_pointers[],
                             DType* att,
-                            const uint64_t seq_len,
-                            const uint64_t head_size,
-                            const uint64_t n_kv_heads,
-                            const uint64_t gqa_size,
                             const uint64_t batch_size,
                             const uint32_t* token_positions )
 {
+
+  const uint64_t seq_len = 2048;
+  const uint64_t head_size = 128;
+  const uint64_t n_kv_heads = 8;
+  const uint64_t gqa_size = 8;
   const float scale = 1.0f / sqrtf( head_size );
 
   const uint64_t ld_key = n_kv_heads * head_size * 2;
@@ -213,7 +215,7 @@ void attention_0_gemm_fast( const DType* query,
         }
 
         for ( query_gqa_head = 0; query_gqa_head < gqa_size; query_gqa_head++ ) {
-          current_att[query_gqa_head * ld_att + key_pos] = DType ( scale * sum_s[query_gqa_head] );
+          current_att[query_gqa_head * ld_att + key_pos] = DType( scale * sum_s[query_gqa_head] );
         }
       }
     }
@@ -224,13 +226,13 @@ template<typename DType>
 void attention_2_gemm_fast( const DType* att,
                             const DType* const context_pointers[],
                             DType* xb,
-                            const uint64_t seq_len,
-                            const uint64_t head_size,
-                            const uint64_t n_kv_heads,
-                            const uint64_t gqa_size,
                             const uint64_t batch_size,
                             const uint32_t* token_positions )
 {
+  const uint64_t seq_len = 2048;
+  const uint64_t head_size = 128;
+  const uint64_t n_kv_heads = 8;
+  const uint64_t gqa_size = 8;
   const uint64_t ld_val = n_kv_heads * head_size * 2;
   const uint64_t ld_att = seq_len;
   const uint64_t ld_xb = head_size;
@@ -277,7 +279,7 @@ void attention_2_gemm_fast( const DType* att,
           }
           DType* current_xb = xb + i * dim_ + kv_head * stride_xb + att_gqa_head * ld_xb + round_index * sum_len;
           for ( val_pos = 0; val_pos < sum_len; val_pos++ ) {
-            current_xb[val_pos] = DType ( sum_s[val_pos] );
+            current_xb[val_pos] = DType( sum_s[val_pos] );
           }
         }
       }
@@ -401,27 +403,24 @@ void softmax( DType* x, const uint64_t size )
   // exp and sum
   float sum = 0.0f;
   for ( uint64_t i = 0; i < size; i++ ) {
-    x[i] = DType ( expf( float( x[i] - max_val ) ) );
+    x[i] = DType( expf( float( x[i] - max_val ) ) );
     sum += float( x[i] );
   }
 
   // normalize
   for ( uint64_t i = 0; i < size; i++ ) {
-    x[i] = DType ( float( x[i] ) / sum );
+    x[i] = DType( float( x[i] ) / sum );
   }
 }
 
 template<typename DType>
-void attention_softmax( DType* att,
-                        const uint32_t* token_positions,
-                        const uint64_t seq_len,
-                        const uint64_t n_heads,
-                        [[maybe_unused]] DType* temp_buffer,
-                        const uint64_t batch_size )
+void attention_softmax( DType* att, const uint32_t* token_positions, const uint64_t batch_size )
 {
+  const uint64_t seq_len = 2048;
+  const uint64_t n_heads = 64;
   uint64_t i;
   uint64_t j;
-   #pragma omp parallel for private( i, j ) collapse( 2 )
+#pragma omp parallel for private( i, j ) collapse( 2 )
   for ( i = 0; i < batch_size; i++ ) {
     for ( j = 0; j < n_heads; j++ ) {
       DType* this_att = att + i * n_heads * seq_len + j * seq_len;
@@ -452,14 +451,14 @@ inline void do_rope( const uint64_t head_size,
 
   const float k0 = k[elem_idx];
   const float k1 = k[elem_idx + 1];
-  k[elem_idx] = DType ( k0 * fcr - k1 * fci );
-  k[elem_idx + 1] = DType ( k0 * fci + k1 * fcr );
+  k[elem_idx] = DType( k0 * fcr - k1 * fci );
+  k[elem_idx + 1] = DType( k0 * fci + k1 * fcr );
 
   for ( uint64_t i = 0; i < gqa_size; i++ ) {
     const float q0 = q[i * head_size + elem_idx];
     const float q1 = q[i * head_size + elem_idx + 1];
-    q[i * head_size + elem_idx] = DType ( q0 * fcr - q1 * fci );
-    q[i * head_size + elem_idx + 1] = DType ( q0 * fci + q1 * fcr );
+    q[i * head_size + elem_idx] = DType( q0 * fcr - q1 * fci );
+    q[i * head_size + elem_idx + 1] = DType( q0 * fci + q1 * fcr );
   }
 }
 
@@ -523,7 +522,7 @@ void gumbel_fix( DType* array, float temp, const uint64_t vocab_size )
   for ( uint64_t i = 0; i < vocab_size; i++ ) {
     float myrandf = static_cast<float>( rand() ) / RAND_MAX;
     myrandf = logf( -logf( myrandf ) );
-    array[i] = DType ( float( array[i] ) / temp - myrandf );
+    array[i] = DType( float( array[i] ) / temp - myrandf );
   }
 }
 
@@ -606,29 +605,16 @@ template void attention_2_gemm<_Float16>( const _Float16* att,
 template void attention_0_gemm_fast<_Float16>( const _Float16* query,
                                                const _Float16* const context_pointers[],
                                                _Float16* att,
-                                               const uint64_t seq_len,
-                                               const uint64_t head_size,
-                                               const uint64_t n_kv_heads,
-                                               const uint64_t gqa_size,
                                                const uint64_t batch_size,
                                                const uint32_t* token_positions );
 
 template void attention_2_gemm_fast<_Float16>( const _Float16* att,
                                                const _Float16* const context_pointers[],
                                                _Float16* xb,
-                                               const uint64_t seq_len,
-                                               const uint64_t head_size,
-                                               const uint64_t n_kv_heads,
-                                               const uint64_t gqa_size,
                                                const uint64_t batch_size,
                                                const uint32_t* token_positions );
 
-template void attention_softmax<_Float16>( _Float16* att,
-                                           const uint32_t* token_positions,
-                                           const uint64_t seq_len,
-                                           const uint64_t n_heads,
-                                           _Float16* temp_buffer,
-                                           const uint64_t batch_size );
+template void attention_softmax<_Float16>( _Float16* att, const uint32_t* token_positions, const uint64_t batch_size );
 
 template void apply_rope<_Float16>( const uint64_t head_size,
                                     const uint64_t n_kv_heads,
@@ -692,29 +678,16 @@ template void attention_2_gemm<float>( const float* att,
 template void attention_0_gemm_fast<float>( const float* query,
                                             const float* const context_pointers[],
                                             float* att,
-                                            const uint64_t seq_len,
-                                            const uint64_t head_size,
-                                            const uint64_t n_kv_heads,
-                                            const uint64_t gqa_size,
                                             const uint64_t batch_size,
                                             const uint32_t* token_positions );
 
 template void attention_2_gemm_fast<float>( const float* att,
                                             const float* const context_pointers[],
                                             float* xb,
-                                            const uint64_t seq_len,
-                                            const uint64_t head_size,
-                                            const uint64_t n_kv_heads,
-                                            const uint64_t gqa_size,
                                             const uint64_t batch_size,
                                             const uint32_t* token_positions );
 
-template void attention_softmax<float>( float* att,
-                                        const uint32_t* token_positions,
-                                        const uint64_t seq_len,
-                                        const uint64_t n_heads,
-                                        float* temp_buffer,
-                                        const uint64_t batch_size );
+template void attention_softmax<float>( float* att, const uint32_t* token_positions, const uint64_t batch_size );
 
 template void apply_rope<float>( const uint64_t head_size,
                                  const uint64_t n_kv_heads,
