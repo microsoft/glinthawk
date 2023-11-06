@@ -19,3 +19,6 @@ class Tokenizer:
             + self.sp.EncodeAsIds(text)
             + ([self.eos_id] if append_eos else [])
         )
+
+    def decode(self, tokens):
+        return self.sp.DecodeIds(tokens)
