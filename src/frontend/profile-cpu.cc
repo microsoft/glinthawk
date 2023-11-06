@@ -51,7 +51,7 @@ int main( int argc, char* argv[] )
     const uint32_t end_slice = atoi( argv[3] );
     const uint64_t batch_size = atoi( argv[4] );
 
-    using Llama2 = models::llama2::cpu::Llama2<_Float16>;
+    using Llama2 = models::llama2::cpu::Llama2<float>;
 
     Llama2 llama { model_dir_path, start_slice, end_slice, batch_size };
     compute::ContextManager<Llama2> context_manager = compute::ContextManager<Llama2>( llama.config() );
@@ -80,8 +80,8 @@ int main( int argc, char* argv[] )
         if ( start_slice == 0 ) {
           state.set_token( 5 );
         } else {
-          models::DataBuffer activations { models::SerializedDataType::Type::Float16,
-                                           make_unique<uint8_t[]>( dim * sizeof( __half ) ),
+          models::DataBuffer activations { models::SerializedDataType::Type::Float32,
+                                           make_unique<uint8_t[]>( dim * sizeof( float ) ),
                                            dim };
           state.set_activations( move( activations ) );
         }

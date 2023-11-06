@@ -19,7 +19,7 @@ void accum( DType* a, const DType* b, const uint64_t size, const uint64_t batch_
 #pragma omp parallel for private( b_idx )
   for ( b_idx = 0; b_idx < batch_size; b_idx++ ) {
     for ( uint64_t i = 0; i < size; i++ ) {
-      a[b_idx * size + i] = float( a[b_idx * size + i] ) + float( b[b_idx * size + i] );
+      a[b_idx * size + i] = DType ( float( a[b_idx * size + i] ) + float( b[b_idx * size + i] ) );
     }
   }
 }
@@ -45,7 +45,7 @@ void rmsnorm( DType* output, const DType* x, const DType* weight, const uint64_t
 
     // normalize and scale
     for ( uint64_t j = 0; j < size; j++ ) {
-      O[j] = float( weight[j] ) * ( ss * float( X[j] ) );
+      O[j] = DType ( float( weight[j] ) * ( ss * float( X[j] ) ) );
     }
   }
 }
@@ -87,7 +87,7 @@ void simple_gemm_strided_batch( uint64_t m,
           sum += a_value * b_value;
         }
 
-        current_C[col * ldc + row] = alpha * sum + beta * float( current_C[col * ldc + row] );
+        current_C[col * ldc + row] = DType ( alpha * sum + beta * float( current_C[col * ldc + row] ) );
       }
     }
   }
@@ -117,7 +117,7 @@ void fast_matmul_row_major( uint64_t m,
         sum += a_value * b_value;
       }
 
-      C[col * ldc + row] = sum;
+      C[col * ldc + row] = DType ( sum );
     }
   }
 }
@@ -151,7 +151,7 @@ void silu( DType* hb, DType* hb2, const uint64_t hidden_dim, const uint64_t batc
 
     for ( size_t i = 0; i < hidden_dim; i++ ) {
       const float x = current_hb[i];
-      current_hb[i] = x * ( 1.0f / ( 1.0f + expf( -x ) ) ) * float( current_hb2[i] );
+      current_hb[i] = DType ( x * ( 1.0f / ( 1.0f + expf( -x ) ) ) * float( current_hb2[i] ) );
     }
   }
 }
@@ -213,7 +213,7 @@ void attention_0_gemm_fast( const DType* query,
         }
 
         for ( query_gqa_head = 0; query_gqa_head < gqa_size; query_gqa_head++ ) {
-          current_att[query_gqa_head * ld_att + key_pos] = scale * sum_s[query_gqa_head];
+          current_att[query_gqa_head * ld_att + key_pos] = DType ( scale * sum_s[query_gqa_head] );
         }
       }
     }
@@ -277,7 +277,7 @@ void attention_2_gemm_fast( const DType* att,
           }
           DType* current_xb = xb + i * dim_ + kv_head * stride_xb + att_gqa_head * ld_xb + round_index * sum_len;
           for ( val_pos = 0; val_pos < sum_len; val_pos++ ) {
-            current_xb[val_pos] = sum_s[val_pos];
+            current_xb[val_pos] = DType ( sum_s[val_pos] );
           }
         }
       }
@@ -401,13 +401,13 @@ void softmax( DType* x, const uint64_t size )
   // exp and sum
   float sum = 0.0f;
   for ( uint64_t i = 0; i < size; i++ ) {
-    x[i] = expf( float( x[i] - max_val ) );
+    x[i] = DType ( expf( float( x[i] - max_val ) ) );
     sum += float( x[i] );
   }
 
   // normalize
   for ( uint64_t i = 0; i < size; i++ ) {
-    x[i] = float( x[i] ) / sum;
+    x[i] = DType ( float( x[i] ) / sum );
   }
 }
 
@@ -452,14 +452,14 @@ inline void do_rope( const uint64_t head_size,
 
   const float k0 = k[elem_idx];
   const float k1 = k[elem_idx + 1];
-  k[elem_idx] = k0 * fcr - k1 * fci;
-  k[elem_idx + 1] = k0 * fci + k1 * fcr;
+  k[elem_idx] = DType ( k0 * fcr - k1 * fci );
+  k[elem_idx + 1] = DType ( k0 * fci + k1 * fcr );
 
   for ( uint64_t i = 0; i < gqa_size; i++ ) {
     const float q0 = q[i * head_size + elem_idx];
     const float q1 = q[i * head_size + elem_idx + 1];
-    q[i * head_size + elem_idx] = q0 * fcr - q1 * fci;
-    q[i * head_size + elem_idx + 1] = q0 * fci + q1 * fcr;
+    q[i * head_size + elem_idx] = DType ( q0 * fcr - q1 * fci );
+    q[i * head_size + elem_idx + 1] = DType ( q0 * fci + q1 * fcr );
   }
 }
 
@@ -523,7 +523,7 @@ void gumbel_fix( DType* array, float temp, const uint64_t vocab_size )
   for ( uint64_t i = 0; i < vocab_size; i++ ) {
     float myrandf = static_cast<float>( rand() ) / RAND_MAX;
     myrandf = logf( -logf( myrandf ) );
-    array[i] = float( array[i] ) / temp - myrandf;
+    array[i] = DType ( float( array[i] ) / temp - myrandf );
   }
 }
 
