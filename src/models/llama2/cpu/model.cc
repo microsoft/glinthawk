@@ -1,12 +1,12 @@
 #include "model.hh"
 
+#include <chrono>
 #include <cstdint>
 #include <fcntl.h>
 #include <memory>
 #include <optional>
 #include <set>
 #include <source_location>
-#include <chrono>
 
 #include "util/exception.hh"
 #include "util/file_descriptor.hh"
@@ -164,19 +164,28 @@ void Llama2<DType>::transformer_layer( const int32_t layer_num )
   ops::attention_0_gemm_fast( this->state_.q,
                               this->state_.batch_context_pointers,
                               this->state_.att,
+                              seq_len,
+                              head_size,
+                              n_kv_heads,
+                              gqa_size,
                               curr_conc_lvl,
                               this->state_.batch_token_positions );
 
 //  auto end_att0 = chrono::system_clock::now();
 
   // softmax
-  ops::attention_softmax( this->state_.att, this->state_.batch_token_positions, curr_conc_lvl );
+  ops::attention_softmax(
+    this->state_.att, this->state_.batch_token_positions, seq_len, n_heads, this->state_.temp_softmax, curr_conc_lvl );
 
-  auto end_soft = chrono::system_clock::now();
+//  auto end_soft = chrono::system_clock::now();
 
   ops::attention_2_gemm_fast( this->state_.att,
                               this->state_.batch_context_pointers,
                               this->state_.xb,
+                              seq_len,
+                              head_size,
+                              n_kv_heads,
+                              gqa_size,
                               curr_conc_lvl,
                               this->state_.batch_token_positions );
   // </multihead attention>

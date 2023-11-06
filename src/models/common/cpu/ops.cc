@@ -157,18 +157,13 @@ void silu( DType* hb, DType* hb2, const uint64_t hidden_dim, const uint64_t batc
   }
 }
 
-template<typename DType>
+template<typename DType, uint64_t seq_len, uint64_t head_size, uint64_t n_kv_heads, uint64_t gqa_size>
 void attention_0_gemm_fast( const DType* query,
                             const DType* const context_pointers[],
                             DType* att,
                             const uint64_t batch_size,
                             const uint32_t* token_positions )
 {
-
-  const uint64_t seq_len = 2048;
-  const uint64_t head_size = 128;
-  const uint64_t n_kv_heads = 8;
-  const uint64_t gqa_size = 8;
   const float scale = 1.0f / sqrtf( head_size );
 
   const uint64_t ld_key = n_kv_heads * head_size * 2;
@@ -223,16 +218,38 @@ void attention_0_gemm_fast( const DType* query,
 }
 
 template<typename DType>
-void attention_2_gemm_fast( const DType* att,
+void attention_0_gemm_fast( const DType* query,
                             const DType* const context_pointers[],
-                            DType* xb,
+                            DType* att,
+                            const uint64_t seq_len,
+                            const uint64_t head_size,
+                            const uint64_t n_kv_heads,
+                            const uint64_t gqa_size,
                             const uint64_t batch_size,
                             const uint32_t* token_positions )
 {
-  const uint64_t seq_len = 2048;
-  const uint64_t head_size = 128;
-  const uint64_t n_kv_heads = 8;
-  const uint64_t gqa_size = 8;
+  if ( seq_len == 2048 and head_size == 128 and n_kv_heads == 8 and gqa_size == 8 ) { // Llama-2-70B
+    attention_0_gemm_fast<DType, 2048, 128, 8, 8>( query, context_pointers, att, batch_size, token_positions );
+  } else if ( seq_len == 2048 and head_size == 128 and n_kv_heads == 40 and gqa_size == 1 ) { // Llama-2-13B
+    attention_0_gemm_fast<DType, 2048, 128, 40, 1>( query, context_pointers, att, batch_size, token_positions );
+  } else if ( seq_len == 2048 and head_size == 128 and n_kv_heads == 32 and gqa_size == 1 ) { // Llama-2-7B
+    attention_0_gemm_fast<DType, 2048, 128, 32, 1>( query, context_pointers, att, batch_size, token_positions );
+  } else {
+    throw runtime_error( "Unknown model, no hardcoded function available" );
+  }
+}
+
+template<typename DType>
+void attention_2_gemm_fast( const DType* att,
+                            const DType* const context_pointers[],
+                            DType* xb,
+                            const uint64_t seq_len,
+                            const uint64_t head_size,
+                            const uint64_t n_kv_heads,
+                            const uint64_t gqa_size,
+                            const uint64_t batch_size,
+                            const uint32_t* token_positions )
+{
   const uint64_t ld_val = n_kv_heads * head_size * 2;
   const uint64_t ld_att = seq_len;
   const uint64_t ld_xb = head_size;
@@ -286,6 +303,24 @@ void attention_2_gemm_fast( const DType* att,
     }
   }
 }
+
+// template<typename DType>
+// void attention_2_gemm_fast( const DType* att,
+//                             const DType* const context_pointers[],
+//                             DType* xb,
+//                             const uint64_t seq_len,
+//                             const uint64_t head_size,
+//                             const uint64_t n_kv_heads,
+//                             const uint64_t gqa_size,
+//                             const uint64_t batch_size,
+//                             const uint32_t* token_positions )
+//{
+//   if (seq_len == 2048 and head_size == 128 and n_kv_heads == 8 and gqa_size == 8) {           // Llama-2-70B
+//     attention_2_gemm_fast<DType, 2048, 128, 8, 8>(att, context_pointers, xb, batch_size, token_positions);
+//   } else {
+//     throw runtime_error("Unknown model, no hardcoded function available");
+//   }
+// }
 
 template<typename DType>
 void attention_0_gemm( const DType* query,
@@ -413,11 +448,9 @@ void softmax( DType* x, const uint64_t size )
   }
 }
 
-template<typename DType>
+template<typename DType, uint64_t seq_len, uint64_t n_heads>
 void attention_softmax( DType* att, const uint32_t* token_positions, const uint64_t batch_size )
 {
-  const uint64_t seq_len = 2048;
-  const uint64_t n_heads = 64;
   uint64_t i;
   uint64_t j;
 #pragma omp parallel for private( i, j ) collapse( 2 )
@@ -426,6 +459,25 @@ void attention_softmax( DType* att, const uint32_t* token_positions, const uint6
       DType* this_att = att + i * n_heads * seq_len + j * seq_len;
       softmax( this_att, token_positions[i] + 1 );
     }
+  }
+}
+
+template<typename DType>
+void attention_softmax( DType* att,
+                        const uint32_t* token_positions,
+                        const uint64_t seq_len,
+                        const uint64_t n_heads,
+                        [[maybe_unused]] DType* temp_buffer,
+                        const uint64_t batch_size )
+{
+  if ( seq_len == 2048 and n_heads == 64 ) {              // Llama-2-70B
+    attention_softmax<DType, 2048, 64>( att, token_positions, batch_size );
+  } else if ( seq_len == 2048 and n_heads == 40 ) {       // Llama-2-13B
+    attention_softmax<DType, 2048, 40>( att, token_positions, batch_size );
+  } else if ( seq_len == 2048 and n_heads == 32 ) {       // Llama-2-7B
+    attention_softmax<DType, 2048, 32>( att, token_positions, batch_size );
+  } else {
+    throw runtime_error( "Unknown model, no hardcoded function available" );
   }
 }
 
@@ -605,16 +657,29 @@ template void attention_2_gemm<_Float16>( const _Float16* att,
 template void attention_0_gemm_fast<_Float16>( const _Float16* query,
                                                const _Float16* const context_pointers[],
                                                _Float16* att,
+                                               const uint64_t seq_len,
+                                               const uint64_t head_size,
+                                               const uint64_t n_kv_heads,
+                                               const uint64_t gqa_size,
                                                const uint64_t batch_size,
                                                const uint32_t* token_positions );
 
 template void attention_2_gemm_fast<_Float16>( const _Float16* att,
                                                const _Float16* const context_pointers[],
                                                _Float16* xb,
+                                               const uint64_t seq_len,
+                                               const uint64_t head_size,
+                                               const uint64_t n_kv_heads,
+                                               const uint64_t gqa_size,
                                                const uint64_t batch_size,
                                                const uint32_t* token_positions );
 
-template void attention_softmax<_Float16>( _Float16* att, const uint32_t* token_positions, const uint64_t batch_size );
+template void attention_softmax<_Float16>( _Float16* att,
+                                           const uint32_t* token_positions,
+                                           const uint64_t seq_len,
+                                           const uint64_t n_heads,
+                                           _Float16* temp_buffer,
+                                           const uint64_t batch_size );
 
 template void apply_rope<_Float16>( const uint64_t head_size,
                                     const uint64_t n_kv_heads,
@@ -678,16 +743,29 @@ template void attention_2_gemm<float>( const float* att,
 template void attention_0_gemm_fast<float>( const float* query,
                                             const float* const context_pointers[],
                                             float* att,
+                                            const uint64_t seq_len,
+                                            const uint64_t head_size,
+                                            const uint64_t n_kv_heads,
+                                            const uint64_t gqa_size,
                                             const uint64_t batch_size,
                                             const uint32_t* token_positions );
 
 template void attention_2_gemm_fast<float>( const float* att,
                                             const float* const context_pointers[],
                                             float* xb,
+                                            const uint64_t seq_len,
+                                            const uint64_t head_size,
+                                            const uint64_t n_kv_heads,
+                                            const uint64_t gqa_size,
                                             const uint64_t batch_size,
                                             const uint32_t* token_positions );
 
-template void attention_softmax<float>( float* att, const uint32_t* token_positions, const uint64_t batch_size );
+template void attention_softmax<float>( float* att,
+                                        const uint32_t* token_positions,
+                                        const uint64_t seq_len,
+                                        const uint64_t n_heads,
+                                        float* temp_buffer,
+                                        const uint64_t batch_size );
 
 template void apply_rope<float>( const uint64_t head_size,
                                  const uint64_t n_kv_heads,
