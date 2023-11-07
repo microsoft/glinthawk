@@ -328,8 +328,8 @@ void Worker<Model>::prompt_preparation_thread_func()
     vector<InferenceState> states {};
     PromptID prompt_id;
 
-    if ( prompt_queue_.wait_dequeue_timed( prompt_id, chrono::seconds { 1 } ) ) {
-      LOG( INFO ) << "Preparing states for the prompt: " << prompt_id.base58digest();
+    while ( prompt_queue_.try_dequeue( prompt_id ) && states.size() < 1'000 ) {
+      LOG( INFO ) << "Preparing the state for the prompt: " << prompt_id.base58digest();
 
       auto prompt = prompt_manager_->get( prompt_id );
 
@@ -341,10 +341,15 @@ void Worker<Model>::prompt_preparation_thread_func()
       state.set_prompt_length( prompt.token_count() );
       state.set_temperature( 0.0f );
       state.set_layer_workers( current_route_ );
-
-      LOG( INFO ) << "Pushing states to compute kernel: " << states.size();
-      this->compute_kernel_->push( move( state ) );
+      states.push_back( move( state ) );
     }
+
+    if ( not states.empty() ) {
+      LOG( INFO ) << "Pushing states to compute kernel: " << states.size();
+      this->compute_kernel_->push( move( states ) );
+    }
+
+    this_thread::sleep_for( chrono::seconds { 1 } );
   }
 }
 
