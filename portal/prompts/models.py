@@ -49,8 +49,7 @@ class Job(models.Model):
     def save(self, *args, **kwargs):
         super().save(*args, **kwargs)
         celery.current_app.send_task(
-            "prompts.tasks.prepare_prompts_for_job", args=[self.uuid],
-            countdown=5
+            "prompts.tasks.prepare_prompts_for_job", args=[self.uuid], countdown=5
         )
 
 

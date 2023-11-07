@@ -19,6 +19,8 @@ from common.inference import InferenceState
 
 from protobuf import glinthawk_pb2 as glinthawk_pb
 
+import settings
+
 logging.basicConfig(level=logging.INFO)
 
 
@@ -63,7 +65,6 @@ prompts = [
 prompts_blobstore_uri = "file:///home/sadjad/prompts/"
 
 model = ModelInfo(name="stories-110M-glint", n_layers=12, layers_per_worker=4)
-# model = ModelInfo(name="llama2-7b-chat", n_layers=20, layers_per_worker=10)
 workers = []
 layer_workers = {}
 incoming_messages = asyncio.Queue()
@@ -125,20 +126,13 @@ async def message_processor():
             # assinging layers to this worker
             worker.start_layer = worker.id * model.layers_per_worker
             worker.end_layer = (worker.id + 1) * model.layers_per_worker - 1
-            # A little trick to test GPU setup without running out of memory
-            # if worker.id == 0:
-            #     worker.start_layer = worker.id * model.layers_per_worker
-            #     worker.end_layer = (worker.id + 1) * model.layers_per_worker - 1
-            # else:
-            #     worker.start_layer = 22
-            #     worker.end_layer = 31
 
             initialization_message = glinthawk_pb.InitializeWorker(
                 model_name=model.name,
                 start_layer=worker.start_layer,
                 end_layer=worker.end_layer,
                 concurrency_size=worker.max_concurrency_size,
-                blobstore_uri=prompts_blobstore_uri,
+                blobstore_uri=settings.GLINTHAWK_PROMPT_BLOBSTORE,
             )
 
             asyncio.create_task(
@@ -178,11 +172,7 @@ async def message_processor():
                 )
 
         elif message.opcode == Message.OpCode.InferenceState:
-            state = InferenceState()
-            state.load_from_payload(message.payload)
-            logging.info(
-                f"Worker {worker.id} returned token {state.token}(pos={state.token_pos}) for prompt {state.prompt_id.hex()[:8]}."
-            )
+            logging.error("Received InferenceState message from a worker.")
 
         elif message.opcode == Message.OpCode.PromptCompleted:
             proto = glinthawk_pb.PromptCompleted()
