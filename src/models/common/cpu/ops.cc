@@ -179,39 +179,33 @@ void attention_0_gemm_fast( const DType* query,
 
   uint64_t i;
   uint64_t kv_head;
-  uint64_t key_pos;
-  uint64_t query_gqa_head;
-  uint64_t p;
-  const size_t sum_len = 8;
-  float sum_s[sum_len];
-  CHECK_GE( sum_len, gqa_size ) << "Accounting for GQAs";
 
-#pragma omp parallel for private( i, kv_head, p, sum_s, key_pos, query_gqa_head ) collapse( 3 )
+#pragma omp parallel for private( i, kv_head ) shared( token_positions, context_pointers, att, query ) collapse( 2 )
   for ( i = 0; i < batch_size; i++ ) {
     for ( kv_head = 0; kv_head < n_kv_heads; kv_head++ ) {
-      for ( key_pos = 0; key_pos < seq_len; key_pos++ ) {
+      const DType* current_query = query + i * dim_ + kv_head * stride_qry;
+      DType* current_att = att + i * att_dim_ + kv_head * stride_att;
+      const DType* current_key = context_pointers[i] + kv_head * stride_key;
 
-        if ( key_pos >= token_positions[i] + 1 ) {
-          continue;
-        }
+      for ( uint64_t key_pos = 0; key_pos < token_positions[i] + 1; key_pos++ ) {
 
-        std::memset( sum_s, 0, sizeof( float ) * gqa_size );
-        const DType* current_key = context_pointers[i] + kv_head * stride_key + key_pos * ld_key;
-        const DType* current_query = query + i * dim_ + kv_head * stride_qry;
-        DType* current_att = att + i * att_dim_ + kv_head * stride_att;
+        float sum_s[gqa_size] = { 0.0 };
 
-        for ( p = 0; p < head_size; ++p ) {
+        for ( uint64_t p = 0; p < head_size; ++p ) {
           const float a_value = current_key[p];
 
-          for ( query_gqa_head = 0; query_gqa_head < gqa_size; query_gqa_head++ ) {
+          for ( uint64_t query_gqa_head = 0; query_gqa_head < gqa_size; query_gqa_head++ ) {
             const float b_value = current_query[query_gqa_head * ld_qry + p];
             sum_s[query_gqa_head] += a_value * b_value;
           }
         }
 
-        for ( query_gqa_head = 0; query_gqa_head < gqa_size; query_gqa_head++ ) {
-          current_att[query_gqa_head * ld_att + key_pos] = DType( scale * sum_s[query_gqa_head] );
+        for ( uint64_t query_gqa_head = 0; query_gqa_head < gqa_size; query_gqa_head++ ) {
+          current_att[query_gqa_head * ld_att] = DType( scale * sum_s[query_gqa_head] );
         }
+
+        current_att += 1;
+        current_key += ld_key;
       }
     }
   }
@@ -234,12 +228,14 @@ void attention_0_gemm_fast( const DType* query,
     attention_0_gemm_fast<DType, 2048, 128, 40, 1>( query, context_pointers, att, batch_size, token_positions );
   } else if ( seq_len == 2048 and head_size == 128 and n_kv_heads == 32 and gqa_size == 1 ) { // Llama-2-7B
     attention_0_gemm_fast<DType, 2048, 128, 32, 1>( query, context_pointers, att, batch_size, token_positions );
+  } else if ( seq_len == 1024 and head_size == 64 and n_kv_heads == 12 and gqa_size == 1 ) { // stories-110M
+    attention_0_gemm_fast<DType, 1024, 64, 12, 1>( query, context_pointers, att, batch_size, token_positions );
   } else {
     throw runtime_error( "Unknown model, no hardcoded function available" );
   }
 }
 
-template<typename DType, uint64_t seq_len, uint64_t head_size, uint64_t n_kv_heads, uint64_t gqa_size, size_t sum_len>
+template<typename DType, uint64_t seq_len, uint64_t head_size, uint64_t n_kv_heads, uint64_t gqa_size, uint64_t rounds>
 void attention_2_gemm_fast( const DType* att,
                             const DType* const context_pointers[],
                             DType* xb,
@@ -248,7 +244,6 @@ void attention_2_gemm_fast( const DType* att,
 {
   const uint64_t ld_val = n_kv_heads * head_size * 2;
   const uint64_t ld_att = seq_len;
-  const uint64_t ld_xb = head_size;
 
   const uint64_t stride_val = head_size;
   const uint64_t stride_att = seq_len * gqa_size;
@@ -260,66 +255,62 @@ void attention_2_gemm_fast( const DType* att,
 
   uint64_t i;
   uint64_t kv_head;
-  uint64_t val_pos;
-  uint64_t p;
-  uint64_t att_gqa_head;
-  uint64_t round_index;
 
-  float sum_s[sum_len];
-  uint64_t rounds = head_size / sum_len;
-  CHECK_EQ( head_size % sum_len, 0 ) << "Remainders are bad";
+  CHECK_EQ( n_kv_heads % rounds, 0 ) << "Remainders are bad";
 
-#pragma omp parallel for private( i, kv_head, att_gqa_head, round_index, sum_s ) schedule( dynamic )                   \
-  shared( token_positions, context_pointers, att, xb ) collapse( 4 )
+#pragma omp parallel for private( i, kv_head ) shared( xb, token_positions, context_pointers, att ) collapse( 2 )
   for ( i = 0; i < batch_size; i++ ) {
-    for ( kv_head = 0; kv_head < n_kv_heads; kv_head++ ) {
-      for ( att_gqa_head = 0; att_gqa_head < gqa_size; att_gqa_head++ ) {
-        for ( round_index = 0; round_index < rounds; round_index++ ) {
+    for ( kv_head = 0; kv_head < n_kv_heads; kv_head += rounds ) {
 
-          std::memset( sum_s, 0, sizeof( float ) * sum_len );
-          const DType* current_att = att + i * att_dim_ + kv_head * stride_att + att_gqa_head * ld_att;
-          const DType* current_value = context_pointers[i] + kv_dim_ + kv_head * stride_val + round_index * sum_len;
+      float sum_s[rounds * gqa_size * head_size];
+      std::memset( sum_s, 0, sizeof( float ) * rounds * gqa_size * head_size );
+      const DType* current_att = att + i * att_dim_ + kv_head * stride_att;
+      const DType* current_value = context_pointers[i] + kv_dim_ + kv_head * stride_val;
 
-          for ( p = 0; p < token_positions[i] + 1; ++p ) {
-            const float b_value = current_att[p];
+      for ( uint64_t p = 0; p < token_positions[i] + 1; ++p ) {
+        for ( uint64_t round_index = 0; round_index < rounds; round_index++ ) {
+          for ( uint64_t att_gqa_head = 0; att_gqa_head < gqa_size; att_gqa_head++ ) {
+            const float b_value = current_att[round_index * stride_att + att_gqa_head * ld_att + p];
 
-            for ( val_pos = 0; val_pos < sum_len; val_pos++ ) {
-              const float a_value = current_value[val_pos];
-              sum_s[val_pos] += a_value * b_value;
+            for ( uint64_t val_pos = 0; val_pos < head_size; val_pos++ ) {
+              const float a_value = current_value[round_index * stride_val + val_pos];
+              sum_s[round_index * stride_xb + att_gqa_head * head_size + val_pos] += a_value * b_value;
             }
-            current_value += ld_val;
-          }
-          DType* current_xb = xb + i * dim_ + kv_head * stride_xb + att_gqa_head * ld_xb + round_index * sum_len;
-          for ( val_pos = 0; val_pos < sum_len; val_pos++ ) {
-            current_xb[val_pos] = DType( sum_s[val_pos] );
           }
         }
+        current_value += ld_val;
+      }
+      DType* current_xb = xb + i * dim_ + kv_head * stride_xb;
+      for ( uint64_t val_pos = 0; val_pos < rounds * gqa_size * head_size; val_pos++ ) {
+        current_xb[val_pos] = DType( sum_s[val_pos] );
       }
     }
   }
 }
 
- template<typename DType>
- void attention_2_gemm_fast( const DType* att,
-                             const DType* const context_pointers[],
-                             DType* xb,
-                             const uint64_t seq_len,
-                             const uint64_t head_size,
-                             const uint64_t n_kv_heads,
-                             const uint64_t gqa_size,
-                             const uint64_t batch_size,
-                             const uint32_t* token_positions )
+template<typename DType>
+void attention_2_gemm_fast( const DType* att,
+                            const DType* const context_pointers[],
+                            DType* xb,
+                            const uint64_t seq_len,
+                            const uint64_t head_size,
+                            const uint64_t n_kv_heads,
+                            const uint64_t gqa_size,
+                            const uint64_t batch_size,
+                            const uint32_t* token_positions )
 {
-   if (seq_len == 2048 and head_size == 128 and n_kv_heads == 8 and gqa_size == 8) {           // Llama-2-70B
-     attention_2_gemm_fast<DType, 2048, 128, 8, 8, 128>(att, context_pointers, xb, batch_size, token_positions);
-   } else if ( seq_len == 2048 and head_size == 128 and n_kv_heads == 40 and gqa_size == 1 ) { // Llama-2-13B
-     attention_2_gemm_fast<DType, 2048, 128, 40, 1, 128>( att, context_pointers, xb, batch_size, token_positions );
-   } else if ( seq_len == 2048 and head_size == 128 and n_kv_heads == 32 and gqa_size == 1 ) { // Llama-2-7B
-     attention_2_gemm_fast<DType, 2048, 128, 32, 1, 128>( att, context_pointers, xb, batch_size, token_positions );
-   } else {
-     throw runtime_error("Unknown model, no hardcoded function available");
-   }
- }
+  if ( seq_len == 2048 and head_size == 128 and n_kv_heads == 8 and gqa_size == 8 ) { // Llama-2-70B
+    attention_2_gemm_fast<DType, 2048, 128, 8, 8, 1>( att, context_pointers, xb, batch_size, token_positions );
+  } else if ( seq_len == 2048 and head_size == 128 and n_kv_heads == 40 and gqa_size == 1 ) { // Llama-2-13B
+    attention_2_gemm_fast<DType, 2048, 128, 40, 1, 2>( att, context_pointers, xb, batch_size, token_positions );
+  } else if ( seq_len == 2048 and head_size == 128 and n_kv_heads == 32 and gqa_size == 1 ) { // Llama-2-7B
+    attention_2_gemm_fast<DType, 2048, 128, 32, 1, 2>( att, context_pointers, xb, batch_size, token_positions );
+  } else if ( seq_len == 1024 and head_size == 64 and n_kv_heads == 12 and gqa_size == 1 ) { // stories-110M
+    attention_2_gemm_fast<DType, 1024, 64, 12, 1, 4>( att, context_pointers, xb, batch_size, token_positions );
+  } else {
+    throw runtime_error( "Unknown model, no hardcoded function available" );
+  }
+}
 
 template<typename DType>
 void attention_0_gemm( const DType* query,
@@ -469,12 +460,14 @@ void attention_softmax( DType* att,
                         [[maybe_unused]] DType* temp_buffer,
                         const uint64_t batch_size )
 {
-  if ( seq_len == 2048 and n_heads == 64 ) {              // Llama-2-70B
+  if ( seq_len == 2048 and n_heads == 64 ) { // Llama-2-70B
     attention_softmax<DType, 2048, 64>( att, token_positions, batch_size );
-  } else if ( seq_len == 2048 and n_heads == 40 ) {       // Llama-2-13B
+  } else if ( seq_len == 2048 and n_heads == 40 ) { // Llama-2-13B
     attention_softmax<DType, 2048, 40>( att, token_positions, batch_size );
-  } else if ( seq_len == 2048 and n_heads == 32 ) {       // Llama-2-7B
+  } else if ( seq_len == 2048 and n_heads == 32 ) { // Llama-2-7B
     attention_softmax<DType, 2048, 32>( att, token_positions, batch_size );
+  } else if ( seq_len == 1024 and n_heads == 12 ) { // stories-110M
+    attention_softmax<DType, 1024, 12>( att, token_positions, batch_size );
   } else {
     throw runtime_error( "Unknown model, no hardcoded function available" );
   }
