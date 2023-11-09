@@ -74,7 +74,7 @@ int main( int argc, char* argv[] )
         models::InferenceState state;
 
         state.set_prompt_id( id );
-        state.set_token_pos( i );
+        state.set_token_pos( seq_len-1 );
         state.set_next_layer( start_slice );
         state.set_temperature( 0.0f );
         if ( start_slice == 0 ) {
