@@ -50,13 +50,14 @@ public:
     PartialInference,
     CopyToGPU,
     CopyFromGPU,
+    ConcurrentCopyGPU,
     COUNT,
   };
 
   constexpr static size_t num_categories = static_cast<size_t>( Category::COUNT );
 
   constexpr static std::array<const char*, num_categories> _category_names {
-    { "Non-blocking", "Waiting for Event", "Memory Allocation", "I/O", "Token Generation", "Partial Inference", "Copy Mem to GPU", "Copy Mem from GPU" }
+    { "Non-blocking", "Waiting for Event", "Memory Allocation", "I/O", "Token Generation", "Partial Inference", "Copy Mem to GPU", "Copy Mem from GPU", "Concurrent Copy To/From GPU" }
   };
 
 private:
