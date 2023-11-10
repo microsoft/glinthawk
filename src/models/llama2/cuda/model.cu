@@ -176,16 +176,10 @@ void Llama2<DType>::pass_begin( const vector<uint32_t>& token )
 }
 
 template<typename DType>
-void Llama2<DType>::transformer_layer( const int32_t layer_num )
+void Llama2<DType>::pre_attention_ops( const int32_t layer_num )
 {
   const uint64_t dim = this->config_.dim;
   const uint64_t kv_dim = this->config_.kv_dim;
-  const uint64_t gqa_size = this->config_.gqa_size;
-  const uint64_t hidden_dim = this->config_.hidden_dim;
-  const uint64_t head_size = dim / this->config_.n_heads;
-  const uint64_t n_heads = this->config_.n_heads;
-  const uint64_t n_kv_heads = this->config_.n_kv_heads;
-  const uint64_t seq_len = this->config_.seq_len;
   const uint64_t curr_conc_lvl = this->state_.curr_concurrency_size;
 
   const auto& layer_weights = this->layer_weights_[layer_num];
@@ -197,6 +191,18 @@ void Llama2<DType>::transformer_layer( const int32_t layer_num )
   ops::matmul( this->state_.q, this->state_.xb, layer_weights.wq, curr_conc_lvl, dim, dim );
   ops::matmul( this->state_.k, this->state_.xb, layer_weights.wk, curr_conc_lvl, dim, kv_dim );
   ops::matmul( this->state_.v, this->state_.xb, layer_weights.wv, curr_conc_lvl, dim, kv_dim );
+}
+
+template<typename DType>
+void Llama2<DType>::attention_ops()
+{
+  const uint64_t kv_dim = this->config_.kv_dim;
+  const uint64_t gqa_size = this->config_.gqa_size;
+  const uint64_t head_size = this->config_.head_size;
+  const uint64_t n_heads = this->config_.n_heads;
+  const uint64_t n_kv_heads = this->config_.n_kv_heads;
+  const uint64_t seq_len = this->config_.seq_len;
+  const uint64_t curr_conc_lvl = this->state_.curr_concurrency_size;
 
   ops::apply_rope( head_size,
                    n_kv_heads,
@@ -241,6 +247,16 @@ void Llama2<DType>::transformer_layer( const int32_t layer_num )
                          curr_conc_lvl,
                          this->state_.batch_token_positions );
   // </multihead attention>
+}
+
+template<typename DType>
+void Llama2<DType>::post_attention_ops( const int32_t layer_num )
+{
+  const uint64_t dim = this->config_.dim;
+  const uint64_t hidden_dim = this->config_.hidden_dim;
+  const uint64_t curr_conc_lvl = this->state_.curr_concurrency_size;
+
+  const auto& layer_weights = this->layer_weights_[layer_num];
 
   // final matmul to get the output of the attention
   ops::matmul( this->state_.xb2, this->state_.xb, layer_weights.wo, curr_conc_lvl, dim, dim );
@@ -296,20 +312,11 @@ template<typename DType>
 vector<InferenceState> Llama2<DType>::forward( vector<InferenceState>&& inference_states,
                                                const vector<shared_ptr<ContextType>>& contexts )
 {
-  // TODO(sadjad): refactor the checks into a separate function
-  CHECK_GT( inference_states.size(), 0 ) << "batch size must be at least 1";
-  CHECK_EQ( inference_states.size(), contexts.size() ) << "token size must be the same as context size";
-  CHECK_LE( inference_states.size(), this->config_.concurrency_limit )
-    << "current batch cannot be larger than max concurrency size";
-
-  for ( auto& item : inference_states ) {
-    CHECK_EQ( item.next_layer(), this->config_.start_layer_num ) << "next_layer must be the start layer";
-  }
+  // TODO: fix the move problem
+  assert_safe_forward( inference_states, contexts );
 
   for ( size_t i = 0; i < inference_states.size(); i++ ) {
     this->state_.batch_token_positions[i] = inference_states[i].token_pos();
-    CHECK_LT( this->state_.batch_token_positions[i], this->config_.seq_len )
-      << "token position cannot be larger than sequence length";
   }
 
   this->state_.curr_concurrency_size = inference_states.size();
@@ -333,7 +340,9 @@ vector<InferenceState> Llama2<DType>::forward( vector<InferenceState>&& inferenc
     for ( size_t i = 0; i < inference_states.size(); i++ ) {
       this->state_.batch_context_pointers[i] = contexts[i]->key( this->config_, layer_num, 0 );
     }
-    transformer_layer( layer_num );
+    pre_attention_ops( layer_num );
+    attention_ops();
+    post_attention_ops( layer_num );
   }
 
   vector<InferenceState> output_states;
@@ -387,6 +396,32 @@ InferenceState Llama2<DType>::forward( InferenceState&& inference_state, shared_
   vector<shared_ptr<ContextType>> context_vector;
   context_vector.push_back( move( context ) );
   return move( forward( move( token_vector ), context_vector )[0] );
+}
+
+template<typename DType>
+InferenceState Llama2<DType>::pre_attention_forward( InferenceState&& inference_state )
+{
+  vector<InferenceState> token_vector;
+  token_vector.push_back( move( inference_state ) );
+  return move( pre_attention_forward( move( token_vector ) )[0] );
+}
+
+template<typename DType>
+InferenceState Llama2<DType>::attention_forward( InferenceState&& inference_state, shared_ptr<ContextType> context )
+{
+  vector<InferenceState> token_vector;
+  token_vector.push_back( move( inference_state ) );
+  vector<shared_ptr<ContextType>> context_vector;
+  context_vector.push_back( move( context ) );
+  return move( attention_forward( move( token_vector ), context_vector )[0] );
+}
+
+template<typename DType>
+InferenceState Llama2<DType>::post_attention_forward( InferenceState&& inference_state )
+{
+  vector<InferenceState> token_vector;
+  token_vector.push_back( move( inference_state ) );
+  return move( post_attention_forward( move( token_vector ) )[0] );
 }
 
 template class Context<__half>;

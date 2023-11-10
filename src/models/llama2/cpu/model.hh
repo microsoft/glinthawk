@@ -27,12 +27,10 @@ public:
 
 private:
   void pass_begin( const std::vector<uint32_t>& token );
-  void transformer_layer( const int32_t layer_num );
+  void pre_attention_ops( const int32_t layer_num );
+  void attention_ops( );
+  void post_attention_ops( const int32_t layer_num );
   void pass_end();
-
-  std::vector<InferenceState> forward(
-    const std::vector<std::reference_wrapper<const InferenceState>>& inference_states,
-    const std::vector<std::shared_ptr<ContextType>>& contexts );
 
 public:
   using BaseLlama2<DType, Context<DType>>::BaseLlama2;
@@ -53,6 +51,19 @@ public:
 
   std::vector<InferenceState> forward( std::vector<InferenceState>&& inference_states,
                                        const std::vector<std::shared_ptr<ContextType>>& contexts ) override;
+
+  InferenceState pre_attention_forward( InferenceState&& inference_state ) override;
+
+  std::vector<InferenceState> pre_attention_forward( std::vector<InferenceState>&& inference_states ) override;
+
+  InferenceState attention_forward( InferenceState&& inference_state, std::shared_ptr<Context> context ) override;
+
+  std::vector<InferenceState> attention_forward( std::vector<InferenceState>&& inference_states,
+                                                 const std::vector<std::shared_ptr<Context>>& contexts ) override;
+
+  InferenceState post_attention_forward( InferenceState&& inference_state ) override;
+
+  std::vector<InferenceState> post_attention_forward( std::vector<InferenceState>&& inference_states ) override;
 };
 
 } // namespace glinthawk::models::llama2::cpu
