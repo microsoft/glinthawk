@@ -9,47 +9,7 @@
 
 using namespace std;
 
-namespace glinthawk::models::common::cpu::ops {
-
-/// @brief Accumulate the values in b into a (a += b)
-template<typename DType>
-void accum( DType* a, const DType* b, const uint64_t size, const uint64_t batch_size )
-{
-  uint64_t b_idx;
-  uint64_t i;
-#pragma omp parallel for private( b_idx, i ) collapse( 2 )
-  for ( b_idx = 0; b_idx < batch_size; b_idx++ ) {
-    for ( i = 0; i < size; i++ ) {
-      a[b_idx * size + i] = DType( float( a[b_idx * size + i] ) + float( b[b_idx * size + i] ) );
-    }
-  }
-}
-
-template<typename DType>
-void rmsnorm( DType* output, const DType* x, const DType* weight, const uint64_t size, const uint64_t batch_size )
-{
-  uint64_t b;
-#pragma omp parallel for private( b )
-  for ( b = 0; b < batch_size; b++ ) {
-    const DType* X = x + b * size;
-    DType* O = output + b * size;
-
-    // calculate sum of squares
-    float ss = 0.0f;
-    for ( uint64_t j = 0; j < size; j++ ) {
-      ss += float( X[j] ) * float( X[j] );
-    }
-
-    ss /= size;
-    ss += 1e-5f;
-    ss = 1.0f / sqrtf( ss );
-
-    // normalize and scale
-    for ( uint64_t j = 0; j < size; j++ ) {
-      O[j] = DType( float( weight[j] ) * ( ss * float( X[j] ) ) );
-    }
-  }
-}
+namespace {
 
 template<typename DType>
 void simple_gemm_strided_batch( uint64_t m,
@@ -90,6 +50,152 @@ void simple_gemm_strided_batch( uint64_t m,
 
         current_C[col * ldc + row] = DType( alpha * sum + beta * float( current_C[col * ldc + row] ) );
       }
+    }
+  }
+}
+
+
+template<typename DType>
+void attention_0_gemm( const DType* query,
+                       const DType* const context_pointers[],
+                       DType* att,
+                       const uint64_t seq_len,
+                       const uint64_t head_size,
+                       const uint64_t n_kv_heads,
+                       const uint64_t gqa_size,
+                       const uint64_t batch_size,
+                       const uint32_t* token_positions )
+{
+  const float scale = 1.0f / sqrtf( head_size );
+
+  const uint64_t k = head_size;
+  const uint64_t n = gqa_size;
+
+  const uint64_t lda = n_kv_heads * head_size * 2;
+  const uint64_t ldb = k;
+  const uint64_t ldc = seq_len;
+
+  const uint64_t strideA = head_size;
+  const uint64_t strideB = head_size * gqa_size;
+  const uint64_t strideC = seq_len * gqa_size;
+
+  const uint64_t batchCount = n_kv_heads;
+
+  const uint64_t dim_ = head_size * n_kv_heads * gqa_size;
+  const uint64_t att_dim_ = seq_len * n_kv_heads * gqa_size;
+
+  for ( size_t i = 0; i < batch_size; i++ ) {
+    const uint64_t m = token_positions[i] + 1;
+    simple_gemm_strided_batch( m,
+                               n,
+                               k,
+                               true,
+                               false,
+                               scale,
+                               context_pointers[i],
+                               lda,
+                               strideA,
+                               query + i * dim_,
+                               ldb,
+                               strideB,
+                               0.0f,
+                               att + i * att_dim_,
+                               ldc,
+                               strideC,
+                               batchCount );
+  }
+}
+
+template<typename DType>
+void attention_2_gemm( const DType* att,
+                       const DType* const context_pointers[],
+                       DType* xb,
+                       const uint64_t seq_len,
+                       const uint64_t head_size,
+                       const uint64_t n_kv_heads,
+                       const uint64_t gqa_size,
+                       const uint64_t batch_size,
+                       const uint32_t* token_positions )
+{
+  const uint64_t m = head_size;
+  const uint64_t n = gqa_size;
+
+  const uint64_t lda = n_kv_heads * head_size * 2;
+  const uint64_t ldb = seq_len;
+  const uint64_t ldc = m;
+
+  const uint64_t strideA = head_size;
+  const uint64_t strideB = seq_len * gqa_size;
+  const uint64_t strideC = head_size * gqa_size;
+
+  const uint64_t batchCount = n_kv_heads;
+
+  const uint64_t kv_dim_ = head_size * n_kv_heads;
+  const uint64_t dim_ = head_size * n_kv_heads * gqa_size;
+  const uint64_t att_dim_ = seq_len * n_kv_heads * gqa_size;
+
+  for ( size_t i = 0; i < batch_size; i++ ) {
+    const uint64_t k = token_positions[i] + 1;
+
+    simple_gemm_strided_batch( m,
+                               n,
+                               k,
+                               false,
+                               false,
+                               1,
+                               context_pointers[i] + kv_dim_,
+                               lda,
+                               strideA,
+                               att + i * att_dim_,
+                               ldb,
+                               strideB,
+                               0,
+                               xb + i * dim_,
+                               ldc,
+                               strideC,
+                               batchCount );
+  }
+}
+}
+
+namespace glinthawk::models::common::cpu::ops {
+
+/// @brief Accumulate the values in b into a (a += b)
+template<typename DType>
+void accum( DType* a, const DType* b, const uint64_t size, const uint64_t batch_size )
+{
+  uint64_t b_idx;
+  uint64_t i;
+#pragma omp parallel for private( b_idx, i ) collapse( 2 )
+  for ( b_idx = 0; b_idx < batch_size; b_idx++ ) {
+    for ( i = 0; i < size; i++ ) {
+      a[b_idx * size + i] = DType( float( a[b_idx * size + i] ) + float( b[b_idx * size + i] ) );
+    }
+  }
+}
+
+template<typename DType>
+void rmsnorm( DType* output, const DType* x, const DType* weight, const uint64_t size, const uint64_t batch_size )
+{
+  uint64_t b;
+#pragma omp parallel for private( b )
+  for ( b = 0; b < batch_size; b++ ) {
+    const DType* X = x + b * size;
+    DType* O = output + b * size;
+
+    // calculate sum of squares
+    float ss = 0.0f;
+    for ( uint64_t j = 0; j < size; j++ ) {
+      ss += float( X[j] ) * float( X[j] );
+    }
+
+    ss /= size;
+    ss += 1e-5f;
+    ss = 1.0f / sqrtf( ss );
+
+    // normalize and scale
+    for ( uint64_t j = 0; j < size; j++ ) {
+      O[j] = DType( float( weight[j] ) * ( ss * float( X[j] ) ) );
     }
   }
 }
@@ -313,108 +419,6 @@ void attention_2_gemm_fast( const DType* att,
 }
 
 template<typename DType>
-void attention_0_gemm( const DType* query,
-                       const DType* const context_pointers[],
-                       DType* att,
-                       const uint64_t seq_len,
-                       const uint64_t head_size,
-                       const uint64_t n_kv_heads,
-                       const uint64_t gqa_size,
-                       const uint64_t batch_size,
-                       const uint32_t* token_positions )
-{
-  const float scale = 1.0f / sqrtf( head_size );
-
-  const uint64_t k = head_size;
-  const uint64_t n = gqa_size;
-
-  const uint64_t lda = n_kv_heads * head_size * 2;
-  const uint64_t ldb = k;
-  const uint64_t ldc = seq_len;
-
-  const uint64_t strideA = head_size;
-  const uint64_t strideB = head_size * gqa_size;
-  const uint64_t strideC = seq_len * gqa_size;
-
-  const uint64_t batchCount = n_kv_heads;
-
-  const uint64_t dim_ = head_size * n_kv_heads * gqa_size;
-  const uint64_t att_dim_ = seq_len * n_kv_heads * gqa_size;
-
-  for ( size_t i = 0; i < batch_size; i++ ) {
-    const uint64_t m = token_positions[i] + 1;
-    simple_gemm_strided_batch( m,
-                               n,
-                               k,
-                               true,
-                               false,
-                               scale,
-                               context_pointers[i],
-                               lda,
-                               strideA,
-                               query + i * dim_,
-                               ldb,
-                               strideB,
-                               0.0f,
-                               att + i * att_dim_,
-                               ldc,
-                               strideC,
-                               batchCount );
-  }
-}
-
-template<typename DType>
-void attention_2_gemm( const DType* att,
-                       const DType* const context_pointers[],
-                       DType* xb,
-                       const uint64_t seq_len,
-                       const uint64_t head_size,
-                       const uint64_t n_kv_heads,
-                       const uint64_t gqa_size,
-                       const uint64_t batch_size,
-                       const uint32_t* token_positions )
-{
-  const uint64_t m = head_size;
-  const uint64_t n = gqa_size;
-
-  const uint64_t lda = n_kv_heads * head_size * 2;
-  const uint64_t ldb = seq_len;
-  const uint64_t ldc = m;
-
-  const uint64_t strideA = head_size;
-  const uint64_t strideB = seq_len * gqa_size;
-  const uint64_t strideC = head_size * gqa_size;
-
-  const uint64_t batchCount = n_kv_heads;
-
-  const uint64_t kv_dim_ = head_size * n_kv_heads;
-  const uint64_t dim_ = head_size * n_kv_heads * gqa_size;
-  const uint64_t att_dim_ = seq_len * n_kv_heads * gqa_size;
-
-  for ( size_t i = 0; i < batch_size; i++ ) {
-    const uint64_t k = token_positions[i] + 1;
-
-    simple_gemm_strided_batch( m,
-                               n,
-                               k,
-                               false,
-                               false,
-                               1,
-                               context_pointers[i] + kv_dim_,
-                               lda,
-                               strideA,
-                               att + i * att_dim_,
-                               ldb,
-                               strideB,
-                               0,
-                               xb + i * dim_,
-                               ldc,
-                               strideC,
-                               batchCount );
-  }
-}
-
-template<typename DType>
 void softmax( DType* x, const uint64_t size )
 {
   // find max value (for numerical stability)
@@ -626,26 +630,6 @@ template void soft_sample<_Float16>( _Float16* v,
                                      const uint64_t vocab_size,
                                      const uint64_t batch_size );
 
-template void attention_0_gemm<_Float16>( const _Float16* query,
-                                          const _Float16* const context_pointers[],
-                                          _Float16* att,
-                                          const uint64_t seq_len,
-                                          const uint64_t head_size,
-                                          const uint64_t n_kv_heads,
-                                          const uint64_t gqa_size,
-                                          const uint64_t batch_size,
-                                          const uint32_t* token_positions );
-
-template void attention_2_gemm<_Float16>( const _Float16* att,
-                                          const _Float16* const context_pointers[],
-                                          _Float16* xb,
-                                          const uint64_t seq_len,
-                                          const uint64_t head_size,
-                                          const uint64_t n_kv_heads,
-                                          const uint64_t gqa_size,
-                                          const uint64_t batch_size,
-                                          const uint32_t* token_positions );
-
 template void attention_0_gemm_fast<_Float16>( const _Float16* query,
                                                const _Float16* const context_pointers[],
                                                _Float16* att,
@@ -711,26 +695,6 @@ template void soft_sample<float>( float* v,
                                   const std::vector<float>& temp_s,
                                   const uint64_t vocab_size,
                                   const uint64_t batch_size );
-
-template void attention_0_gemm<float>( const float* query,
-                                       const float* const context_pointers[],
-                                       float* att,
-                                       const uint64_t seq_len,
-                                       const uint64_t head_size,
-                                       const uint64_t n_kv_heads,
-                                       const uint64_t gqa_size,
-                                       const uint64_t batch_size,
-                                       const uint32_t* token_positions );
-
-template void attention_2_gemm<float>( const float* att,
-                                       const float* const context_pointers[],
-                                       float* xb,
-                                       const uint64_t seq_len,
-                                       const uint64_t head_size,
-                                       const uint64_t n_kv_heads,
-                                       const uint64_t gqa_size,
-                                       const uint64_t batch_size,
-                                       const uint32_t* token_positions );
 
 template void attention_0_gemm_fast<float>( const float* query,
                                             const float* const context_pointers[],

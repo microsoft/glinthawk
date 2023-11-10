@@ -1,6 +1,5 @@
 #include "model.hh"
 
-#include <chrono>
 #include <cstdint>
 #include <fcntl.h>
 #include <memory>
@@ -77,31 +76,31 @@ Llama2<DType>::Llama2( const filesystem::path& model_path,
   // Load the model
 
   // (1) loading the base weights
-//  {
-//    CHECK_EQ( filesystem::file_size( base_path ), base_size ) << "Base weights are not the expected size.";
-//
-//    FileDescriptor base_fd { CHECK_SYSCALL( "open", open( base_path.c_str(), O_RDONLY ) ) };
-//    MMap_Region base_mmap { nullptr, base_size, PROT_READ, MAP_PRIVATE, base_fd.fd_num(), 0 };
-//    memcpy( base.get(), base_mmap.addr(), base_size );
-//
-//    LOG( INFO ) << "Loaded base weights (" << base_size << " bytes).";
-//  }
+  {
+    CHECK_EQ( filesystem::file_size( base_path ), base_size ) << "Base weights are not the expected size.";
 
-//  // (2) load the layers
-//  for ( auto i = config.start_layer_num; i <= config.end_layer_num; i++ ) {
-//    const auto layer_path = model_path / ( "LAYER" + to_string( i ) + filename_suffix );
-//
-//    CHECK_EQ( filesystem::file_size( layer_path ), layer_size ) << "Layer " << i << " is not the expected size.";
-//
-//    FileDescriptor layer_fd { CHECK_SYSCALL( "open", open( layer_path.c_str(), O_RDONLY ) ) };
-//    MMap_Region layer_mmap { nullptr, layer_size, PROT_READ, MAP_PRIVATE, layer_fd.fd_num(), 0 };
-//
-//    memcpy( reinterpret_cast<uint8_t*>( layers.get() ) + ( i - config.start_layer_num ) * layer_size,
-//            layer_mmap.addr(),
-//            layer_size );
-//
-//    LOG( INFO ) << "Loaded layer " << i << " (" << layer_size << " bytes).";
-//  }
+    FileDescriptor base_fd { CHECK_SYSCALL( "open", open( base_path.c_str(), O_RDONLY ) ) };
+    MMap_Region base_mmap { nullptr, base_size, PROT_READ, MAP_PRIVATE, base_fd.fd_num(), 0 };
+    memcpy( base.get(), base_mmap.addr(), base_size );
+
+    LOG( INFO ) << "Loaded base weights (" << base_size << " bytes).";
+  }
+
+  // (2) load the layers
+  for ( auto i = config.start_layer_num; i <= config.end_layer_num; i++ ) {
+    const auto layer_path = model_path / ( "LAYER" + to_string( i ) + filename_suffix );
+
+    CHECK_EQ( filesystem::file_size( layer_path ), layer_size ) << "Layer " << i << " is not the expected size.";
+
+    FileDescriptor layer_fd { CHECK_SYSCALL( "open", open( layer_path.c_str(), O_RDONLY ) ) };
+    MMap_Region layer_mmap { nullptr, layer_size, PROT_READ, MAP_PRIVATE, layer_fd.fd_num(), 0 };
+
+    memcpy( reinterpret_cast<uint8_t*>( layers.get() ) + ( i - config.start_layer_num ) * layer_size,
+            layer_mmap.addr(),
+            layer_size );
+
+    LOG( INFO ) << "Loaded layer " << i << " (" << layer_size << " bytes).";
+  }
 
   this->init( config, move( base ), move( layers ), move( run_state ) );
 }
@@ -132,33 +131,31 @@ void Llama2<DType>::transformer_layer( const int32_t layer_num )
 
   const auto& layer_weights = this->layer_weights_[layer_num];
 
-//  // attention rmsnorm
-//  ops::rmsnorm( this->state_.xb, this->state_.x, layer_weights.rms_att_weight, dim, curr_conc_lvl );
-//
-//  // qkv matmuls for this position
-//  ops::matmul( this->state_.q, this->state_.xb, layer_weights.wq, curr_conc_lvl, dim, dim );
-//  ops::matmul( this->state_.k, this->state_.xb, layer_weights.wk, curr_conc_lvl, dim, kv_dim );
-//  ops::matmul( this->state_.v, this->state_.xb, layer_weights.wv, curr_conc_lvl, dim, kv_dim );
-//
-//  ops::apply_rope( head_size,
-//                   n_kv_heads,
-//                   gqa_size,
-//                   curr_conc_lvl,
-//                   this->state_.batch_token_positions,
-//                   this->base_weights_.freq_cis_real,
-//                   this->base_weights_.freq_cis_imag,
-//                   this->state_.q,
-//                   this->state_.k );
-//
-//  // save key,value at each time step (pos) to our kv cache
-//  ops::copy_kv_cache( this->state_.batch_context_pointers,
-//                      this->state_.k,
-//                      this->state_.v,
-//                      kv_dim,
-//                      curr_conc_lvl,
-//                      this->state_.batch_token_positions );
+  // attention rmsnorm
+  ops::rmsnorm( this->state_.xb, this->state_.x, layer_weights.rms_att_weight, dim, curr_conc_lvl );
 
-//  auto start = chrono::system_clock::now();
+  // qkv matmuls for this position
+  ops::matmul( this->state_.q, this->state_.xb, layer_weights.wq, curr_conc_lvl, dim, dim );
+  ops::matmul( this->state_.k, this->state_.xb, layer_weights.wk, curr_conc_lvl, dim, kv_dim );
+  ops::matmul( this->state_.v, this->state_.xb, layer_weights.wv, curr_conc_lvl, dim, kv_dim );
+
+  ops::apply_rope( head_size,
+                   n_kv_heads,
+                   gqa_size,
+                   curr_conc_lvl,
+                   this->state_.batch_token_positions,
+                   this->base_weights_.freq_cis_real,
+                   this->base_weights_.freq_cis_imag,
+                   this->state_.q,
+                   this->state_.k );
+
+  // save key,value at each time step (pos) to our kv cache
+  ops::copy_kv_cache( this->state_.batch_context_pointers,
+                      this->state_.k,
+                      this->state_.v,
+                      kv_dim,
+                      curr_conc_lvl,
+                      this->state_.batch_token_positions );
 
   // <multihead attention> for each head and for each token up to and including the current one
   ops::attention_0_gemm_fast( this->state_.q,
@@ -171,13 +168,9 @@ void Llama2<DType>::transformer_layer( const int32_t layer_num )
                               curr_conc_lvl,
                               this->state_.batch_token_positions );
 
-//  auto end_att0 = chrono::system_clock::now();
-
   // softmax
   ops::attention_softmax(
     this->state_.att, this->state_.batch_token_positions, seq_len, n_heads, this->state_.temp_softmax, curr_conc_lvl );
-
-//  auto end_soft = chrono::system_clock::now();
 
   ops::attention_2_gemm_fast( this->state_.att,
                               this->state_.batch_context_pointers,
@@ -190,33 +183,27 @@ void Llama2<DType>::transformer_layer( const int32_t layer_num )
                               this->state_.batch_token_positions );
   // </multihead attention>
 
-//  auto end_att2 = chrono::system_clock::now();
+  // final matmul to get the output of the attention
+  ops::matmul( this->state_.xb2, this->state_.xb, layer_weights.wo, curr_conc_lvl, dim, dim );
 
-//  cout << chrono::duration_cast <chrono::microseconds> (end_att0 - start).count() << "\t";
-//  cout << chrono::duration_cast <chrono::microseconds> (end_soft - end_att0).count() << "\t";
-//  cout << chrono::duration_cast <chrono::microseconds> (end_att2 - end_soft).count() << "\n";
+  // residual connection back into x
+  ops::accum( this->state_.x, this->state_.xb2, dim, curr_conc_lvl );
 
-//  // final matmul to get the output of the attention
-//  ops::matmul( this->state_.xb2, this->state_.xb, layer_weights.wo, curr_conc_lvl, dim, dim );
-//
-//  // residual connection back into x
-//  ops::accum( this->state_.x, this->state_.xb2, dim, curr_conc_lvl );
-//
-//  // ffn rmsnorm
-//  ops::rmsnorm( this->state_.xb, this->state_.x, layer_weights.rms_ffn_weight, dim, curr_conc_lvl );
-//
-//  // now for ffn in we have: self.w2(F.silu(self.w1(x)) * self.w3(x))
-//  // first calculate self.w1(x) and self.w3(x)
-//  ops::matmul( this->state_.hb, this->state_.xb, layer_weights.w1, curr_conc_lvl, dim, hidden_dim );
-//  ops::matmul( this->state_.hb2, this->state_.xb, layer_weights.w3, curr_conc_lvl, dim, hidden_dim );
-//
-//  ops::silu( this->state_.hb, this->state_.hb2, hidden_dim, curr_conc_lvl );
-//
-//  // final matmul to get the output of the ffn
-//  ops::matmul( this->state_.xb, this->state_.hb, layer_weights.w2, curr_conc_lvl, hidden_dim, dim );
-//
-//  // residual connection
-//  ops::accum( this->state_.x, this->state_.xb, dim, curr_conc_lvl );
+  // ffn rmsnorm
+  ops::rmsnorm( this->state_.xb, this->state_.x, layer_weights.rms_ffn_weight, dim, curr_conc_lvl );
+
+  // now for ffn in we have: self.w2(F.silu(self.w1(x)) * self.w3(x))
+  // first calculate self.w1(x) and self.w3(x)
+  ops::matmul( this->state_.hb, this->state_.xb, layer_weights.w1, curr_conc_lvl, dim, hidden_dim );
+  ops::matmul( this->state_.hb2, this->state_.xb, layer_weights.w3, curr_conc_lvl, dim, hidden_dim );
+
+  ops::silu( this->state_.hb, this->state_.hb2, hidden_dim, curr_conc_lvl );
+
+  // final matmul to get the output of the ffn
+  ops::matmul( this->state_.xb, this->state_.hb, layer_weights.w2, curr_conc_lvl, hidden_dim, dim );
+
+  // residual connection
+  ops::accum( this->state_.x, this->state_.xb, dim, curr_conc_lvl );
 }
 
 template<typename DType>
