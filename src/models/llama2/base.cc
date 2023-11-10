@@ -66,11 +66,13 @@ Config::Config( const filesystem::path& config_file,
 
   this->gqa_size = this->n_heads / this->n_kv_heads;
   this->kv_dim = this->dim / this->gqa_size;
+  this->head_size = this->dim / this->n_heads;
 
   CHECK_GT( dim, 0 ) << "Transformer dimension must be positive.";
   CHECK_GT( kv_dim, 0 ) << "key/value dimension must be positive.";
   CHECK_GT( hidden_dim, 0 ) << "FFN hidden dimension must be positive.";
   CHECK_GT( n_layers, 0 ) << "Number of layers must be positive.";
+  CHECK_GT( head_size, 0 ) << "Head dimension must be positive.";
   CHECK_GT( n_heads, 0 ) << "Number of query heads must be positive.";
   CHECK_GT( n_kv_heads, 0 ) << "Number of key/value heads must be positive.";
   CHECK_GT( gqa_size, 0 ) << "GQA sharing rate must be positive.";
@@ -96,6 +98,7 @@ string Config::to_string() const
   oss << "kv_dim: " << kv_dim << ", ";
   oss << "hidden_dim: " << hidden_dim << ", ";
   oss << "n_layers: " << n_layers << ", ";
+  oss << "head_size: " << head_size << ", ";
   oss << "n_heads: " << n_heads << ", ";
   oss << "n_kv_heads: " << n_kv_heads << ", ";
   oss << "gqa_size: " << gqa_size << ", ";
@@ -218,17 +221,23 @@ RunState<DType>::RunState( const Config& config, DType* buffer )
   , att( hb2 + config.hidden_dim * config.concurrency_limit )
   , logits( att + config.n_heads * config.seq_len * config.concurrency_limit )
   , temp_softmax( logits + config.vocab_size * config.concurrency_limit )
+#ifdef GLINTHAWK_CUDA_ENABLED
   , rng_state( reinterpret_cast<curandState*>( temp_softmax + config.n_heads * config.concurrency_limit ) )
+#endif
 {
 }
 
 template<typename DType>
 size_t RunState<DType>::state_size( const Config& config )
 {
+  size_t rng_size = 0;
+#ifdef GLINTHAWK_CUDA_ENABLED
+  rng_size += sizeof( curandState ) * config.concurrency_limit * config.vocab_size;
+#endif
   return sizeof( DType ) * config.concurrency_limit
            * ( config.dim * 4 + config.kv_dim * 2 + config.hidden_dim * 2 + config.n_heads * config.seq_len
                + config.vocab_size + config.n_heads )
-         + sizeof( curandState ) * config.concurrency_limit * config.vocab_size;
+         + rng_size;
 }
 
 /* InferenceContext */
@@ -242,8 +251,8 @@ size_t InferenceContext<DType>::context_size( const Config& config )
 template<typename DType>
 DType* InferenceContext<DType>::key( const Config& config, int layer_num, const int token_num, const int head_num )
 {
-  return buffer_ + ( layer_num - config.start_layer_num ) * (config.seq_len * config.kv_dim * 2) +
-         token_num * ( config.kv_dim * 2 ) + head_num * ( config.dim / config.n_heads );
+  return buffer_ + ( layer_num - config.start_layer_num ) * ( config.seq_len * config.kv_dim * 2 )
+         + token_num * ( config.kv_dim * 2 ) + head_num * ( config.dim / config.n_heads );
 }
 
 template<typename DType>
@@ -310,6 +319,27 @@ bool BaseLlama2<DType, Context>::is_finished( const InferenceState& inference_st
   return ( inference_state.next_layer() == 0 )
          and ( inference_state.token() == 2
                or inference_state.token_pos() >= this->config_.seq_len ); // EOS or out of length
+}
+
+template<typename DType, typename Context>
+void BaseLlama2<DType, Context>::assert_safe_forward( const vector<InferenceState>&& inference_states )
+{
+  CHECK_GT( inference_states.size(), 0 ) << "batch size must be at least 1";
+  CHECK_LE( inference_states.size(), this->config_.concurrency_limit )
+    << "current batch cannot be larger than max concurrency size";
+
+  for ( auto& item : inference_states ) {
+    CHECK_EQ( item.next_layer(), this->config_.start_layer_num ) << "next_layer must be the start layer";
+    CHECK_LT( item.token_pos(), this->config_.seq_len ) << "token position cannot be larger than sequence length";
+  }
+}
+
+template<typename DType, typename Context>
+bool BaseLlama2<DType, Context>::assert_safe_forward( const vector<InferenceState>&& inference_states,
+                                                      const vector<shared_ptr<ContextType>>& contexts )
+{
+  assert_safe_forward( inference_states )
+  CHECK_EQ( inference_states.size(), contexts.size() ) << "token size must be the same as context size";
 }
 
 namespace glinthawk::models::llama2 {

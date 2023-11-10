@@ -1,15 +1,18 @@
 #pragma once
 
-#include "cuda_runtime.h"
 #include "models/common/model.hh"
-#include <curand.h>
-#include <curand_kernel.h>
 #include <filesystem>
 #include <memory>
 #include <optional>
 #include <string>
 #include <unordered_map>
 #include <vector>
+
+#ifdef GLINTHAWK_CUDA_ENABLED
+#include "cuda_runtime.h"
+#include <curand.h>
+#include <curand_kernel.h>
+#endif
 
 namespace glinthawk::models::llama2 {
 
@@ -33,6 +36,7 @@ struct Config
   uint64_t kv_dim {};               // key/value dimension
   uint64_t hidden_dim {};           // for ffn layers
   uint64_t n_layers {};             // total number of layers
+  uint64_t head_size {};            // dimension of each head
   uint64_t n_heads {};              // number of query heads
   uint64_t n_kv_heads {};           // number of key/value heads (can be < query heads because of multiquery)
   uint64_t gqa_size {};             // GQA sharing rate
@@ -130,19 +134,22 @@ struct RunState
 
   static size_t state_size( const Config& config );
 
-  DType* buffer_ {};         // we use this buffer for everything, including activations
-  DType* x {};               // activation at current time stamp (B, dim)
-  DType* xb {};              // same, but inside a residual branch (B, dim)
-  DType* xb2 {};             // an additional buffer just for convenience (B, dim)
-  DType* q {};               // query (B, dim)
-  DType* k {};               // key (B, kv_dim)
-  DType* v {};               // value (B, kv_dim)
-  DType* hb {};              // buffer for hidden dimension in the ffn (B, hidden_dim)
-  DType* hb2 {};             // buffer for hidden dimension in the ffn (B, hidden_dim)
-  DType* att {};             // buffer for scores/attention values (B, n_heads, seq_len)
-  DType* logits {};          // output logits (B, vocab_size)
-  DType* temp_softmax {};    // temporary buffer for computing softmax (B, n_heads)
+  DType* buffer_ {};      // we use this buffer for everything, including activations
+  DType* x {};            // activation at current time stamp (B, dim)
+  DType* xb {};           // same, but inside a residual branch (B, dim)
+  DType* xb2 {};          // an additional buffer just for convenience (B, dim)
+  DType* q {};            // query (B, dim)
+  DType* k {};            // key (B, kv_dim)
+  DType* v {};            // value (B, kv_dim)
+  DType* hb {};           // buffer for hidden dimension in the ffn (B, hidden_dim)
+  DType* hb2 {};          // buffer for hidden dimension in the ffn (B, hidden_dim)
+  DType* att {};          // buffer for scores/attention values (B, n_heads, seq_len)
+  DType* logits {};       // output logits (B, vocab_size)
+  DType* temp_softmax {}; // temporary buffer for computing softmax (B, n_heads)
+
+#ifdef GLINTHAWK_CUDA_ENABLED
   curandState* rng_state {}; // CURAND state (B, vocab_size)
+#endif
 
   // This memory is on CPU
   uint32_t argmax_pos[MAX_BATCH_SIZE] {}; // argmax results (B, )
@@ -186,6 +193,11 @@ protected:
              std::unique_ptr<DType, void ( * )( DType* )>&& run_state );
 
   BaseLlama2() = default;
+
+  void assert_safe_forward( const std::vector<InferenceState>&& inference_states,
+                            const std::vector<std::shared_ptr<ContextType>>& contexts );
+
+  void assert_safe_forward( const std::vector<InferenceState>&& inference_states );
 
 public:
   virtual ~BaseLlama2() = default;

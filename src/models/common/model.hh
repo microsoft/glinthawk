@@ -139,6 +139,20 @@ public:
   virtual std::vector<InferenceState> forward( std::vector<InferenceState>&& inference_states,
                                                const std::vector<std::shared_ptr<Context>>& contexts )
     = 0;
+
+  virtual InferenceState pre_attention_forward( InferenceState&& inference_state ) = 0;
+
+  virtual std::vector<InferenceState> pre_attention_forward( std::vector<InferenceState>&& inference_states ) = 0;
+
+  virtual InferenceState attention_forward( InferenceState&& inference_state, std::shared_ptr<Context> context ) = 0;
+
+  virtual std::vector<InferenceState> attention_forward( std::vector<InferenceState>&& inference_states,
+                                                         const std::vector<std::shared_ptr<Context>>& contexts )
+    = 0;
+
+  virtual InferenceState post_attention_forward( InferenceState&& inference_state ) = 0;
+
+  virtual std::vector<InferenceState> post_attention_forward( std::vector<InferenceState>&& inference_states ) = 0;
 };
 
 } // namespace glinthawk::models
