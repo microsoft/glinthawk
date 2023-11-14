@@ -11,6 +11,7 @@ GLINTHAWK_API_ROOT = "https://glinthawk.dev/api/"
 GLINTHAWK_API_ACCESS_TOKEN = "REDACTED"
 
 try:
-    from .settings_local import *
+    from settings_local import *
 except ImportError:
+    print("No local settings found")
     pass

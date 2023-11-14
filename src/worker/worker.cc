@@ -114,6 +114,14 @@ Worker<Model>::Worker( const Address& worker_address,
     [] { return true; },
     [] { LOG( ERROR ) << "Worker stopped listening."; } );
 
+  event_loop_.add_rule(
+    "Stats timer",
+    Direction::In,
+    stats_timer_,
+    bind( &Worker<Model>::handle_stats, this ),
+    [] { return true; },
+    [] { LOG( ERROR ) << "Stats timer stopped."; } );
+
   // Send "HEY" to coordinator
   Message hey_message { Message::OpCode::Hey, this->listen_address_.to_string() };
   coordinator_.message_handler.push_message( move( hey_message ) );
@@ -181,6 +189,37 @@ bool Worker<Model>::handle_coordinator_message( core::Message&& msg )
       break;
     }
 
+    case Message::OpCode::PushDummyPrompts: {
+      // create some random inference states and feed them into the system
+      constexpr size_t NUM_PROMPTS = 1;
+
+      if ( current_route_.empty() ) {
+        LOG( ERROR ) << "No route set; cannot push dummy prompts.";
+        break;
+      }
+
+      vector<InferenceState> states {};
+
+      for ( size_t i = 0; i < NUM_PROMPTS; i++ ) {
+        PromptID prompt_id;
+        util::digest::sha256( { reinterpret_cast<const char*>( &i ), sizeof( i ) }, prompt_id );
+
+        InferenceState state {};
+        state.set_prompt_id( prompt_id );
+        state.set_token( 1 /* BOS */ );
+        state.set_token_pos( 0 );
+        state.set_next_layer( 0 );
+        state.set_prompt_length( 1 );
+        state.set_temperature( 0.0f );
+        state.set_layer_workers( current_route_ );
+
+        states.push_back( move( state ) );
+      }
+
+      this->compute_kernel_->push( move( states ) );
+      break;
+    }
+
     case Message::OpCode::ProcessPrompts: {
       if ( not this->prompt_manager_ ) {
         // XXX(sadjad): should do something better here
@@ -233,7 +272,9 @@ void Worker<Model>::handle_compute_kernel_event()
 
   models::InferenceState state;
   while ( this->compute_kernel_->pop( state ) ) {
-    LOG( INFO ) << "Got state from compute kernel: " << state.to_string();
+    worker_stats_.states_processed++;
+
+    DLOG( INFO ) << "Got state from compute kernel: " << state.to_string();
 
     // little hack to test pull queue on one GPU without running out of memory.
     // if (state.next_layer() == 10)
@@ -266,8 +307,10 @@ bool Worker<Model>::handle_peer_message( core::Message&& msg )
 
   switch ( msg.opcode() ) {
     case Message::OpCode::InferenceState: {
+      worker_stats_.states_received++;
+
       auto state = models::InferenceState( msg.payload() );
-      LOG( INFO ) << "Inference state: " << state.to_string();
+      DLOG( INFO ) << "Inference state: " << state.to_string();
 
       this->compute_kernel_->check_finished( state );
 
@@ -275,12 +318,19 @@ bool Worker<Model>::handle_peer_message( core::Message&& msg )
         // We are the first layer: if this inference state contains a generated token, we should save it.
         // otherwise, we load the next token from the prompt.
 
+        if ( state.token_pos() > 0 ) {
+          worker_stats_.tokens_processed++;
+        }
+
         if ( state.token_pos() >= state.prompt_length() ) {
+          worker_stats_.tokens_generated++;
+
           /* we're done processing the prompt */
           auto& completion = this->completion_manager_->get( state.prompt_id() );
           completion.add_token( state.token() );
 
           if ( state.finished() ) {
+            worker_stats_.prompts_completed++;
             completion.terminate();
 
             // telling the coordinator we completed this prompt
@@ -312,6 +362,29 @@ bool Worker<Model>::handle_peer_message( core::Message&& msg )
   }
 
   return true;
+}
+
+template<typename Model>
+void Worker<Model>::handle_stats()
+{
+  stats_timer_.read_event();
+
+  const auto now = chrono::steady_clock::now();
+
+  protobuf::WorkerStats proto;
+  proto.set_states_received( worker_stats_.states_received );
+  proto.set_states_sent( worker_stats_.states_sent );
+  proto.set_states_processed( worker_stats_.states_processed );
+
+  proto.set_tokens_processed( worker_stats_.tokens_processed );
+  proto.set_tokens_generated( worker_stats_.tokens_generated );
+  proto.set_prompts_completed( worker_stats_.prompts_completed );
+
+  Message stats_message { Message::OpCode::WorkerStats, proto.SerializeAsString() };
+  coordinator_.message_handler.push_message( move( stats_message ) );
+
+  worker_stats_ = {};
+  worker_stats_.last_stats_time = now;
 }
 
 template<typename Model>

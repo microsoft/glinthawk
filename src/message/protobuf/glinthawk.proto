@@ -26,3 +26,14 @@ message SetRoute
 
   repeated LayerToAddress layer_to_address = 1;
 }
+
+message WorkerStats
+{
+  uint64 states_received = 1;
+  uint64 states_sent = 2;
+  uint64 states_processed = 3;
+
+  uint64 tokens_processed = 4;
+  uint64 tokens_generated = 5;
+  uint64 prompts_completed = 6;
+}

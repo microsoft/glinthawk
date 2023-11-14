@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 
+import settings
+
 import sys
 
 if sys.version_info < (3, 10):
@@ -10,18 +12,22 @@ import json
 import socket
 import asyncio
 import logging
+import datetime
 import itertools
 
 from dataclasses import dataclass, field
 
 from common.message import Message
 from common.inference import InferenceState
-
 from protobuf import glinthawk_pb2 as glinthawk_pb
 
-import settings
+import rich
+from rich.live import Live as RichLive
+from rich.table import Table as RichTable
+from rich.layout import Layout as RichLayout
 
-logging.basicConfig(level=logging.INFO)
+
+logging.basicConfig(level=logging.WARNING)
 
 
 @dataclass
@@ -29,6 +35,27 @@ class ModelInfo:
     name: str
     n_layers: int
     layers_per_worker: int
+
+
+@dataclass
+class WorkerStats:
+    states_sent: int = 0
+    states_received: int = 0
+    states_processed: int = 0
+
+    tokens_processed: int = 0
+    tokens_generated: int = 0
+    prompts_completed: int = 0
+
+    def __add__(self, other):
+        return WorkerStats(
+            states_sent=self.states_sent + other.states_sent,
+            states_received=self.states_received + other.states_received,
+            states_processed=self.states_processed + other.states_processed,
+            tokens_processed=self.tokens_processed + other.tokens_processed,
+            tokens_generated=self.tokens_generated + other.tokens_generated,
+            prompts_completed=self.prompts_completed + other.prompts_completed,
+        )
 
 
 @dataclass
@@ -48,26 +75,35 @@ class Worker:
     end_layer: int = 0
     max_concurrency_size: int = 1
 
+    current_stats: WorkerStats = field(default_factory=WorkerStats)
+    current_stats_time: datetime.datetime = None
+    last_stats_time: datetime.datetime = None
 
-prompts = [
-    "2EUiyvY2VxVjgRTrCYgRQYE94V2D2BKRLx2CmWgieXpv",
-    "5LXEQ2fcpjDShQtvbEsingGYum5g4Po3bcVzEVg2Frtz",
-    "7LiXa2RktTe9VYms5jVge8zWJgvQv1tMG3oxafFaLoRX",
-    "AuRqaXzRYmXUdq8xvUaiVjiyDGnJon6zcGuF56817Mum",
-    "BN4L7ACfBqTJf4Vs9vTQAjnHRSb6KA14Sd2rNp7DidTR",
-    "Dqw7wrwE8R3N19PcdKQCNcGmjxJeLhk8EMT7xEaG5J3n",
-    "DsJ1mCF1td68kioyVMtPaUYGUgKvcmaXYhVMYfzq3nUW",
-    "Ea9GDb1dQzZN7vMY2dZsvzuWSqBkdrcoAt5sJnrb9cdn",
-    "H6Lt2aQYLJYCNdSjCAa7cFL9m6Rmvh3MtzehxktdHzh5",
-    "Q9gt4RUKdvM27u4oMPHkjpWxQukUJyQrwYJEV7AG2s3",
-]
+    def work_rate(self):
+        if self.current_stats_time is None or self.last_stats_time is None:
+            return WorkerStats()
 
-prompts_blobstore_uri = "file:///home/sadjad/prompts/"
+        elapsed_time = (self.current_stats_time - self.last_stats_time).total_seconds()
 
-model = ModelInfo(name="stories-110M-glint", n_layers=12, layers_per_worker=4)
+        if elapsed_time == 0:
+            return WorkerStats()
+
+        return WorkerStats(
+            states_sent=(self.current_stats.states_sent) / elapsed_time,
+            states_received=(self.current_stats.states_received) / elapsed_time,
+            states_processed=(self.current_stats.states_processed) / elapsed_time,
+            tokens_processed=(self.current_stats.tokens_processed) / elapsed_time,
+            tokens_generated=(self.current_stats.tokens_generated) / elapsed_time,
+            prompts_completed=(self.current_stats.prompts_completed) / elapsed_time,
+        )
+
+
+model = ModelInfo(name="stories-110M-glint", n_layers=12, layers_per_worker=6)
 workers = []
 layer_workers = {}
 incoming_messages = asyncio.Queue()
+outgoing_messages = asyncio.Queue()
+aggregate_stats = WorkerStats()
 
 
 def create_routing_message():
@@ -84,7 +120,7 @@ def create_routing_message():
 
 
 async def handle_worker(reader, writer):
-    global workers
+    global workers, incoming_messages
 
     addr = writer.get_extra_info("peername")
     logging.info(f"New connection from {addr!r}.")
@@ -109,8 +145,15 @@ async def send_message(worker, message):
     await worker.writer.drain()
 
 
+async def handle_outgoing_messages():
+    while True:
+        worker, message = await outgoing_messages.get()
+        logging.info(f'Sending "{message!r}" to {worker.id}.')
+        await send_message(worker, message)
+
+
 async def message_processor():
-    global initialized_workers
+    global initialized_workers, aggregate_stats
 
     while True:
         worker, message = await incoming_messages.get()
@@ -149,27 +192,37 @@ async def message_processor():
 
             if len(layer_workers) == model.n_layers / model.layers_per_worker:
                 # all layers have been assigned
-                asyncio.create_task(
-                    send_message(
+
+                # setting the route for the first worker
+                outgoing_messages.put_nowait(
+                    [
                         layer_workers[0],
                         Message(
                             Message.OpCode.SetRoute,
                             create_routing_message().SerializeToString(),
                         ),
-                    )
+                    ]
                 )
 
-                asyncio.create_task(
-                    send_message(
+                # telling the first worker to generate dummy prompts
+                outgoing_messages.put_nowait(
+                    [
                         layer_workers[0],
-                        Message(
-                            Message.OpCode.ProcessPrompts,
-                            glinthawk_pb.ProcessPrompts(
-                                prompt_ids=prompts
-                            ).SerializeToString(),
-                        ),
-                    )
+                        Message(Message.OpCode.PushDummyPrompts, b""),
+                    ]
                 )
+
+                # outgoing_messages.put_nowait(
+                #     [
+                #         layer_workers[0],
+                #         Message(
+                #             Message.OpCode.ProcessPrompts,
+                #             glinthawk_pb.ProcessPrompts(
+                #                 prompt_ids=prompts
+                #             ).SerializeToString(),
+                #         ),
+                #     ]
+                # )
 
         elif message.opcode == Message.OpCode.InferenceState:
             logging.error("Received InferenceState message from a worker.")
@@ -180,12 +233,89 @@ async def message_processor():
             for id in proto.prompt_ids:
                 logging.info(f"Prompt {id[:8]} completed.")
 
+        elif message.opcode == Message.OpCode.WorkerStats:
+            proto = glinthawk_pb.WorkerStats()
+            proto.ParseFromString(message.payload)
+
+            stats = WorkerStats()
+            stats.states_sent = proto.states_sent
+            stats.states_received = proto.states_received
+            stats.states_processed = proto.states_processed
+            stats.tokens_processed = proto.tokens_processed
+            stats.tokens_generated = proto.tokens_generated
+            stats.prompts_completed = proto.prompts_completed
+
+            worker.current_stats = stats
+            worker.last_stats_time = worker.current_stats_time
+            worker.current_stats_time = datetime.datetime.now()
+
+            aggregate_stats += stats
+
+
+def aggregate_rates():
+    global workers, aggregate_stats
+
+    agg_rate = WorkerStats()
+
+    for worker in workers:
+        agg_rate += worker.work_rate()
+
+    return agg_rate
+
+
+async def render_ui():
+    global aggregate_stats, workers
+
+    layout = RichLayout()
+    layout.split_row(
+        RichLayout(name="left"),
+        RichLayout(name="right"),
+    )
+
+    layout["left"].split_column(
+        RichLayout(name="top"),
+        RichLayout(name="bottom"),
+    )
+
+    with RichLive(layout, refresh_per_second=1, transient=True):
+        while True:
+            await asyncio.sleep(1)
+            rates = aggregate_rates()
+
+            stats_table = RichTable(title="Status")
+            stats_table.add_column("Metric")
+            stats_table.add_column("Value")
+            stats_table.add_row("Active Workers", f"{len(workers)}")
+            stats_table.add_row(
+                "\u03a3 States Processed", f"{aggregate_stats.states_processed:.2f}"
+            )
+            stats_table.add_row(
+                "\u03a3 Tokens Processed", f"{aggregate_stats.tokens_processed:.2f}"
+            )
+            stats_table.add_row(
+                "\u03a3 Tokens Generated", f"{aggregate_stats.tokens_generated:.2f}"
+            )
+            stats_table.add_row("Active Prompts", "1")
+
+            layout["left"]["top"].update(stats_table)
+
+            rate_table = RichTable(title="Rates")
+            rate_table.add_column("Metric")
+            rate_table.add_column("Rate (Hz)")
+            rate_table.add_row("States Processed", f"{rates.states_processed:.2f}")
+            rate_table.add_row("Tokens Processed", f"{rates.tokens_processed:.2f}")
+            rate_table.add_row("Tokens Generated", f"{rates.tokens_generated:.2f}")
+
+            layout["left"]["bottom"].update(rate_table)
+
 
 async def main(listen_address, listen_port):
     server = await asyncio.start_server(handle_worker, listen_address, listen_port)
 
     async with server:
         asyncio.create_task(message_processor())
+        asyncio.create_task(handle_outgoing_messages())
+        asyncio.create_task(render_ui())
         await server.serve_forever()
 
 

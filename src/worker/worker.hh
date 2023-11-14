@@ -1,6 +1,7 @@
 #pragma once
 
 #include <atomic>
+#include <chrono>
 #include <filesystem>
 #include <list>
 #include <map>
@@ -18,6 +19,7 @@
 #include "prompt/prompt.hh"
 #include "storage/blobstore.hh"
 #include "util/eventloop.hh"
+#include "util/timerfd.hh"
 
 #include "concurrentqueue/blockingconcurrentqueue.h"
 
@@ -39,6 +41,20 @@ private:
       , message_handler( std::move( socket ) )
     {
     }
+  };
+
+  class Stats
+  {
+  public:
+    uint64_t states_received { 0 };
+    uint64_t states_sent { 0 };
+    uint64_t states_processed { 0 };
+
+    uint64_t tokens_processed { 0 };
+    uint64_t tokens_generated { 0 };
+    uint64_t prompts_completed { 0 };
+
+    std::chrono::steady_clock::time_point last_stats_time { std::chrono::steady_clock::now() };
   };
 
 private:
@@ -72,6 +88,9 @@ private:
   std::thread prompt_preparation_thread_ {};
   std::thread completion_commit_thread_ {};
 
+  TimerFD stats_timer_ { std::chrono::seconds { 1 } };
+  Stats worker_stats_ {};
+
   void setup_peer( std::map<net::Address, Peer>::iterator peer_it );
   void setup_blobstore( const std::string& blobstore_uri );
   void setup_compute_kernel( const std::filesystem::path& model_root,
@@ -83,6 +102,7 @@ private:
   void handle_compute_kernel_event();
   bool handle_coordinator_message( core::Message&& msg );
   bool handle_peer_message( core::Message&& msg );
+  void handle_stats();
 
   void prompt_preparation_thread_func();
   void completion_commit_thread_func();
