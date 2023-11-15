@@ -10,7 +10,9 @@ if sys.version_info < (3, 10):
 import io
 import enum
 import json
+import click
 import socket
+import signal
 import asyncio
 import logging
 import datetime
@@ -263,12 +265,13 @@ class Coordinator:
             await server.serve_forever()
 
 
-if __name__ == "__main__":
-    if len(sys.argv) != 3:
-        sys.exit(f"Usage: {sys.argv[0]} <listen_address> <listen_port>")
-
-    listen_address = sys.argv[1]
-    listen_port = int(sys.argv[2])
-
-    coordinator = Coordinator(ui=True)
+@click.command()
+@click.option("--listen-address", required=True)
+@click.option("--listen-port", required=True)
+@click.option("--ui/--no-ui", default=False)
+def main(listen_address, listen_port, ui=False):
+    coordinator = Coordinator(ui=ui)
     asyncio.run(coordinator.main(listen_address, listen_port))
+
+if __name__ == "__main__":
+    main()
