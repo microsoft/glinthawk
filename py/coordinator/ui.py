@@ -14,6 +14,7 @@ from rich.console import Console
 from rich.text import Text
 from rich.panel import Panel
 from rich.segment import Segment
+from rich.align import Align
 
 
 class LogHandler(logging.Handler):
@@ -41,14 +42,18 @@ class CoordinatorUI:
 
     async def render_ui(self):
         layout = Layout()
+
         layout.split_row(
-            Layout(name="left"),
-            Layout(name="right"),
+            Layout(Text(" "), name="left"),
+            Layout(Text(" "), name="right"),
         )
 
+        layout["right"].size = None
+        layout["right"].ratio = 2
+
         layout["left"].split_column(
-            Layout(name="top"),
-            Layout(name="bottom"),
+            Layout(Text(" "), name="top"),
+            Layout(Text(" "), name="bottom"),
         )
 
         with Live(layout, auto_refresh=False, transient=True) as live:
@@ -81,7 +86,9 @@ class CoordinatorUI:
 
                 stats_table.add_row("Active Prompts", "N/A")
 
-                layout["left"]["top"].update(stats_table)
+                layout["left"]["top"].update(
+                    Align.center(stats_table, vertical="middle")
+                )
 
                 rate_table = Table(title="Rates")
                 rate_table.add_column("Metric")
@@ -90,7 +97,9 @@ class CoordinatorUI:
                 rate_table.add_row("Tokens Processed", f"{rates.tokens_processed:.2f}")
                 rate_table.add_row("Tokens Generated", f"{rates.tokens_generated:.2f}")
 
-                layout["left"]["bottom"].update(rate_table)
+                layout["left"]["bottom"].update(
+                    Align.center(rate_table, vertical="middle")
+                )
                 layout["right"].update(Panel(self.log_handler, title="Log"))
 
                 live.refresh()
