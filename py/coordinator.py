@@ -22,20 +22,7 @@ from common.message import Message
 from common.inference import InferenceState
 from protobuf import glinthawk_pb2 as glinthawk_pb
 
-import rich
-from rich.live import Live as RichLive
-from rich.table import Table as RichTable
-from rich.layout import Layout as RichLayout
-from rich.logging import RichHandler
-from rich.console import Console as RichConsole
-from rich.text import Text as RichText
-from rich.panel import Panel as RichPanel
-
-# console = RichConsole(file=io.StringIO())
-
-# logging.basicConfig(
-#     level=logging.INFO, handlers=[RichHandler(rich_tracebacks=True, console=console)]
-# )
+from coordinator.ui import CoordinatorUI
 
 
 @dataclass
@@ -107,7 +94,7 @@ class Worker:
 
 
 class Coordinator:
-    def __init__(self):
+    def __init__(self, ui=False):
         self.workers = []
         self.layer_workers = {}
         self.incoming_messages = asyncio.Queue()
@@ -116,6 +103,15 @@ class Coordinator:
         self.model = ModelInfo(
             name="stories-110M-glint", n_layers=12, layers_per_worker=6
         )
+
+        self.logger = logging.getLogger("coordinator")
+        self.logger.setLevel(logging.INFO)
+
+        if ui:
+            self.ui = CoordinatorUI(self, self.logger)
+        else:
+            self.ui = None
+            self.logger.addHandler(logging.StreamHandler(sys.stderr))
 
     def create_routing_message(self):
         message = glinthawk_pb.SetRoute()
@@ -130,7 +126,7 @@ class Coordinator:
 
     async def handle_worker(self, reader, writer):
         addr = writer.get_extra_info("peername")
-        logging.info(f"New connection from {addr!r}.")
+        self.logger.info(f"New connection from {addr!r}.")
 
         worker = Worker(reader=reader, writer=writer)
         self.workers += [worker]
@@ -151,24 +147,23 @@ class Coordinator:
         worker.writer.write(message.serialize())
         await worker.writer.drain()
 
-
     async def handle_outgoing_messages(self):
         while True:
             worker, message = await self.outgoing_messages.get()
-            logging.info(f'Sending "{message!r}" to {worker.id}.')
+            self.logger.info(f'Sending "{message!r}" to {worker.id}.')
             await self.send_message(worker, message)
 
     async def message_processor(self):
         while True:
             worker, message = await self.incoming_messages.get()
-            logging.info(f'Received "{message!r}" from {worker.id}.')
+            self.logger.info(f'Received "{message!r}" from {worker.id}.')
 
             if message.opcode == Message.OpCode.Hey:
                 address = message.payload.decode()
                 ip, port = address.split(":")
                 worker.ip = socket.inet_aton(ip)
                 worker.port = int(port)
-                logging.info(f"Worker {worker.id} is at {ip}:{port}.")
+                self.logger.info(f"Worker {worker.id} is at {ip}:{port}.")
 
                 # assinging layers to this worker
                 worker.start_layer = worker.id * self.model.layers_per_worker
@@ -194,7 +189,10 @@ class Coordinator:
 
                 self.layer_workers[worker.start_layer] = worker
 
-                if len(self.layer_workers) == self.model.n_layers / self.model.layers_per_worker:
+                if (
+                    len(self.layer_workers)
+                    == self.model.n_layers / self.model.layers_per_worker
+                ):
                     # all layers have been assigned
                     # setting the route for the first worker
                     self.outgoing_messages.put_nowait(
@@ -216,13 +214,13 @@ class Coordinator:
                     )
 
             elif message.opcode == Message.OpCode.InferenceState:
-                logging.error("Received InferenceState message from a worker.")
+                self.logger.error("Received InferenceState message from a worker.")
 
             elif message.opcode == Message.OpCode.PromptCompleted:
                 proto = glinthawk_pb.PromptCompleted()
                 proto.ParseFromString(message.payload)
                 for id in proto.prompt_ids:
-                    logging.info(f"Prompt {id[:8]} completed.")
+                    self.logger.info(f"Prompt {id[:8]} completed.")
 
             elif message.opcode == Message.OpCode.WorkerStats:
                 proto = glinthawk_pb.WorkerStats()
@@ -250,62 +248,18 @@ class Coordinator:
 
         return agg_rate
 
-    async def render_ui(self):
-        layout = RichLayout()
-        layout.split_row(
-            RichLayout(name="left"),
-            RichLayout(name="right"),
-        )
-
-        layout["left"].split_column(
-            RichLayout(name="top"),
-            RichLayout(name="bottom"),
-        )
-
-        console_text = RichText("", no_wrap=True, overflow="fold")
-
-        with RichLive(layout, auto_refresh=False, transient=True) as live:
-            while True:
-                await asyncio.sleep(1)
-                rates = self.aggregate_rates()
-
-                stats_table = RichTable(title="Status")
-                stats_table.add_column("Metric")
-                stats_table.add_column("Value")
-                stats_table.add_row("Active Workers", f"{len(self.workers)}")
-                stats_table.add_row(
-                    "\u03a3 States Processed", f"{self.aggregate_stats.states_processed:.2f}"
-                )
-                stats_table.add_row(
-                    "\u03a3 Tokens Processed", f"{self.aggregate_stats.tokens_processed:.2f}"
-                )
-                stats_table.add_row(
-                    "\u03a3 Tokens Generated", f"{self.aggregate_stats.tokens_generated:.2f}"
-                )
-                stats_table.add_row("Active Prompts", "1")
-
-                layout["left"]["top"].update(stats_table)
-
-                rate_table = RichTable(title="Rates")
-                rate_table.add_column("Metric")
-                rate_table.add_column("Rate (Hz)")
-                rate_table.add_row("States Processed", f"{rates.states_processed:.2f}")
-                rate_table.add_row("Tokens Processed", f"{rates.tokens_processed:.2f}")
-                rate_table.add_row("Tokens Generated", f"{rates.tokens_generated:.2f}")
-
-                layout["left"]["bottom"].update(rate_table)
-                layout["right"].update(RichPanel(console_text, title="Log"))
-
-                live.refresh()
-
-
     async def main(self, listen_address, listen_port):
-        server = await asyncio.start_server(self.handle_worker, listen_address, listen_port)
+        server = await asyncio.start_server(
+            self.handle_worker, listen_address, listen_port
+        )
 
         async with server:
             asyncio.create_task(self.message_processor())
             asyncio.create_task(self.handle_outgoing_messages())
-            #asyncio.create_task(self.render_ui())
+
+            if self.ui:
+                asyncio.create_task(self.ui.render_ui())
+
             await server.serve_forever()
 
 
@@ -316,5 +270,5 @@ if __name__ == "__main__":
     listen_address = sys.argv[1]
     listen_port = int(sys.argv[2])
 
-    coordinator = Coordinator()
+    coordinator = Coordinator(ui=True)
     asyncio.run(coordinator.main(listen_address, listen_port))
