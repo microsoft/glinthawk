@@ -236,6 +236,8 @@ void copy_kv_cache( DType* context_pointers[],
                     const uint32_t* token_positions )
 {
   for ( size_t i = 0; i < batch_size; i++ ) {
+    if ( context_pointers[i] == nullptr )
+      continue;
     DType* k_cache_pos = context_pointers[i] + token_positions[i] * kv_dim * 2;
     DType* v_cache_pos = k_cache_pos + kv_dim;
 
@@ -662,7 +664,7 @@ void apply_rope( const uint64_t head_size,
                  const DType* freq_cis_real,
                  const DType* freq_cis_imag,
                  DType* state_q,
-                 DType* state_k )
+                 DType* context_pointers[] )
 {
   for ( uint64_t i = 0; i < curr_batch_size; i++ ) {
     do_rope<<<n_kv_heads, head_size / 2, 0, streams[i]>>>( head_size,
@@ -670,7 +672,7 @@ void apply_rope( const uint64_t head_size,
                                                            freq_cis_real + token_positions[i] * head_size / 2,
                                                            freq_cis_imag + token_positions[i] * head_size / 2,
                                                            state_q + i * n_kv_heads * gqa_size * head_size,
-                                                           state_k + i * n_kv_heads * head_size );
+                                                           context_pointers[i] );
   }
 }
 
@@ -801,6 +803,36 @@ void soft_sample( DType* v,
   }
 }
 
+template<typename DType_dst, typename DType_src>
+void cvt_and_copy_to_cuda( DType_dst* dst_cuda, const DType_src* src_cpu, const uint64_t size )
+{
+  if ( constexpr( is_same_v<DType_src, DType_dst> ) ) {
+    ops::CHECK_CUDA( cudaMemcpy( dst_cuda, src_cpu, size * sizeof( DType_src ), cudaMemcpyDeviceToHost ) );
+  } else {
+    DType_dst* dst_cpu = malloc( sizeof( DType_dst ) * size );
+    for ( uint64_t i = 0; i < size; i++ ) {
+      dst_cpu[i] = static_cast<DType_dst>( src_cpu[i] );
+    }
+    ops::CHECK_CUDA( cudaMemcpy( dst_cuda, dst_cpu, size * sizeof( DType_dst ), cudaMemcpyDeviceToHost ) );
+    free( dst_cpu );
+  }
+}
+
+template<typename DType_dst, typename DType_src>
+void cvt_and_copy_from_cuda( DType_dst* dst_cpu, const DType_src* src_cuda, const uint64_t size )
+{
+  if ( constexpr( is_same_v<DType_src, DType_dst> ) ) {
+    ops::CHECK_CUDA( cudaMemcpy( dst_cpu, src_cuda, size * sizeof( DType_src ), cudaMemcpyHostToDevice ) );
+  } else {
+    DType_dst* src_cpu = malloc( sizeof( DType_src ) * size );
+    ops::CHECK_CUDA( cudaMemcpy( src_cpu, src_cuda, size * sizeof( DType_src ), cudaMemcpyHostToDevice ) );
+    for ( uint64_t i = 0; i < size; i++ ) {
+      dst_cpu[i] = static_cast<DType_dst>( src_cpu[i] );
+    }
+    free( src_cpu );
+  }
+}
+
 template void rmsnorm<float>( float* output,
                               const float* x,
                               float* temp,
@@ -920,7 +952,7 @@ template void apply_rope<float>( const uint64_t head_size,
                                  const float* freq_cis_real,
                                  const float* freq_cis_imag,
                                  float* state_q,
-                                 float* state_k );
+                                 float* context_pointers[] );
 
 template void apply_rope<__half>( const uint64_t head_size,
                                   const uint64_t n_kv_heads,
@@ -930,7 +962,7 @@ template void apply_rope<__half>( const uint64_t head_size,
                                   const __half* freq_cis_real,
                                   const __half* freq_cis_imag,
                                   __half* state_q,
-                                  __half* state_k );
+                                  __half* context_pointers[] );
 
 template void copy_kv_cache<float>( float* context_pointers[],
                                     const float* state_k,
@@ -945,5 +977,15 @@ template void copy_kv_cache<__half>( __half* context_pointers[],
                                      const uint64_t dim,
                                      const uint64_t batch_size,
                                      const uint32_t* token_positions );
+
+template void cvt_and_copy_to_cuda<__half, float>( __half* dst_cuda, const float* src_cpu, const uint64_t size );
+template void cvt_and_copy_to_cuda<__half, __half>( __half* dst_cuda, const __half* src_cpu, const uint64_t size );
+template void cvt_and_copy_to_cuda<float, __half>( float* dst_cuda, __half* src_cpu, const uint64_t size );
+template void cvt_and_copy_to_cuda<float, float>( float* dst_cuda, const float* src_cpu, const uint64_t size );
+
+template void cvt_and_copy_from_cuda<__half, float>( __half* dst_cpu, const float* src_cuda, const uint64_t size );
+template void cvt_and_copy_from_cuda<__half, __half>( __half* dst_cpu, const __half* src_cuda, const uint64_t size );
+template void cvt_and_copy_from_cuda<float, __half>( float* dst_cpu, __half* src_cuda, const uint64_t size );
+template void cvt_and_copy_from_cuda<float, float>( float* dst_cpu, const float* src_cuda, const uint64_t size );
 
 } // namespace glinthawk::models::common::cuda

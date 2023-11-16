@@ -191,6 +191,14 @@ void Llama2<DType>::pre_attention_ops( const int32_t layer_num )
   ops::matmul( this->state_.q, this->state_.xb, layer_weights.wq, curr_conc_lvl, dim, dim );
   ops::matmul( this->state_.k, this->state_.xb, layer_weights.wk, curr_conc_lvl, dim, kv_dim );
   ops::matmul( this->state_.v, this->state_.xb, layer_weights.wv, curr_conc_lvl, dim, kv_dim );
+
+  // save key,value at each time step (pos) to our kv cache
+  ops::copy_kv_cache( this->state_.batch_context_pointers,
+                      this->state_.k,
+                      this->state_.v,
+                      kv_dim,
+                      curr_conc_lvl,
+                      this->state_.batch_token_positions );
 }
 
 template<typename DType>
@@ -212,15 +220,7 @@ void Llama2<DType>::attention_ops()
                    this->base_weights_.freq_cis_real,
                    this->base_weights_.freq_cis_imag,
                    this->state_.q,
-                   this->state_.k );
-
-  // save key,value at each time step (pos) to our kv cache
-  ops::copy_kv_cache( this->state_.batch_context_pointers,
-                      this->state_.k,
-                      this->state_.v,
-                      kv_dim,
-                      curr_conc_lvl,
-                      this->state_.batch_token_positions );
+                   this->state_.batch_context_pointers );
 
   // <multihead attention> for each head and for each token up to and including the current one
   ops::attention_0_gemm( this->state_.q,
@@ -312,7 +312,6 @@ template<typename DType>
 vector<InferenceState> Llama2<DType>::forward( vector<InferenceState>&& inference_states,
                                                const vector<shared_ptr<ContextType>>& contexts )
 {
-  // TODO: fix the move problem
   assert_safe_forward( inference_states, contexts );
 
   for ( size_t i = 0; i < inference_states.size(); i++ ) {
@@ -320,8 +319,9 @@ vector<InferenceState> Llama2<DType>::forward( vector<InferenceState>&& inferenc
   }
 
   this->state_.curr_concurrency_size = inference_states.size();
+  const uint32_t next_layer_batch = inference_states[0].next_layer();
 
-  if ( inference_states[0].next_layer() == 0 ) {
+  if ( next_layer_batch == 0 ) {
     vector<uint32_t> token_vector;
     for ( size_t i = 0; i < inference_states.size(); i++ ) {
       token_vector.push_back( inference_states[i].token() );
@@ -336,7 +336,7 @@ vector<InferenceState> Llama2<DType>::forward( vector<InferenceState>&& inferenc
                                         cudaMemcpyHostToDevice ) );
   }
 
-  for ( int layer_num = this->config_.start_layer_num; layer_num <= this->config_.end_layer_num; layer_num++ ) {
+  for ( int layer_num = next_layer_batch; layer_num <= this->config_.end_layer_num; layer_num++ ) {
     for ( size_t i = 0; i < inference_states.size(); i++ ) {
       this->state_.batch_context_pointers[i] = contexts[i]->key( this->config_, layer_num, 0 );
     }
@@ -389,6 +389,216 @@ vector<InferenceState> Llama2<DType>::forward( vector<InferenceState>&& inferenc
 }
 
 template<typename DType>
+vector<InferenceState> Llama2<DType>::pre_attention_forward( vector<InferenceState>&& inference_states,
+                                                             const vector<shared_ptr<ContextType>>& contexts )
+{
+  assert_safe_pre_attention( inference_states, contexts );
+  const uint32_t next_layer_batch = inference_states[0].next_layer();
+
+  this->state_.curr_concurrency_size = inference_states.size();
+
+  if ( inference_states[0].next_layer() == 0 ) {
+    vector<uint32_t> token_vector;
+    for ( size_t i = 0; i < inference_states.size(); i++ ) {
+      token_vector.push_back( inference_states[i].token() );
+    }
+    pass_begin( token_vector );
+  } else {
+    for ( size_t i = 0; i < inference_states.size(); i++ )
+      // load the activations
+      ops::CHECK_CUDA( cudaMemcpyAsync( this->state_.x + i * this->config_.dim,
+                                        inference_states[i].activations().ptr.get(),
+                                        this->config_.dim * sizeof( DType ),
+                                        cudaMemcpyHostToDevice ) );
+  }
+
+  for ( size_t i = 0; i < inference_states.size(); i++ ) {
+    this->state_.batch_token_positions[i] = inference_states[i].token_pos();
+    this->state_.batch_context_pointers[i] = contexts[i]->key( this->config_, inference_states[i].next_layer(), 0 );
+  }
+
+  pre_attention_ops( next_layer_batch );
+
+  vector<InferenceState> output_states;
+
+  for ( size_t i = 0; i < inference_states.size(); i++ ) {
+    DataBuffer activations {
+      is_same_v<DType, float> ? SerializedDataType::Type::Float32 : SerializedDataType::Type::Float16,
+      make_unique<uint8_t[]>( ( this->config_.dim + 2 * this->config_.kv_dim ) * sizeof( DType ) ),
+      this->config_.dim + 2 * this->config_.kv_dim
+    };
+
+    ops::CHECK_CUDA( cudaMemcpy( activations.ptr.get(),
+                                 this->state_.q + i * this->config_.dim,
+                                 this->config_.dim * sizeof( DType ),
+                                 cudaMemcpyDeviceToHost ) );
+    if ( contexts[i]->empty() ) {
+      ops::CHECK_CUDA( cudaMemcpy( activations.ptr.get() + this->config_.dim * sizeof( DType ),
+                                   this->state_.k + i * this->config_.kv_dim,
+                                   this->config_.kv_dim * sizeof( DType ),
+                                   cudaMemcpyDeviceToHost ) );
+      ops::CHECK_CUDA(
+        cudaMemcpy( activations.ptr.get() + ( this->config_.dim + this->config_.kv_dim ) * sizeof( DType ),
+                    this->state_.v + i * this->config_.kv_dim,
+                    this->config_.kv_dim * sizeof( DType ),
+                    cudaMemcpyDeviceToHost ) );
+    }
+
+    output_states.push_back( move( inference_states[i] ) );
+    auto& item = output_states.back();
+    item.set_next_stage( InferenceState::Stage::Attention );
+    item.set_next_layer( this->config_.end_layer_num + 1 );
+    item.set_activations( move( activations ) );
+  }
+
+  return output_states;
+}
+
+template<typename DType>
+vector<InferenceState> Llama2<DType>::attention_forward( vector<InferenceState>&& inference_states,
+                                                         const vector<shared_ptr<ContextType>>& contexts )
+{
+  assert_safe_attention( inference_states, contexts );
+
+  this->state_.curr_concurrency_size = inference_states.size();
+
+  for ( size_t i = 0; i < inference_states.size(); i++ ) {
+    this->state_.batch_token_positions[i] = inference_states[i].token_pos();
+    this->state_.batch_context_pointers[i] = contexts[i]->key( this->config_, inference_states[i].next_layer(), 0 );
+    // load the activations
+
+    switch ( inference_states[i].activations().dtype.dtype ) {
+      case SerializedDataType::Type::Float16:
+        // Q should go to run state
+        ops::cvt_and_copy_to_cuda( this->state_.q + i * this->config_.dim,
+                           reinterpret_cast<__half*>( inference_states[i].activations().ptr.get() ),
+                           this->config_.dim );
+        // if KV is not already in context, put it there
+        if ( inference_states[i].activations().len > this->config_.dim ) {
+          ops::cvt_and_copy_to_cuda(
+            contexts[i]->key( this->config_, inference_states[i].next_layer(), inference_states[i].token_pos() ),
+            reinterpret_cast<kv_dim*>( inference_states[i].activations().ptr.get()
+                                         + this->config_.dim * sizeof( DType ) ),
+            this->config_.kv_dim * 2 );
+        }
+        break;
+      case SerializedDataType::Type::Float32:
+        // Q should go to run state
+        ops::cvt_and_copy_to_cuda( this->state_.q + i * this->config_.dim,
+                           reinterpret_cast<float*>( inference_states[i].activations().ptr.get() ),
+                           this->config_.dim );
+        // if KV is not already in context, put it there
+        if ( inference_states[i].activations().len > this->config_.dim ) {
+          ops::cvt_and_copy_to_cuda(
+            contexts[i]->key( this->config_, inference_states[i].next_layer(), inference_states[i].token_pos() ),
+            reinterpret_cast<float*>( inference_states[i].activations().ptr.get()
+                                      + this->config_.dim * sizeof( DType ) ),
+            this->config_.kv_dim * 2 );
+        }
+        break;
+      default:
+        throw runtime_error( "invalid dtype" );
+    }
+  }
+
+  attention_ops();
+
+  vector<InferenceState> output_states;
+
+  for ( size_t i = 0; i < inference_states.size(); i++ ) {
+    DataBuffer activations { inference_states[i].activations().dtype.dtype,
+                             make_unique<uint8_t[]>( this->config_.dim * inference_states[i].activations().dtype.len ),
+                             this->config_.dim };
+
+    switch ( activations.dtype.dtype ) {
+      case SerializedDataType::Type::Float16:
+        ops::cvt_and_copy_from_cuda( reinterpret_cast<__half*>( activations.ptr.get() ),
+                           this->state_.xb + i * this->config_.dim,
+                           this->config_.dim );
+        break;
+      case SerializedDataType::Type::Float32:
+        ops::cvt_and_copy_from_cuda( reinterpret_cast<float*>( activations.ptr.get() ),
+                           this->state_.xb + i * this->config_.dim,
+                           this->config_.dim );
+    }
+    break;
+    default:
+      throw runtime_error( "invalid dtype" );
+  }
+
+  output_states.push_back( move( inference_states[i] ) );
+  auto& item = output_states.back();
+  item.set_next_stage( InferenceState::Stage::PostAttention );
+  item.set_next_layer( this->config_.end_layer_num + 1 );
+  item.set_activations( move( activations ) );
+}
+
+return output_states;
+}
+
+template<typename DType>
+vector<InferenceState> Llama2<DType>::post_attention_forward( vector<InferenceState>&& inference_states )
+{
+  assert_safe_post_attention( inference_states );
+  const uint32_t next_layer_batch = inference_states[0].next_layer();
+
+  this->state_.curr_concurrency_size = inference_states.size();
+
+  for ( size_t i = 0; i < inference_states.size(); i++ )
+    // load the activations
+    ops::CHECK_CUDA( cudaMemcpy( this->state_.xb + i * this->config_.dim,
+                                 inference_states[i].activations().ptr.get(),
+                                 this->config_.dim * sizeof( DType ),
+                                 cudaMemcpyHostToDevice ) );
+
+  post_attention_ops( next_layer_batch );
+
+  vector<InferenceState> output_states;
+
+  if ( next_layer_batch + 1 == this->config_.n_layers - 1 ) {
+    pass_end();
+
+    vector<float> batch_temps;
+    for ( size_t i = 0; i < inference_states.size(); i++ )
+      batch_temps.push_back( inference_states[i].temperature() );
+
+    extract_batch_token( this->state_, this->config_, batch_temps );
+
+    for ( size_t i = 0; i < inference_states.size(); i++ ) {
+      output_states.push_back( move( inference_states[i] ) );
+      auto& item = output_states.back();
+      item.set_token( this->state_.argmax_pos[i] );
+      item.set_token_pos( item.token_pos() + 1 );
+      item.set_next_stage( InferenceState::Stage::PreAttention );
+      item.set_next_layer( 0 );
+      item.set_activations( {} );
+    }
+
+    return output_states;
+  }
+
+  for ( size_t i = 0; i < inference_states.size(); i++ ) {
+    DataBuffer activations { is_same_v<DType, float> ? SerializedDataType::Type::Float32
+                                                     : SerializedDataType::Type::Float16,
+                             make_unique<uint8_t[]>( this->config_.dim * sizeof( DType ) ),
+                             this->config_.dim };
+
+    ops::CHECK_CUDA( cudaMemcpy( activations.ptr.get(),
+                                 this->state_.x + i * this->config_.dim,
+                                 this->config_.dim * sizeof( DType ),
+                                 cudaMemcpyDeviceToHost ) );
+
+    output_states.push_back( move( inference_states[i] ) );
+    auto& item = output_states.back();
+    item.set_next_stage( InferenceState::Stage::PreAttention );
+    item.set_next_layer( this->config_.end_layer_num + 1 );
+    item.set_activations( move( activations ) );
+  }
+
+  return output_states;
+}
+
+template<typename DType>
 InferenceState Llama2<DType>::forward( InferenceState&& inference_state, shared_ptr<ContextType> context )
 {
   vector<InferenceState> token_vector;
@@ -399,11 +609,14 @@ InferenceState Llama2<DType>::forward( InferenceState&& inference_state, shared_
 }
 
 template<typename DType>
-InferenceState Llama2<DType>::pre_attention_forward( InferenceState&& inference_state )
+InferenceState Llama2<DType>::pre_attention_forward( InferenceState&& inference_state,
+                                                     std::shared_ptr<ContextType> context )
 {
   vector<InferenceState> token_vector;
   token_vector.push_back( move( inference_state ) );
-  return move( pre_attention_forward( move( token_vector ) )[0] );
+  vector<shared_ptr<ContextType>> context_vector;
+  context_vector.push_back( move( context ) );
+  return move( pre_attention_forward( move( token_vector ), context_vector )[0] );
 }
 
 template<typename DType>

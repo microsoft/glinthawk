@@ -70,7 +70,7 @@ void apply_rope( const uint64_t head_size,
                  const DType* freq_cis_real,
                  const DType* freq_cis_imag,
                  DType* state_q,
-                 DType* state_k );
+                 DType* context_pointers[] );
 
 template<typename DType>
 void copy_kv_cache( DType* context_pointers[],
@@ -79,5 +79,8 @@ void copy_kv_cache( DType* context_pointers[],
                     const uint64_t dim,
                     const uint64_t batch_size,
                     const uint32_t* token_positions );
+
+template<typename DType_dst, typename DType_src>
+void cvt_and_copy( DType_dst* dst, const DType_src* src, const uint64_t size );
 
 } // namespace glinthawk::models::common::cpu::ops

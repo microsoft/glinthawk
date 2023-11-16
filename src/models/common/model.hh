@@ -73,6 +73,14 @@ struct DataBuffer
 
 class InferenceState
 {
+public:
+  enum class Stage : uint8_t
+  {
+    PreAttention,
+    Attention,
+    PostAttention
+  };
+
 private:
   PromptID prompt_id_ {};
   ModelID model_id_ { 0 };
@@ -80,6 +88,7 @@ private:
   uint32_t token_ { 1 };
   uint32_t token_pos_ { 0 };
   uint32_t next_layer_ { 0 };
+  Stage next_stage_ { PreAttention };
   uint32_t prompt_length_ { 1 };
   float temperature_ { 0.0f };
   bool finished_ { false };
@@ -104,6 +113,7 @@ public:
   uint32_t token() const { return token_; }
   uint32_t token_pos() const { return token_pos_; }
   uint32_t next_layer() const { return next_layer_; }
+  Stage next_stage() const { return next_stage_; }
   uint32_t prompt_length() const { return prompt_length_; }
   float temperature() const { return temperature_; }
   bool finished() const { return finished_; }
@@ -114,6 +124,7 @@ public:
   void set_token( const uint32_t token ) { token_ = token; }
   void set_token_pos( const uint32_t token_pos ) { token_pos_ = token_pos; }
   void set_next_layer( const uint32_t next_layer ) { next_layer_ = next_layer; }
+  void set_next_stage( const uint32_t next_stage ) { next_stage_ = next_stage; }
   void set_prompt_length( const uint32_t prompt_length ) { prompt_length_ = prompt_length; }
   void set_temperature( const float temperature ) { temperature_ = temperature; }
   void set_activations( DataBuffer&& activations ) { activations_ = std::move( activations ); }
