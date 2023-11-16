@@ -32,7 +32,7 @@ void Worker<Model>::setup_peer( std::map<net::Address, Peer>::iterator peer_it )
     "Outgoing message",
     [this, peer_it] {
       for ( auto& state : peer_it->second.outgoing_states ) {
-        LOG( INFO ) << "Sending state to " << peer_it->first.to_string() << ": " << state.to_string();
+        DLOG( INFO ) << "Sending state to " << peer_it->first.to_string() << ": " << state.to_string();
         peer_it->second.message_handler.push_message( Message( Message::OpCode::InferenceState, state.serialize() ) );
       }
 
@@ -167,7 +167,7 @@ bool Worker<Model>::handle_coordinator_message( core::Message&& msg )
       // got an inference state from the coordinator
       auto state = models::InferenceState( msg.payload() );
       LOG( WARNING ) << "Got inference state from coordinator; this behavior is deprecated.";
-      LOG( INFO ) << "Inference state: " << state.to_string();
+      DLOG( INFO ) << "Inference state: " << state.to_string();
       this->compute_kernel_->push( move( state ) );
       break;
     }
@@ -191,7 +191,7 @@ bool Worker<Model>::handle_coordinator_message( core::Message&& msg )
 
     case Message::OpCode::PushDummyPrompts: {
       // create some random inference states and feed them into the system
-      constexpr size_t NUM_PROMPTS = 1;
+      constexpr size_t NUM_PROMPTS = 32;
 
       if ( current_route_.empty() ) {
         LOG( ERROR ) << "No route set; cannot push dummy prompts.";
@@ -303,7 +303,7 @@ void Worker<Model>::handle_compute_kernel_event()
 template<typename Model>
 bool Worker<Model>::handle_peer_message( core::Message&& msg )
 {
-  LOG( INFO ) << "(Peer) Incoming message: " << msg.info();
+  DLOG( INFO ) << "(Peer) Incoming message: " << msg.info();
 
   switch ( msg.opcode() ) {
     case Message::OpCode::InferenceState: {
@@ -402,7 +402,7 @@ void Worker<Model>::prompt_preparation_thread_func()
     PromptID prompt_id;
 
     while ( prompt_queue_.try_dequeue( prompt_id ) && states.size() < 1'000 ) {
-      LOG( INFO ) << "Preparing the state for the prompt: " << prompt_id.base58digest();
+      DLOG( INFO ) << "Preparing the state for the prompt: " << prompt_id.base58digest();
 
       auto prompt = prompt_manager_->get( prompt_id );
 

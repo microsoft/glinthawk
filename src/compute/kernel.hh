@@ -143,7 +143,7 @@ public:
 
     if ( state.layer_workers().empty() ) {
       // drop release message as it has fully propagated
-      LOG( INFO ) << "Dropping empty (release) inference state: " << state.to_string();
+      DLOG( INFO ) << "Dropping empty (release) inference state: " << state.to_string();
     } else {
       // propagate the release message to the next worker
       {
