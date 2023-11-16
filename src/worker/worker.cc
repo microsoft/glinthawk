@@ -1,6 +1,7 @@
 #include "worker.hh"
 
 #include <chrono>
+#include <random>
 
 #include <glog/logging.h>
 
@@ -191,7 +192,8 @@ bool Worker<Model>::handle_coordinator_message( core::Message&& msg )
 
     case Message::OpCode::PushDummyPrompts: {
       // create some random inference states and feed them into the system
-      constexpr size_t NUM_PROMPTS = 32;
+      const size_t prompt_count = stoull( msg.payload() );
+      CHECK_LT( prompt_count, 512 ) << "Too many dummy prompts requested.";
 
       if ( current_route_.empty() ) {
         LOG( ERROR ) << "No route set; cannot push dummy prompts.";
@@ -200,9 +202,17 @@ bool Worker<Model>::handle_coordinator_message( core::Message&& msg )
 
       vector<InferenceState> states {};
 
-      for ( size_t i = 0; i < NUM_PROMPTS; i++ ) {
+      // generating random temperatures
+      random_device rd {};
+      mt19937 temp_gen { rd() };
+      uniform_real_distribution<float> temp_dist( 0.0f, 1.0f );
+
+      for ( size_t i = 0; i < prompt_count; i++ ) {
         PromptID prompt_id;
         util::digest::sha256( { reinterpret_cast<const char*>( &i ), sizeof( i ) }, prompt_id );
+
+        // generate a random number between 0 and 1
+
 
         InferenceState state {};
         state.set_prompt_id( prompt_id );
@@ -210,7 +220,7 @@ bool Worker<Model>::handle_coordinator_message( core::Message&& msg )
         state.set_token_pos( 0 );
         state.set_next_layer( 0 );
         state.set_prompt_length( 1 );
-        state.set_temperature( 0.0f );
+        state.set_temperature( temp_dist( temp_gen ) );
         state.set_layer_workers( current_route_ );
 
         states.push_back( move( state ) );

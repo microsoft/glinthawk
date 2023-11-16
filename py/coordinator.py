@@ -107,24 +107,26 @@ class Worker:
 
 
 class Coordinator:
-    def __init__(self, n_layers, layers_per_worker, ui=False):
+    def __init__(self, **kwargs):
         self.workers = []
         self.layer_workers = {}
         self.incoming_messages = asyncio.Queue()
         self.outgoing_messages = asyncio.Queue()
         self.model = ModelInfo(
             name="stories-110M-glint",
-            n_layers=n_layers,
-            layers_per_worker=layers_per_worker,
+            n_layers=kwargs.get("n_layers", 12),
+            layers_per_worker=kwargs.get("layers_per_worker", 6),
         )
 
         self.aggregate_stats = WorkerStats()
         self.max_rates = WorkerStats()
 
+        self.dummy_prompt_count = kwargs.get("dummy_count", 0)
+
         self.logger = logging.getLogger("coordinator")
         self.logger.setLevel(logging.INFO)
 
-        if ui:
+        if kwargs.get("ui", False):
             self.ui = CoordinatorUI(self, self.logger)
         else:
             self.ui = None
@@ -223,12 +225,16 @@ class Coordinator:
                     )
 
                     # telling the first worker to generate dummy prompts
-                    self.outgoing_messages.put_nowait(
-                        [
-                            self.layer_workers[0],
-                            Message(Message.OpCode.PushDummyPrompts, b""),
-                        ]
-                    )
+                    if self.dummy_prompt_count:
+                        self.outgoing_messages.put_nowait(
+                            [
+                                self.layer_workers[0],
+                                Message(
+                                    Message.OpCode.PushDummyPrompts,
+                                    str(self.dummy_prompt_count).encode(),
+                                ),
+                            ]
+                        )
 
             elif message.opcode == Message.OpCode.InferenceState:
                 self.logger.error("Received InferenceState message from a worker.")
@@ -288,9 +294,12 @@ class Coordinator:
 @click.option("--layers-per-worker", "-L", required=True, type=click.INT)
 @click.option("--listen-address", required=True)
 @click.option("--listen-port", required=True)
+@click.option(
+    "--dummy-count", help="Number of dummy prompts to generate", type=click.INT
+)
 @click.option("--ui/--no-ui", default=False)
-def main(listen_address, listen_port, n_layers, layers_per_worker, ui=False):
-    coordinator = Coordinator(n_layers, layers_per_worker, ui=ui)
+def main(listen_address, listen_port, **kwargs):
+    coordinator = Coordinator(**kwargs)
     asyncio.run(coordinator.main(listen_address, listen_port))
 
 
