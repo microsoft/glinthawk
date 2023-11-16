@@ -54,6 +54,9 @@ private:
     uint64_t tokens_generated { 0 };
     uint64_t prompts_completed { 0 };
 
+    uint64_t bytes_sent { 0 };
+    uint64_t bytes_received { 0 };
+
     std::chrono::steady_clock::time_point last_stats_time { std::chrono::steady_clock::now() };
   };
 

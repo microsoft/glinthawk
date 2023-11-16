@@ -36,4 +36,7 @@ message WorkerStats
   uint64 tokens_processed = 4;
   uint64 tokens_generated = 5;
   uint64 prompts_completed = 6;
+
+  uint64 bytes_sent = 7;
+  uint64 bytes_received = 8;
 }

@@ -4,6 +4,7 @@ import sys
 import asyncio
 import logging
 import datetime
+import humanize
 import itertools
 import collections
 
@@ -90,7 +91,18 @@ class CoordinatorUI:
                     f"{self.coordinator.aggregate_stats.tokens_generated:.2f}",
                 )
 
-                stats_table.add_row("Active Prompts", "N/A")
+                stats_table.add_section()
+
+                stats_table.add_row(
+                    "\u03a3 Bytes Sent",
+                    f"{humanize.naturalsize(self.coordinator.aggregate_stats.bytes_sent, gnu=True)}",
+                )
+
+                stats_table.add_row(
+                    "\u03a3 Bytes Recv",
+                    f"{humanize.naturalsize(self.coordinator.aggregate_stats.bytes_received, gnu=True)}",
+                )
+
                 stats_table.add_section()
                 stats_table.add_row("Elapsed Time", f"{elapsed_time}")
 
@@ -116,6 +128,20 @@ class CoordinatorUI:
                     "Tokens Generated",
                     f"{rates.tokens_generated:.2f}",
                     f"{self.coordinator.max_rates.tokens_generated:.2f}",
+                )
+
+                rate_table.add_section()
+
+                rate_table.add_row(
+                    "Send Rate (B/s)",
+                    f"{humanize.naturalsize(rates.bytes_sent, gnu=True)}",
+                    f"{humanize.naturalsize(self.coordinator.max_rates.bytes_sent, gnu=True)}",
+                )
+
+                rate_table.add_row(
+                    "Recv Rate (B/s)",
+                    f"{humanize.naturalsize(rates.bytes_received, gnu=True)}",
+                    f"{humanize.naturalsize(self.coordinator.max_rates.bytes_received, gnu=True)}",
                 )
 
                 layout["left"]["bottom"].update(

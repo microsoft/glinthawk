@@ -34,7 +34,9 @@ void Worker<Model>::setup_peer( std::map<net::Address, Peer>::iterator peer_it )
     [this, peer_it] {
       for ( auto& state : peer_it->second.outgoing_states ) {
         DLOG( INFO ) << "Sending state to " << peer_it->first.to_string() << ": " << state.to_string();
-        peer_it->second.message_handler.push_message( Message( Message::OpCode::InferenceState, state.serialize() ) );
+        auto state_ser = state.serialize();
+        this->worker_stats_.bytes_sent += state_ser.size();
+        peer_it->second.message_handler.push_message( Message( Message::OpCode::InferenceState, move( state_ser ) ) );
       }
 
       peer_it->second.outgoing_states.clear();
@@ -167,9 +169,7 @@ bool Worker<Model>::handle_coordinator_message( core::Message&& msg )
     case Message::OpCode::InferenceState: {
       // got an inference state from the coordinator
       auto state = models::InferenceState( msg.payload() );
-      LOG( WARNING ) << "Got inference state from coordinator; this behavior is deprecated.";
-      DLOG( INFO ) << "Inference state: " << state.to_string();
-      this->compute_kernel_->push( move( state ) );
+      LOG( ERROR ) << "Got inference state from coordinator; this behavior is not supported.";
       break;
     }
 
@@ -212,7 +212,6 @@ bool Worker<Model>::handle_coordinator_message( core::Message&& msg )
         util::digest::sha256( { reinterpret_cast<const char*>( &i ), sizeof( i ) }, prompt_id );
 
         // generate a random number between 0 and 1
-
 
         InferenceState state {};
         state.set_prompt_id( prompt_id );
@@ -318,6 +317,7 @@ bool Worker<Model>::handle_peer_message( core::Message&& msg )
   switch ( msg.opcode() ) {
     case Message::OpCode::InferenceState: {
       worker_stats_.states_received++;
+      worker_stats_.bytes_received += msg.payload_length();
 
       auto state = models::InferenceState( msg.payload() );
       DLOG( INFO ) << "Inference state: " << state.to_string();
@@ -389,6 +389,9 @@ void Worker<Model>::handle_stats()
   proto.set_tokens_processed( worker_stats_.tokens_processed );
   proto.set_tokens_generated( worker_stats_.tokens_generated );
   proto.set_prompts_completed( worker_stats_.prompts_completed );
+
+  proto.set_bytes_sent( worker_stats_.bytes_sent );
+  proto.set_bytes_received( worker_stats_.bytes_received );
 
   Message stats_message { Message::OpCode::WorkerStats, proto.SerializeAsString() };
   coordinator_.message_handler.push_message( move( stats_message ) );

@@ -24,6 +24,7 @@ django-filter==23.3
 django-storages==1.14.2
 djangorestframework==3.14.0
 frozenlist==1.4.0
+humanize==4.8.0
 idna==3.4
 isodate==0.6.1
 kombu==5.3.2

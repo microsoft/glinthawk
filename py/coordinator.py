@@ -45,6 +45,9 @@ class WorkerStats:
     tokens_generated: int = 0
     prompts_completed: int = 0
 
+    bytes_sent: int = 0
+    bytes_received: int = 0
+
     def __add__(self, other):
         return WorkerStats(
             states_sent=self.states_sent + other.states_sent,
@@ -53,6 +56,8 @@ class WorkerStats:
             tokens_processed=self.tokens_processed + other.tokens_processed,
             tokens_generated=self.tokens_generated + other.tokens_generated,
             prompts_completed=self.prompts_completed + other.prompts_completed,
+            bytes_sent=self.bytes_sent + other.bytes_sent,
+            bytes_received=self.bytes_received + other.bytes_received,
         )
 
     def combine_max(self, other):
@@ -63,6 +68,8 @@ class WorkerStats:
             tokens_processed=max(self.tokens_processed, other.tokens_processed),
             tokens_generated=max(self.tokens_generated, other.tokens_generated),
             prompts_completed=max(self.prompts_completed, other.prompts_completed),
+            bytes_sent=max(self.bytes_sent, other.bytes_sent),
+            bytes_received=max(self.bytes_received, other.bytes_received),
         )
 
 
@@ -81,7 +88,7 @@ class Worker:
     model_name: str = ""
     start_layer: int = 0
     end_layer: int = 0
-    max_concurrency_size: int = 1
+    max_concurrency_size: int = 16
 
     current_stats: WorkerStats = field(default_factory=WorkerStats)
     current_stats_time: datetime.datetime = None
@@ -103,6 +110,8 @@ class Worker:
             tokens_processed=(self.current_stats.tokens_processed) / elapsed_time,
             tokens_generated=(self.current_stats.tokens_generated) / elapsed_time,
             prompts_completed=(self.current_stats.prompts_completed) / elapsed_time,
+            bytes_sent=(self.current_stats.bytes_sent) / elapsed_time,
+            bytes_received=(self.current_stats.bytes_received) / elapsed_time,
         )
 
 
@@ -121,6 +130,7 @@ class Coordinator:
         self.aggregate_stats = WorkerStats()
         self.max_rates = WorkerStats()
 
+        self.concurrency_size = kwargs.get("concurrency_size", 16)
         self.dummy_prompt_count = kwargs.get("dummy_count", 0)
 
         self.logger = logging.getLogger("coordinator")
@@ -187,6 +197,7 @@ class Coordinator:
                 # assinging layers to this worker
                 worker.start_layer = worker.id * self.model.layers_per_worker
                 worker.end_layer = (worker.id + 1) * self.model.layers_per_worker - 1
+                worker.max_concurrency_size = self.concurrency_size
 
                 initialization_message = glinthawk_pb.InitializeWorker(
                     model_name=self.model.name,
@@ -256,6 +267,8 @@ class Coordinator:
                 stats.tokens_processed = proto.tokens_processed
                 stats.tokens_generated = proto.tokens_generated
                 stats.prompts_completed = proto.prompts_completed
+                stats.bytes_sent = proto.bytes_sent
+                stats.bytes_received = proto.bytes_received
 
                 worker.current_stats = stats
                 worker.last_stats_time = worker.current_stats_time
@@ -295,8 +308,12 @@ class Coordinator:
 @click.option("--listen-address", required=True)
 @click.option("--listen-port", required=True)
 @click.option(
-    "--dummy-count", help="Number of dummy prompts to generate", type=click.INT
+    "--dummy-count",
+    help="Number of dummy prompts to generate",
+    type=click.INT,
+    default=0,
 )
+@click.option("--concurrency-size", "-C", type=click.INT, default=1)
 @click.option("--ui/--no-ui", default=False)
 def main(listen_address, listen_port, **kwargs):
     coordinator = Coordinator(**kwargs)
