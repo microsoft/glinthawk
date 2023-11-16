@@ -1,6 +1,7 @@
 import io
 import os
 import sys
+import random
 import asyncio
 import logging
 import datetime
@@ -17,6 +18,8 @@ from rich.text import Text
 from rich.panel import Panel
 from rich.segment import Segment
 from rich.align import Align
+
+import asciichartpy as acp
 
 
 class LogHandler(logging.Handler):
@@ -36,6 +39,19 @@ class LogHandler(logging.Handler):
             yield text
 
 
+class Chart:
+    def __init__(self, data):
+        self.data = data
+
+    def __rich_console__(self, console, options):
+        yield Text(
+            acp.plot(
+                self.data[-options.max_width - 10:], cfg={"height": options.height - 1, "format": "{:8.0f}"}
+            ),
+            no_wrap=True,
+        )
+
+
 class CoordinatorUI:
     def __init__(self, coordinator, logger):
         self.coordinator = coordinator
@@ -43,6 +59,10 @@ class CoordinatorUI:
         logger.addHandler(self.log_handler)
 
         self.start_time = datetime.datetime.now()
+
+        self.plot_field = "tokens_processed"
+        self.plot_title = "Tokens Processed"
+        self.plot_data = []
 
     async def render_ui(self):
         layout = Layout()
@@ -56,6 +76,11 @@ class CoordinatorUI:
         layout["right"].ratio = 2
 
         layout["left"].split_column(
+            Layout(Text(" "), name="top"),
+            Layout(Text(" "), name="bottom"),
+        )
+
+        layout["right"].split_column(
             Layout(Text(" "), name="top"),
             Layout(Text(" "), name="bottom"),
         )
@@ -147,6 +172,11 @@ class CoordinatorUI:
                 layout["left"]["bottom"].update(
                     Align.center(rate_table, vertical="middle")
                 )
-                layout["right"].update(Panel(self.log_handler, title="Log"))
+                layout["right"]["top"].update(Panel(self.log_handler, title="Log"))
+
+                self.plot_data += [getattr(rates, self.plot_field)] * 3
+                layout["right"]["bottom"].update(
+                    Panel(Chart(self.plot_data), title=f"{self.plot_title}")
+                )
 
                 live.refresh()
