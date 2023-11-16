@@ -3,6 +3,7 @@ import os
 import sys
 import asyncio
 import logging
+import datetime
 import itertools
 import collections
 
@@ -40,6 +41,8 @@ class CoordinatorUI:
         self.log_handler = LogHandler()
         logger.addHandler(self.log_handler)
 
+        self.start_time = datetime.datetime.now()
+
     async def render_ui(self):
         layout = Layout()
 
@@ -60,6 +63,9 @@ class CoordinatorUI:
             while True:
                 await asyncio.sleep(1)
                 rates = self.coordinator.aggregate_rates()
+
+                elapsed_time = datetime.datetime.now() - self.start_time
+                elapsed_time = datetime.timedelta(seconds=elapsed_time.seconds)
 
                 stats_table = Table(title="Status")
                 stats_table.add_column("Metric")
@@ -85,17 +91,32 @@ class CoordinatorUI:
                 )
 
                 stats_table.add_row("Active Prompts", "N/A")
+                stats_table.add_section()
+                stats_table.add_row("Elapsed Time", f"{elapsed_time}")
 
                 layout["left"]["top"].update(
                     Align.center(stats_table, vertical="middle")
                 )
 
-                rate_table = Table(title="Rates")
+                rate_table = Table(title="Rates (Hz)")
                 rate_table.add_column("Metric")
-                rate_table.add_column("Rate (Hz)")
-                rate_table.add_row("States Processed", f"{rates.states_processed:.2f}")
-                rate_table.add_row("Tokens Processed", f"{rates.tokens_processed:.2f}")
-                rate_table.add_row("Tokens Generated", f"{rates.tokens_generated:.2f}")
+                rate_table.add_column("Current")
+                rate_table.add_column("Peak")
+                rate_table.add_row(
+                    "States Processed",
+                    f"{rates.states_processed:.2f}",
+                    f"{self.coordinator.max_rates.states_processed:.2f}",
+                )
+                rate_table.add_row(
+                    "Tokens Processed",
+                    f"{rates.tokens_processed:.2f}",
+                    f"{self.coordinator.max_rates.tokens_processed:.2f}",
+                )
+                rate_table.add_row(
+                    "Tokens Generated",
+                    f"{rates.tokens_generated:.2f}",
+                    f"{self.coordinator.max_rates.tokens_generated:.2f}",
+                )
 
                 layout["left"]["bottom"].update(
                     Align.center(rate_table, vertical="middle")

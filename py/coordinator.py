@@ -17,6 +17,7 @@ import asyncio
 import logging
 import datetime
 import itertools
+import functools
 
 from dataclasses import dataclass, field
 
@@ -52,6 +53,16 @@ class WorkerStats:
             tokens_processed=self.tokens_processed + other.tokens_processed,
             tokens_generated=self.tokens_generated + other.tokens_generated,
             prompts_completed=self.prompts_completed + other.prompts_completed,
+        )
+
+    def combine_max(self, other):
+        return WorkerStats(
+            states_sent=max(self.states_sent, other.states_sent),
+            states_received=max(self.states_received, other.states_received),
+            states_processed=max(self.states_processed, other.states_processed),
+            tokens_processed=max(self.tokens_processed, other.tokens_processed),
+            tokens_generated=max(self.tokens_generated, other.tokens_generated),
+            prompts_completed=max(self.prompts_completed, other.prompts_completed),
         )
 
 
@@ -96,15 +107,19 @@ class Worker:
 
 
 class Coordinator:
-    def __init__(self, ui=False):
+    def __init__(self, n_layers, layers_per_worker, ui=False):
         self.workers = []
         self.layer_workers = {}
         self.incoming_messages = asyncio.Queue()
         self.outgoing_messages = asyncio.Queue()
-        self.aggregate_stats = WorkerStats()
         self.model = ModelInfo(
-            name="stories-110M-glint", n_layers=12, layers_per_worker=6
+            name="stories-110M-glint",
+            n_layers=n_layers,
+            layers_per_worker=layers_per_worker,
         )
+
+        self.aggregate_stats = WorkerStats()
+        self.max_rates = WorkerStats()
 
         self.logger = logging.getLogger("coordinator")
         self.logger.setLevel(logging.INFO)
@@ -158,7 +173,7 @@ class Coordinator:
     async def message_processor(self):
         while True:
             worker, message = await self.incoming_messages.get()
-            self.logger.info(f'Received "{message!r}" from {worker.id}.')
+            # self.logger.info(f'Received "{message!r}" from {worker.id}.')
 
             if message.opcode == Message.OpCode.Hey:
                 address = message.payload.decode()
@@ -248,6 +263,7 @@ class Coordinator:
         for worker in self.workers:
             agg_rate += worker.work_rate()
 
+        self.max_rates = agg_rate.combine_max(self.max_rates)
         return agg_rate
 
     async def main(self, listen_address, listen_port):
@@ -266,12 +282,17 @@ class Coordinator:
 
 
 @click.command()
+@click.option(
+    "--n-layers", "-N", help="Total layers of the model", required=True, type=click.INT
+)
+@click.option("--layers-per-worker", "-L", required=True, type=click.INT)
 @click.option("--listen-address", required=True)
 @click.option("--listen-port", required=True)
 @click.option("--ui/--no-ui", default=False)
-def main(listen_address, listen_port, ui=False):
-    coordinator = Coordinator(ui=ui)
+def main(listen_address, listen_port, n_layers, layers_per_worker, ui=False):
+    coordinator = Coordinator(n_layers, layers_per_worker, ui=ui)
     asyncio.run(coordinator.main(listen_address, listen_port))
+
 
 if __name__ == "__main__":
     main()
