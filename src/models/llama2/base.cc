@@ -251,6 +251,8 @@ size_t InferenceContext<DType>::context_size( const Config& config )
 template<typename DType>
 DType* InferenceContext<DType>::key( const Config& config, int layer_num, const int token_num, const int head_num )
 {
+  if ( empty() )
+    return nullptr;
   return buffer_ + ( layer_num - config.start_layer_num ) * ( config.seq_len * config.kv_dim * 2 )
          + token_num * ( config.kv_dim * 2 ) + head_num * ( config.dim / config.n_heads );
 }
@@ -258,6 +260,8 @@ DType* InferenceContext<DType>::key( const Config& config, int layer_num, const 
 template<typename DType>
 DType* InferenceContext<DType>::value( const Config& config, int layer_num, const int token_num, const int head_num )
 {
+  if ( empty() )
+    return nullptr;
   return key( config, layer_num, token_num, head_num ) + config.kv_dim;
 }
 
@@ -322,24 +326,123 @@ bool BaseLlama2<DType, Context>::is_finished( const InferenceState& inference_st
 }
 
 template<typename DType, typename Context>
-void BaseLlama2<DType, Context>::assert_safe_forward( const vector<InferenceState>&& inference_states )
+void BaseLlama2<DType, Context>::assert_safe_forward( const vector<InferenceState>& inference_states,
+                                                      const std::vector<std::shared_ptr<ContextType>>& contexts )
 {
   CHECK_GT( inference_states.size(), 0 ) << "batch size must be at least 1";
   CHECK_LE( inference_states.size(), this->config_.concurrency_limit )
     << "current batch cannot be larger than max concurrency size";
 
+  const uint32_t next_layer_batch = inference_states[0].next_layer();
+
+  CHECK_LE( this->config_.start_layer_num, next_layer_batch ) << "next layer in batch can not be before starting layer";
+  CHECK_LE( next_layer_batch, this->config_.end_layer_num ) << "next layer in batch can not be after end layer";
+
   for ( auto& item : inference_states ) {
-    CHECK_EQ( item.next_layer(), this->config_.start_layer_num ) << "next_layer must be the start layer";
+    CHECK_EQ( item.next_stage(), glinthawk::models::InferenceState::Stage::PreAttention ) << "next_stage must be pre attention";
+    CHECK_EQ( item.next_layer(), next_layer_batch ) << "next_layer must be the same across batch";
+    if ( constexpr( DType == _Float16 ) )
+      CHECK_EQ( item.activations().dtype.dtype, glinthawk::models::SerializedDataType::Type::Float16 )
+        << "Inference State data type does not match model data type (float16)";
+#ifdef GLINTHAWK_CUDA_ENABLED
+    if ( constexpr( DType == __half ) )
+      CHECK_EQ( item.activations().dtype.dtype, glinthawk::models::SerializedDataType::Type::Float16 )
+        << "Inference State data type does not match model data type (float16)";
+#endif
+    if ( constexpr( DType == float ) )
+      CHECK_EQ( item.activations().dtype.dtype, glinthawk::models::SerializedDataType::Type::Float32 )
+        << "Inference State data type does not match model data type (float16)";
     CHECK_LT( item.token_pos(), this->config_.seq_len ) << "token position cannot be larger than sequence length";
+  }
+  CHECK_EQ( inference_states.size(), contexts.size() ) << "token size must be the same as context size";
+  for ( auto& item : contexts ) {
+    CHECK_EQ( item.empty(), false ) << "context cannot be empty";
   }
 }
 
 template<typename DType, typename Context>
-bool BaseLlama2<DType, Context>::assert_safe_forward( const vector<InferenceState>&& inference_states,
-                                                      const vector<shared_ptr<ContextType>>& contexts )
+void BaseLlama2<DType, Context>::assert_safe_pre_attention( const vector<InferenceState>& inference_states,
+                                                            const std::vector<std::shared_ptr<ContextType>>& contexts )
 {
-  assert_safe_forward( inference_states )
+  CHECK_GT( inference_states.size(), 0 ) << "batch size must be at least 1";
+  CHECK_LE( inference_states.size(), this->config_.concurrency_limit )
+    << "current batch cannot be larger than max concurrency size";
+
+  const uint32_t next_layer_batch = inference_states[0].next_layer();
+
+  CHECK_LE( this->config_.start_layer_num, next_layer_batch ) << "next layer in batch can not be before starting layer";
+  CHECK_LE( next_layer_batch, this->config_.end_layer_num ) << "next layer in batch can not be after end layer";
+
+  for ( auto& item : inference_states ) {
+    CHECK_EQ( item.next_stage(), glinthawk::models::InferenceState::Stage::PreAttention ) << "next_stage must be pre attention";
+    CHECK_EQ( item.next_layer(), next_layer_batch ) << "next_layer must be the same across batch";
+    if ( constexpr( DType == _Float16 ) )
+      CHECK_EQ( item.activations().dtype.dtype, glinthawk::models::SerializedDataType::Type::Float16 )
+        << "Inference State data type does not match model data type (float16)";
+#ifdef GLINTHAWK_CUDA_ENABLED
+    if ( constexpr( DType == __half ) )
+      CHECK_EQ( item.activations().dtype.dtype, glinthawk::models::SerializedDataType::Type::Float16 )
+        << "Inference State data type does not match model data type (float16)";
+#endif
+    if ( constexpr( DType == float ) )
+      CHECK_EQ( item.activations().dtype.dtype, glinthawk::models::SerializedDataType::Type::Float32 )
+        << "Inference State data type does not match model data type (float16)";
+    CHECK_LT( item.token_pos(), this->config_.seq_len ) << "token position cannot be larger than sequence length";
+  }
   CHECK_EQ( inference_states.size(), contexts.size() ) << "token size must be the same as context size";
+}
+
+template<typename DType, typename Context>
+void BaseLlama2<DType, Context>::assert_safe_attention( const vector<InferenceState>& inference_states,
+                                                        const std::vector<std::shared_ptr<ContextType>>& contexts )
+{
+  CHECK_GT( inference_states.size(), 0 ) << "batch size must be at least 1";
+  CHECK_LE( inference_states.size(), this->config_.concurrency_limit )
+    << "current batch cannot be larger than max concurrency size";
+
+  const uint32_t next_layer_batch = inference_states[0].next_layer();
+
+  CHECK_LE( this->config_.start_layer_num, next_layer_batch ) << "next layer in batch can not be before starting layer";
+  CHECK_LE( next_layer_batch, this->config_.end_layer_num ) << "next layer in batch can not be after end layer";
+
+  for ( auto& item : inference_states ) {
+    CHECK_EQ( item.next_stage(), glinthawk::models::InferenceState::Stage::Attention ) << "next_stage must be attention";
+    CHECK_LT( item.token_pos(), this->config_.seq_len ) << "token position cannot be larger than sequence length";
+  }
+  CHECK_EQ( inference_states.size(), contexts.size() ) << "token size must be the same as context size";
+  for ( auto& item : contexts ) {
+    CHECK_EQ( item.empty(), false ) << "context cannot be empty";
+  }
+}
+
+template<typename DType, typename Context>
+void BaseLlama2<DType, Context>::assert_safe_post_attention( const vector<InferenceState>& inference_states )
+{
+  CHECK_GT( inference_states.size(), 0 ) << "batch size must be at least 1";
+  CHECK_LE( inference_states.size(), this->config_.concurrency_limit )
+    << "current batch cannot be larger than max concurrency size";
+
+  const uint32_t next_layer_batch = inference_states[0].next_layer();
+
+  CHECK_LE( this->config_.start_layer_num, next_layer_batch ) << "next layer in batch can not be before starting layer";
+  CHECK_LE( next_layer_batch, this->config_.end_layer_num ) << "next layer in batch can not be after end layer";
+
+  for ( auto& item : inference_states ) {
+    CHECK_EQ( item.next_stage(), glinthawk::models::InferenceState::Stage::PostAttention ) << "next_stage must be post attention";
+    CHECK_EQ( item.next_layer(), next_layer_batch ) << "next_layer must be the same across batch";
+    if ( constexpr( DType == _Float16 ) )
+      CHECK_EQ( item.activations().dtype.dtype, glinthawk::models::SerializedDataType::Type::Float16 )
+        << "Inference State data type does not match model data type (float16)";
+#ifdef GLINTHAWK_CUDA_ENABLED
+    if ( constexpr( DType == __half ) )
+      CHECK_EQ( item.activations().dtype.dtype, glinthawk::models::SerializedDataType::Type::Float16 )
+        << "Inference State data type does not match model data type (float16)";
+#endif
+    if ( constexpr( DType == float ) )
+      CHECK_EQ( item.activations().dtype.dtype, glinthawk::models::SerializedDataType::Type::Float32 )
+        << "Inference State data type does not match model data type (float16)";
+    CHECK_LT( item.token_pos(), this->config_.seq_len ) << "token position cannot be larger than sequence length";
+  }
 }
 
 namespace glinthawk::models::llama2 {

@@ -54,7 +54,6 @@ void simple_gemm_strided_batch( uint64_t m,
   }
 }
 
-
 template<typename DType>
 void attention_0_gemm( const DType* query,
                        const DType* const context_pointers[],
@@ -519,7 +518,7 @@ void apply_rope( const uint64_t head_size,
                  const DType* freq_cis_real,
                  const DType* freq_cis_imag,
                  DType* state_q,
-                 DType* state_k )
+                 DType* context_pointers[] )
 {
   uint64_t i;
   uint64_t j;
@@ -536,7 +535,7 @@ void apply_rope( const uint64_t head_size,
                  freq_cis_real + token_positions[i] * head_size / 2,
                  freq_cis_imag + token_positions[i] * head_size / 2,
                  state_q + i * n_kv_heads * gqa_size * head_size,
-                 state_k + i * n_kv_heads * head_size,
+                 context_pointers[i],
                  head_q_num,
                  head_k_num,
                  elem_idx );
@@ -556,6 +555,8 @@ void copy_kv_cache( DType* context_pointers[],
   uint64_t i;
 #pragma omp parallel for private( i )
   for ( i = 0; i < batch_size; i++ ) {
+    if ( context_pointers[i] == nullptr )
+      continue;
     DType* k_cache_pos = context_pointers[i] + token_positions[i] * dim * 2;
     DType* v_cache_pos = k_cache_pos + dim;
 
@@ -605,6 +606,18 @@ void argmax( uint32_t* output, const DType* v, const uint64_t n, const uint64_t 
     }
 
     output[b] = max_i;
+  }
+}
+
+template<typename DType_dst, typename DType_src>
+void cvt_and_copy( DType_dst* dst, const DType_src* src, const uint64_t size )
+{
+  if ( constexpr( is_same_v<DType_src, DType_dst> ) ) {
+    memcpy( dst, src, sizeof( DType_src ) * size );
+  } else {
+    for ( uint64_t i = 0; i < size; i++ ) {
+      dst[i] = static_cast<DType_dst>( src[i] );
+    }
   }
 }
 
@@ -665,7 +678,7 @@ template void apply_rope<_Float16>( const uint64_t head_size,
                                     const _Float16* freq_cis_real,
                                     const _Float16* freq_cis_imag,
                                     _Float16* state_q,
-                                    _Float16* state_k );
+                                    _Float16* context_pointers[] );
 
 template void copy_kv_cache<_Float16>( _Float16* context_pointers[],
                                        const _Float16* state_k,
@@ -731,7 +744,7 @@ template void apply_rope<float>( const uint64_t head_size,
                                  const float* freq_cis_real,
                                  const float* freq_cis_imag,
                                  float* state_q,
-                                 float* state_k );
+                                 float* context_pointers[] );
 
 template void copy_kv_cache<float>( float* context_pointers[],
                                     const float* state_k,
@@ -739,5 +752,10 @@ template void copy_kv_cache<float>( float* context_pointers[],
                                     const uint64_t dim,
                                     const uint64_t batch_size,
                                     const uint32_t* token_positions );
+
+template void cvt_and_copy<_Float16, float>( _Float16* dst, const float* src, const uint64_t size );
+template void cvt_and_copy<_Float16, _Float16>( _Float16* dst, const _Float16* src, const uint64_t size );
+template void cvt_and_copy<float, _Float16>( float* dst, _Float16* src, const uint64_t size );
+template void cvt_and_copy<float, float>( float* dst, const float* src, const uint64_t size );
 
 } // namespace glinthawk::models::common::cpu

@@ -1,20 +1,21 @@
 #pragma once
 
+#include <concepts>
 #include <cstdint>
 #include <curand.h>
 #include <curand_kernel.h>
 #include <source_location>
 #include <vector>
-#include <concepts>
 
 namespace glinthawk::models::common::cuda::ops {
 
-constexpr size_t TPB = 64; /* threads per block */
-constexpr size_t NRBS = 32; /* norm reduce block size */
+constexpr size_t TPB = 64;    /* threads per block */
+constexpr size_t NRBS = 32;   /* norm reduce block size */
 constexpr size_t AMRBS = 128; /* argmax reduce block size */
 
 template<std::unsigned_integral T>
-T div_ceil( const T x, const T y ) {
+T div_ceil( const T x, const T y )
+{
   return x / y + ( x % y != 0 );
 }
 
@@ -89,7 +90,7 @@ void apply_rope( const uint64_t head_size,
                  const DType* freq_cis_real,
                  const DType* freq_cis_imag,
                  DType* state_q,
-                 DType* state_k );
+                 DType* context_pointers[] );
 
 template<typename DType>
 void copy_kv_cache( DType* context_pointers[],
@@ -98,6 +99,12 @@ void copy_kv_cache( DType* context_pointers[],
                     const uint64_t dim,
                     const uint64_t batch_size,
                     const uint32_t* token_positions );
+
+template<typename DType_dst, typename DType_src>
+void cvt_and_copy_to_cuda( DType_dst* dst_cuda, const DType_src* src_cpu, const uint64_t size );
+
+template<typename DType_dst, typename DType_src>
+void cvt_and_copy_from_cuda( DType_dst* dst_cpu, const DType_src* src_cuda, const uint64_t size );
 
 void setup_rng( curandState* rng_state, unsigned long seed, const uint64_t size, const uint64_t batch_size );
 
