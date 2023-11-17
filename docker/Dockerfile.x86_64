@@ -1,0 +1,28 @@
+FROM ubuntu:22.04 AS build
+MAINTAINER "Sadjad Fouladi <sfouladi@microsoft.com>"
+
+WORKDIR /app
+
+RUN apt-get update -qq
+RUN apt-get install -y ca-certificates gpg wget
+RUN wget -O - https://apt.kitware.com/keys/kitware-archive-latest.asc 2>/dev/null | gpg --dearmor - | tee /usr/share/keyrings/kitware-archive-keyring.gpg >/dev/null
+RUN echo 'deb [signed-by=/usr/share/keyrings/kitware-archive-keyring.gpg] https://apt.kitware.com/ubuntu/ jammy main' | tee /etc/apt/sources.list.d/kitware.list >/dev/null
+
+RUN apt-get update -qq
+RUN apt-get install -y libprotobuf-dev protobuf-compiler cmake libssl-dev libgtest-dev libgoogle-glog-dev kitware-archive-keyring
+RUN apt-get install -y gcc-12 g++-12 make cmake
+
+WORKDIR /app/src
+COPY . ./
+
+WORKDIR /app/build
+ENV CXX="g++-12" CC="gcc-12"
+RUN cmake -DCMAKE_BUILD_TYPE=MinSizeRel ../src
+RUN cmake --build . --target worker-cpu -j$(nproc)
+
+FROM ubuntu:22.04
+RUN apt-get update -qq
+RUN apt-get install -y libprotobuf23 libssl3 libgoogle-glog0v5 libgomp1
+WORKDIR /app
+COPY --from=0 /app/build/worker-cpu /app/worker-cpu
+ENTRYPOINT ["/app/worker-cpu"]
