@@ -194,16 +194,16 @@ protected:
 
   BaseLlama2() = default;
 
-  void assert_safe_forward( const std::vector<InferenceState>&& inference_states,
-                            const std::vector<std::shared_ptr<ContextType>>& contexts );
+  void assert_safe_forward( const std::vector<InferenceState>& inference_states,
+                            const std::vector<std::shared_ptr<Context>>& contexts );
 
-  void assert_safe_pre_attention( const std::vector<InferenceState>&& inference_states,
-                                  const std::vector<std::shared_ptr<ContextType>>& contexts );
+  void assert_safe_pre_attention( const std::vector<InferenceState>& inference_states,
+                                  const std::vector<std::shared_ptr<Context>>& contexts );
 
-  void assert_safe_attention( const std::vector<InferenceState>&& inference_states,
-                            const std::vector<std::shared_ptr<ContextType>>& contexts );
+  void assert_safe_attention( const std::vector<InferenceState>& inference_states,
+                              const std::vector<std::shared_ptr<Context>>& contexts );
 
-  void assert_safe_post_attention( const std::vector<InferenceState>&& inference_states );
+  void assert_safe_post_attention( const std::vector<InferenceState>& inference_states );
 
 public:
   virtual ~BaseLlama2() = default;

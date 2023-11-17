@@ -612,7 +612,7 @@ void argmax( uint32_t* output, const DType* v, const uint64_t n, const uint64_t 
 template<typename DType_dst, typename DType_src>
 void cvt_and_copy( DType_dst* dst, const DType_src* src, const uint64_t size )
 {
-  if ( constexpr( is_same_v<DType_src, DType_dst> ) ) {
+  if constexpr ( is_same_v<DType_src, DType_dst> ) {
     memcpy( dst, src, sizeof( DType_src ) * size );
   } else {
     for ( uint64_t i = 0; i < size; i++ ) {
@@ -755,7 +755,7 @@ template void copy_kv_cache<float>( float* context_pointers[],
 
 template void cvt_and_copy<_Float16, float>( _Float16* dst, const float* src, const uint64_t size );
 template void cvt_and_copy<_Float16, _Float16>( _Float16* dst, const _Float16* src, const uint64_t size );
-template void cvt_and_copy<float, _Float16>( float* dst, _Float16* src, const uint64_t size );
+template void cvt_and_copy<float, _Float16>( float* dst, const _Float16* src, const uint64_t size );
 template void cvt_and_copy<float, float>( float* dst, const float* src, const uint64_t size );
 
 } // namespace glinthawk::models::common::cpu

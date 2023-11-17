@@ -3,8 +3,8 @@
 #include <cstring>
 #include <iomanip>
 #include <iostream>
-#include <sstream>
 #include <math.h>
+#include <sstream>
 
 using namespace std;
 using namespace glinthawk;
@@ -61,8 +61,7 @@ string Timer::summary() const
 
     uint64_t avg = _records.at( i ).total_ns / _records.at( i ).count;
     uint64_t var = _records.at( i ).total_sq_ns / _records.at( i ).count - avg * avg;
-    uint64_t stdev = static_cast<uint64_t>( sqrt(var) );
-
+    uint64_t stdev = static_cast<uint64_t>( sqrt( var ) );
 
     out << "\x1B[2m [max=" << pp_ns( _records.at( i ).max_ns );
     out << ", avg=" << pp_ns( avg );

@@ -312,7 +312,7 @@ template<typename DType>
 vector<InferenceState> Llama2<DType>::forward( vector<InferenceState>&& inference_states,
                                                const vector<shared_ptr<ContextType>>& contexts )
 {
-  assert_safe_forward( inference_states, contexts );
+  this->assert_safe_forward( inference_states, contexts );
 
   for ( size_t i = 0; i < inference_states.size(); i++ ) {
     this->state_.batch_token_positions[i] = inference_states[i].token_pos();
@@ -392,7 +392,7 @@ template<typename DType>
 vector<InferenceState> Llama2<DType>::pre_attention_forward( vector<InferenceState>&& inference_states,
                                                              const vector<shared_ptr<ContextType>>& contexts )
 {
-  assert_safe_pre_attention( inference_states, contexts );
+  this->assert_safe_pre_attention( inference_states, contexts );
   const uint32_t next_layer_batch = inference_states[0].next_layer();
 
   this->state_.curr_concurrency_size = inference_states.size();
@@ -458,7 +458,7 @@ template<typename DType>
 vector<InferenceState> Llama2<DType>::attention_forward( vector<InferenceState>&& inference_states,
                                                          const vector<shared_ptr<ContextType>>& contexts )
 {
-  assert_safe_attention( inference_states, contexts );
+  this->assert_safe_attention( inference_states, contexts );
 
   this->state_.curr_concurrency_size = inference_states.size();
 
@@ -471,22 +471,22 @@ vector<InferenceState> Llama2<DType>::attention_forward( vector<InferenceState>&
       case SerializedDataType::Type::Float16:
         // Q should go to run state
         ops::cvt_and_copy_to_cuda( this->state_.q + i * this->config_.dim,
-                           reinterpret_cast<__half*>( inference_states[i].activations().ptr.get() ),
-                           this->config_.dim );
+                                   reinterpret_cast<__half*>( inference_states[i].activations().ptr.get() ),
+                                   this->config_.dim );
         // if KV is not already in context, put it there
         if ( inference_states[i].activations().len > this->config_.dim ) {
           ops::cvt_and_copy_to_cuda(
             contexts[i]->key( this->config_, inference_states[i].next_layer(), inference_states[i].token_pos() ),
-            reinterpret_cast<kv_dim*>( inference_states[i].activations().ptr.get()
-                                         + this->config_.dim * sizeof( DType ) ),
+            reinterpret_cast<__half*>( inference_states[i].activations().ptr.get()
+                                       + this->config_.dim * sizeof( DType ) ),
             this->config_.kv_dim * 2 );
         }
         break;
       case SerializedDataType::Type::Float32:
         // Q should go to run state
         ops::cvt_and_copy_to_cuda( this->state_.q + i * this->config_.dim,
-                           reinterpret_cast<float*>( inference_states[i].activations().ptr.get() ),
-                           this->config_.dim );
+                                   reinterpret_cast<float*>( inference_states[i].activations().ptr.get() ),
+                                   this->config_.dim );
         // if KV is not already in context, put it there
         if ( inference_states[i].activations().len > this->config_.dim ) {
           ops::cvt_and_copy_to_cuda(
@@ -507,39 +507,39 @@ vector<InferenceState> Llama2<DType>::attention_forward( vector<InferenceState>&
 
   for ( size_t i = 0; i < inference_states.size(); i++ ) {
     DataBuffer activations { inference_states[i].activations().dtype.dtype,
-                             make_unique<uint8_t[]>( this->config_.dim * inference_states[i].activations().dtype.len ),
+                             make_unique<uint8_t[]>( this->config_.dim
+                                                     * inference_states[i].activations().dtype.size() ),
                              this->config_.dim };
 
     switch ( activations.dtype.dtype ) {
       case SerializedDataType::Type::Float16:
         ops::cvt_and_copy_from_cuda( reinterpret_cast<__half*>( activations.ptr.get() ),
-                           this->state_.xb + i * this->config_.dim,
-                           this->config_.dim );
+                                     this->state_.xb + i * this->config_.dim,
+                                     this->config_.dim );
         break;
       case SerializedDataType::Type::Float32:
         ops::cvt_and_copy_from_cuda( reinterpret_cast<float*>( activations.ptr.get() ),
-                           this->state_.xb + i * this->config_.dim,
-                           this->config_.dim );
+                                     this->state_.xb + i * this->config_.dim,
+                                     this->config_.dim );
+        break;
+      default:
+        throw runtime_error( "invalid dtype" );
     }
-    break;
-    default:
-      throw runtime_error( "invalid dtype" );
+
+    output_states.push_back( move( inference_states[i] ) );
+    auto& item = output_states.back();
+    item.set_next_stage( InferenceState::Stage::PostAttention );
+    item.set_next_layer( this->config_.end_layer_num + 1 );
+    item.set_activations( move( activations ) );
   }
 
-  output_states.push_back( move( inference_states[i] ) );
-  auto& item = output_states.back();
-  item.set_next_stage( InferenceState::Stage::PostAttention );
-  item.set_next_layer( this->config_.end_layer_num + 1 );
-  item.set_activations( move( activations ) );
-}
-
-return output_states;
+  return output_states;
 }
 
 template<typename DType>
 vector<InferenceState> Llama2<DType>::post_attention_forward( vector<InferenceState>&& inference_states )
 {
-  assert_safe_post_attention( inference_states );
+  this->assert_safe_post_attention( inference_states );
   const uint32_t next_layer_batch = inference_states[0].next_layer();
 
   this->state_.curr_concurrency_size = inference_states.size();

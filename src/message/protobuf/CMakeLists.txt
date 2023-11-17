@@ -1,3 +1,3 @@
-protobuf_generate_cpp ( PROTO_SRC PROTO_HEADER ${CMAKE_CURRENT_SOURCE_DIR}/glinthawk.proto )
-add_library ( glinthawk_proto ${PROTO_HEADER} ${PROTO_SRC} )
-target_compile_options ( glinthawk_proto PRIVATE -Wno-error )
+protobuf_generate_cpp(PROTO_SRC PROTO_HEADER ${CMAKE_CURRENT_SOURCE_DIR}/glinthawk.proto)
+add_library(glinthawk_proto ${PROTO_HEADER} ${PROTO_SRC})
+target_compile_options(glinthawk_proto PRIVATE -Wno-error)

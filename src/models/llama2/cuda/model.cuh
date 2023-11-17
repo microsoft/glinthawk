@@ -53,13 +53,14 @@ public:
   InferenceState pre_attention_forward( InferenceState&& inference_state,
                                         std::shared_ptr<ContextType> context ) override;
 
-  std::vector<InferenceState> pre_attention_forward( std::vector<InferenceState>&& inference_states,
-                                                     const vector<shared_ptr<ContextType>>& contexts ) override;
+  std::vector<InferenceState> pre_attention_forward(
+    std::vector<InferenceState>&& inference_states,
+    const std::vector<std::shared_ptr<ContextType>>& contexts ) override;
 
-  InferenceState attention_forward( InferenceState&& inference_state, std::shared_ptr<Context> context ) override;
+  InferenceState attention_forward( InferenceState&& inference_state, std::shared_ptr<ContextType> context ) override;
 
   std::vector<InferenceState> attention_forward( std::vector<InferenceState>&& inference_states,
-                                                 const std::vector<std::shared_ptr<Context>>& contexts ) override;
+                                                 const std::vector<std::shared_ptr<ContextType>>& contexts ) override;
 
   InferenceState post_attention_forward( InferenceState&& inference_state ) override;
 
