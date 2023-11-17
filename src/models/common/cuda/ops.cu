@@ -806,10 +806,10 @@ void soft_sample( DType* v,
 template<typename DType_dst, typename DType_src>
 void cvt_and_copy_to_cuda( DType_dst* dst_cuda, const DType_src* src_cpu, const uint64_t size )
 {
-  if ( constexpr( is_same_v<DType_src, DType_dst> ) ) {
+  if constexpr ( is_same_v<DType_src, DType_dst> ) {
     ops::CHECK_CUDA( cudaMemcpy( dst_cuda, src_cpu, size * sizeof( DType_src ), cudaMemcpyDeviceToHost ) );
   } else {
-    DType_dst* dst_cpu = malloc( sizeof( DType_dst ) * size );
+    DType_dst* dst_cpu = reinterpret_cast<DType_dst*>( malloc( sizeof( DType_dst ) * size ) );
     for ( uint64_t i = 0; i < size; i++ ) {
       dst_cpu[i] = static_cast<DType_dst>( src_cpu[i] );
     }
@@ -821,10 +821,10 @@ void cvt_and_copy_to_cuda( DType_dst* dst_cuda, const DType_src* src_cpu, const 
 template<typename DType_dst, typename DType_src>
 void cvt_and_copy_from_cuda( DType_dst* dst_cpu, const DType_src* src_cuda, const uint64_t size )
 {
-  if ( constexpr( is_same_v<DType_src, DType_dst> ) ) {
+  if constexpr ( is_same_v<DType_src, DType_dst> ) {
     ops::CHECK_CUDA( cudaMemcpy( dst_cpu, src_cuda, size * sizeof( DType_src ), cudaMemcpyHostToDevice ) );
   } else {
-    DType_dst* src_cpu = malloc( sizeof( DType_src ) * size );
+    DType_src* src_cpu = reinterpret_cast<DType_src*>( malloc( sizeof( DType_src ) * size ) );
     ops::CHECK_CUDA( cudaMemcpy( src_cpu, src_cuda, size * sizeof( DType_src ), cudaMemcpyHostToDevice ) );
     for ( uint64_t i = 0; i < size; i++ ) {
       dst_cpu[i] = static_cast<DType_dst>( src_cpu[i] );
@@ -980,12 +980,12 @@ template void copy_kv_cache<__half>( __half* context_pointers[],
 
 template void cvt_and_copy_to_cuda<__half, float>( __half* dst_cuda, const float* src_cpu, const uint64_t size );
 template void cvt_and_copy_to_cuda<__half, __half>( __half* dst_cuda, const __half* src_cpu, const uint64_t size );
-template void cvt_and_copy_to_cuda<float, __half>( float* dst_cuda, __half* src_cpu, const uint64_t size );
+template void cvt_and_copy_to_cuda<float, __half>( float* dst_cuda, const __half* src_cpu, const uint64_t size );
 template void cvt_and_copy_to_cuda<float, float>( float* dst_cuda, const float* src_cpu, const uint64_t size );
 
 template void cvt_and_copy_from_cuda<__half, float>( __half* dst_cpu, const float* src_cuda, const uint64_t size );
 template void cvt_and_copy_from_cuda<__half, __half>( __half* dst_cpu, const __half* src_cuda, const uint64_t size );
-template void cvt_and_copy_from_cuda<float, __half>( float* dst_cpu, __half* src_cuda, const uint64_t size );
+template void cvt_and_copy_from_cuda<float, __half>( float* dst_cpu, const __half* src_cuda, const uint64_t size );
 template void cvt_and_copy_from_cuda<float, float>( float* dst_cpu, const float* src_cuda, const uint64_t size );
 
 } // namespace glinthawk::models::common::cuda

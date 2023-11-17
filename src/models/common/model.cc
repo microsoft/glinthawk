@@ -1,5 +1,6 @@
 #include "model.hh"
 
+#include <iostream>
 #include <sstream>
 
 #include <glog/logging.h>
@@ -26,6 +27,47 @@ void _put_and_advance( PtrType*& ptr, const FieldType& field )
 }
 
 } // namespace
+
+ostream& operator<<( ostream& os, const SerializedDataType::Type& v )
+{
+  switch ( v ) {
+    case SerializedDataType::Type::Float16:
+      os << "FP16";
+      break;
+    case SerializedDataType::Type::Float32:
+      os << "FP32";
+      break;
+  }
+  return os;
+}
+
+std::ostream& operator<<( std::ostream& os, const SerializedDataType& v )
+{
+  os << v.dtype;
+  return os;
+}
+
+ostream& operator<<( ostream& os, const DataBuffer& v )
+{
+  os << "activation(" << v.dtype << ").len=" << v.len;
+  return os;
+}
+
+ostream& operator<<( ostream& os, const InferenceState::Stage& v )
+{
+  switch ( v ) {
+    case InferenceState::Stage::PreAttention:
+      os << "Pre";
+      break;
+    case InferenceState::Stage::Attention:
+      os << "Att";
+      break;
+    case InferenceState::Stage::PostAttention:
+      os << "Post";
+      break;
+  }
+  return os;
+}
 
 InferenceState::InferenceState( const string_view serialized )
 {
@@ -66,10 +108,7 @@ net::Address InferenceState::next_worker() const
   return it->second;
 }
 
-void InferenceState::erase_from_workers( const uint32_t next_layer )
-{
-  layer_workers_.erase( next_layer );
-}
+void InferenceState::erase_from_workers( const uint32_t next_layer ) { layer_workers_.erase( next_layer ); }
 
 string InferenceState::serialize() const
 {
@@ -116,7 +155,7 @@ string InferenceState::to_string() const
       << "prompt_len=" << prompt_length_ << ", "
       << "temperature=" << temperature_ << ", "
       << "finished=" << finished_ << ", "
-      << "activations.len=" << activations_.len << ", "
+      << "activations.len=" << activations_ << ", "
       << "peers={";
 
   for ( auto& [layer, address] : layer_workers_ ) {

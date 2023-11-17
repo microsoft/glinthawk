@@ -1,5 +1,6 @@
 #pragma once
 
+#include <iostream>
 #include <map>
 #include <memory>
 #include <stdexcept>
@@ -79,6 +80,7 @@ public:
     PreAttention,
     Attention,
     PostAttention
+
   };
 
 private:
@@ -88,7 +90,7 @@ private:
   uint32_t token_ { 1 };
   uint32_t token_pos_ { 0 };
   uint32_t next_layer_ { 0 };
-  Stage next_stage_ { PreAttention };
+  Stage next_stage_ { Stage::PreAttention };
   uint32_t prompt_length_ { 1 };
   float temperature_ { 0.0f };
   bool finished_ { false };
@@ -124,7 +126,7 @@ public:
   void set_token( const uint32_t token ) { token_ = token; }
   void set_token_pos( const uint32_t token_pos ) { token_pos_ = token_pos; }
   void set_next_layer( const uint32_t next_layer ) { next_layer_ = next_layer; }
-  void set_next_stage( const uint32_t next_stage ) { next_stage_ = next_stage; }
+  void set_next_stage( const Stage next_stage ) { next_stage_ = next_stage; }
   void set_prompt_length( const uint32_t prompt_length ) { prompt_length_ = prompt_length; }
   void set_temperature( const float temperature ) { temperature_ = temperature; }
   void set_activations( DataBuffer&& activations ) { activations_ = std::move( activations ); }
@@ -151,9 +153,12 @@ public:
                                                const std::vector<std::shared_ptr<Context>>& contexts )
     = 0;
 
-  virtual InferenceState pre_attention_forward( InferenceState&& inference_state ) = 0;
+  virtual InferenceState pre_attention_forward( InferenceState&& inference_state, std::shared_ptr<Context> context )
+    = 0;
 
-  virtual std::vector<InferenceState> pre_attention_forward( std::vector<InferenceState>&& inference_states ) = 0;
+  virtual std::vector<InferenceState> pre_attention_forward( std::vector<InferenceState>&& inference_states,
+                                                             const std::vector<std::shared_ptr<Context>>& contexts )
+    = 0;
 
   virtual InferenceState attention_forward( InferenceState&& inference_state, std::shared_ptr<Context> context ) = 0;
 
@@ -165,5 +170,10 @@ public:
 
   virtual std::vector<InferenceState> post_attention_forward( std::vector<InferenceState>&& inference_states ) = 0;
 };
+
+std::ostream& operator<<( std::ostream& os, const SerializedDataType::Type& v );
+std::ostream& operator<<( std::ostream& os, const SerializedDataType& v );
+std::ostream& operator<<( std::ostream& os, const DataBuffer& v );
+std::ostream& operator<<( std::ostream& os, const InferenceState::Stage& v );
 
 } // namespace glinthawk::models

@@ -339,24 +339,25 @@ void BaseLlama2<DType, Context>::assert_safe_forward( const vector<InferenceStat
   CHECK_LE( next_layer_batch, this->config_.end_layer_num ) << "next layer in batch can not be after end layer";
 
   for ( auto& item : inference_states ) {
-    CHECK_EQ( item.next_stage(), glinthawk::models::InferenceState::Stage::PreAttention ) << "next_stage must be pre attention";
+    CHECK_EQ( item.next_stage(), glinthawk::models::InferenceState::Stage::PreAttention )
+      << "next_stage must be pre attention";
     CHECK_EQ( item.next_layer(), next_layer_batch ) << "next_layer must be the same across batch";
-    if ( constexpr( DType == _Float16 ) )
+    if constexpr ( is_same_v<DType, _Float16> )
       CHECK_EQ( item.activations().dtype.dtype, glinthawk::models::SerializedDataType::Type::Float16 )
         << "Inference State data type does not match model data type (float16)";
 #ifdef GLINTHAWK_CUDA_ENABLED
-    if ( constexpr( DType == __half ) )
+    if constexpr ( is_same_v<DType, __half> )
       CHECK_EQ( item.activations().dtype.dtype, glinthawk::models::SerializedDataType::Type::Float16 )
         << "Inference State data type does not match model data type (float16)";
 #endif
-    if ( constexpr( DType == float ) )
+    if constexpr ( is_same_v<DType, float> )
       CHECK_EQ( item.activations().dtype.dtype, glinthawk::models::SerializedDataType::Type::Float32 )
         << "Inference State data type does not match model data type (float16)";
     CHECK_LT( item.token_pos(), this->config_.seq_len ) << "token position cannot be larger than sequence length";
   }
   CHECK_EQ( inference_states.size(), contexts.size() ) << "token size must be the same as context size";
   for ( auto& item : contexts ) {
-    CHECK_EQ( item.empty(), false ) << "context cannot be empty";
+    CHECK_EQ( item->empty(), false ) << "context cannot be empty";
   }
 }
 
@@ -374,17 +375,18 @@ void BaseLlama2<DType, Context>::assert_safe_pre_attention( const vector<Inferen
   CHECK_LE( next_layer_batch, this->config_.end_layer_num ) << "next layer in batch can not be after end layer";
 
   for ( auto& item : inference_states ) {
-    CHECK_EQ( item.next_stage(), glinthawk::models::InferenceState::Stage::PreAttention ) << "next_stage must be pre attention";
+    CHECK_EQ( item.next_stage(), glinthawk::models::InferenceState::Stage::PreAttention )
+      << "next_stage must be pre attention";
     CHECK_EQ( item.next_layer(), next_layer_batch ) << "next_layer must be the same across batch";
-    if ( constexpr( DType == _Float16 ) )
+    if constexpr ( is_same_v<DType, _Float16> )
       CHECK_EQ( item.activations().dtype.dtype, glinthawk::models::SerializedDataType::Type::Float16 )
         << "Inference State data type does not match model data type (float16)";
 #ifdef GLINTHAWK_CUDA_ENABLED
-    if ( constexpr( DType == __half ) )
+    if constexpr ( is_same_v<DType, __half> )
       CHECK_EQ( item.activations().dtype.dtype, glinthawk::models::SerializedDataType::Type::Float16 )
         << "Inference State data type does not match model data type (float16)";
 #endif
-    if ( constexpr( DType == float ) )
+    if constexpr ( is_same_v<DType, float> )
       CHECK_EQ( item.activations().dtype.dtype, glinthawk::models::SerializedDataType::Type::Float32 )
         << "Inference State data type does not match model data type (float16)";
     CHECK_LT( item.token_pos(), this->config_.seq_len ) << "token position cannot be larger than sequence length";
@@ -406,12 +408,13 @@ void BaseLlama2<DType, Context>::assert_safe_attention( const vector<InferenceSt
   CHECK_LE( next_layer_batch, this->config_.end_layer_num ) << "next layer in batch can not be after end layer";
 
   for ( auto& item : inference_states ) {
-    CHECK_EQ( item.next_stage(), glinthawk::models::InferenceState::Stage::Attention ) << "next_stage must be attention";
+    CHECK_EQ( item.next_stage(), glinthawk::models::InferenceState::Stage::Attention )
+      << "next_stage must be attention";
     CHECK_LT( item.token_pos(), this->config_.seq_len ) << "token position cannot be larger than sequence length";
   }
   CHECK_EQ( inference_states.size(), contexts.size() ) << "token size must be the same as context size";
   for ( auto& item : contexts ) {
-    CHECK_EQ( item.empty(), false ) << "context cannot be empty";
+    CHECK_EQ( item->empty(), false ) << "context cannot be empty";
   }
 }
 
@@ -428,17 +431,18 @@ void BaseLlama2<DType, Context>::assert_safe_post_attention( const vector<Infere
   CHECK_LE( next_layer_batch, this->config_.end_layer_num ) << "next layer in batch can not be after end layer";
 
   for ( auto& item : inference_states ) {
-    CHECK_EQ( item.next_stage(), glinthawk::models::InferenceState::Stage::PostAttention ) << "next_stage must be post attention";
+    CHECK_EQ( item.next_stage(), glinthawk::models::InferenceState::Stage::PostAttention )
+      << "next_stage must be post attention";
     CHECK_EQ( item.next_layer(), next_layer_batch ) << "next_layer must be the same across batch";
-    if ( constexpr( DType == _Float16 ) )
+    if constexpr ( is_same_v<DType, _Float16> )
       CHECK_EQ( item.activations().dtype.dtype, glinthawk::models::SerializedDataType::Type::Float16 )
         << "Inference State data type does not match model data type (float16)";
 #ifdef GLINTHAWK_CUDA_ENABLED
-    if ( constexpr( DType == __half ) )
+    if constexpr ( is_same_v<DType, __half> )
       CHECK_EQ( item.activations().dtype.dtype, glinthawk::models::SerializedDataType::Type::Float16 )
         << "Inference State data type does not match model data type (float16)";
 #endif
-    if ( constexpr( DType == float ) )
+    if constexpr ( is_same_v<DType, float> )
       CHECK_EQ( item.activations().dtype.dtype, glinthawk::models::SerializedDataType::Type::Float32 )
         << "Inference State data type does not match model data type (float16)";
     CHECK_LT( item.token_pos(), this->config_.seq_len ) << "token position cannot be larger than sequence length";
@@ -458,7 +462,8 @@ template class InferenceContext<_Float16>;
 
 namespace cpu {
 template<typename DType>
-class Context;
+class Context : public InferenceContext<DType>
+{};
 }
 
 template class BaseLlama2<float, cpu::Context<float>>;
@@ -473,7 +478,8 @@ template class InferenceContext<__half>;
 // forward declare Context
 namespace cuda {
 template<typename DType>
-class Context;
+class Context : public InferenceContext<DType>
+{};
 }
 
 template class BaseLlama2<__half, cuda::Context<__half>>;

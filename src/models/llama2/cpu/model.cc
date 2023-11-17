@@ -145,7 +145,6 @@ void Llama2<DType>::pre_attention_ops( const int32_t layer_num )
 template<typename DType>
 void Llama2<DType>::attention_ops()
 {
-  const uint64_t kv_dim = this->config_.kv_dim;
   const uint64_t gqa_size = this->config_.gqa_size;
   const uint64_t head_size = this->config_.head_size;
   const uint64_t n_heads = this->config_.n_heads;
@@ -252,7 +251,7 @@ template<typename DType>
 vector<InferenceState> Llama2<DType>::forward( vector<InferenceState>&& inference_states,
                                                const vector<shared_ptr<ContextType>>& contexts )
 {
-  assert_safe_forward( inference_states, contexts );
+  this->assert_safe_forward( inference_states, contexts );
 
   for ( size_t i = 0; i < inference_states.size(); i++ ) {
     this->state_.batch_token_positions[i] = inference_states[i].token_pos();
@@ -328,7 +327,7 @@ template<typename DType>
 vector<InferenceState> Llama2<DType>::pre_attention_forward( vector<InferenceState>&& inference_states,
                                                              const vector<shared_ptr<ContextType>>& contexts )
 {
-  assert_safe_pre_attention( inference_states, contexts );
+  this->assert_safe_pre_attention( inference_states, contexts );
   const uint32_t next_layer_batch = inference_states[0].next_layer();
 
   this->state_.curr_concurrency_size = inference_states.size();
@@ -387,7 +386,7 @@ template<typename DType>
 vector<InferenceState> Llama2<DType>::attention_forward( vector<InferenceState>&& inference_states,
                                                          const vector<shared_ptr<ContextType>>& contexts )
 {
-  assert_safe_attention( inference_states, contexts );
+  this->assert_safe_attention( inference_states, contexts );
 
   this->state_.curr_concurrency_size = inference_states.size();
 
@@ -436,7 +435,8 @@ vector<InferenceState> Llama2<DType>::attention_forward( vector<InferenceState>&
 
   for ( size_t i = 0; i < inference_states.size(); i++ ) {
     DataBuffer activations { inference_states[i].activations().dtype.dtype,
-                             make_unique<uint8_t[]>( this->config_.dim * inference_states[i].activations().dtype.len),
+                             make_unique<uint8_t[]>( this->config_.dim
+                                                     * inference_states[i].activations().dtype.size() ),
                              this->config_.dim };
 
     switch ( activations.dtype.dtype ) {
@@ -449,7 +449,6 @@ vector<InferenceState> Llama2<DType>::attention_forward( vector<InferenceState>&
         ops::cvt_and_copy( reinterpret_cast<float*>( activations.ptr.get() ),
                            this->state_.xb + i * this->config_.dim,
                            this->config_.dim );
-        }
         break;
       default:
         throw runtime_error( "invalid dtype" );
@@ -468,7 +467,7 @@ vector<InferenceState> Llama2<DType>::attention_forward( vector<InferenceState>&
 template<typename DType>
 vector<InferenceState> Llama2<DType>::post_attention_forward( vector<InferenceState>&& inference_states )
 {
-  assert_safe_post_attention( inference_states );
+  this->assert_safe_post_attention( inference_states );
   const uint32_t next_layer_batch = inference_states[0].next_layer();
 
   this->state_.curr_concurrency_size = inference_states.size();
