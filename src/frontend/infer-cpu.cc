@@ -40,8 +40,6 @@ int main( int argc, char* argv[] )
 
   FLAGS_logtostderr = true;
   FLAGS_colorlogtostderr = true;
-  FLAGS_log_year_in_prefix = false;
-  FLAGS_timestamp_in_logfile_name = false;
   google::InitGoogleLogging( argv[0] );
 
   try {
