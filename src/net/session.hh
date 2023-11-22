@@ -14,13 +14,13 @@ class SessionBase;
 
 /* base for TCPSession */
 template<class T>
-class SessionBase<T, std::enable_if_t<std::is_same_v<T, TCPSocket>>>
+class SessionBase<T, std::enable_if_t<!std::is_same_v<T, TCPSocketBIO>>>
 {
 protected:
-  TCPSocket socket_;
+  T socket_;
 
 public:
-  SessionBase( TCPSocket&& socket );
+  SessionBase( T&& socket );
 };
 
 /* base for SSLSession */
@@ -56,7 +56,7 @@ private:
 public:
   using SessionBase<T>::SessionBase;
 
-  TCPSocket& socket() { return this->socket_; }
+  T& socket() { return this->socket_; }
 
   void do_read();
   void do_write();
@@ -89,5 +89,6 @@ public:
 
 using TCPSession = Session<TCPSocket>;
 using SSLSession = Session<TCPSocketBIO>;
+using UDSSession = Session<UnixDomainSocketStream>;
 
-}
+} // namespace glinthawk::net

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <filesystem>
 #include <functional>
 #include <string>
 #include <sys/socket.h>
@@ -140,6 +141,21 @@ public:
     to_timeval( d, tv );
     setsockopt( SOL_SOCKET, SO_RCVTIMEO, tv );
   }
+};
+
+class UnixDomainSocketStream : public Socket
+{
+public:
+  UnixDomainSocketStream()
+    : Socket( AF_UNIX, SOCK_STREAM )
+  {
+  }
+
+  //! Bind a socket to a specified address with [bind(2)](\ref man2::bind)
+  void bind( const std::filesystem::path& path );
+
+  //! Connect a socket to a specified peer address with [connect(2)](\ref man2::connect)
+  void connect( const std::filesystem::path& path );
 };
 
 } // namespace glinthawk
