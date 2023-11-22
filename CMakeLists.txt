@@ -33,6 +33,7 @@ file ( GLOB SOURCE
   src/storage/local/*.cc
   src/storage/azure/*.cc
   src/compute/*.cc
+  src/monitoring/*.cc
   src/message/*.cc
   src/worker/*.cc
   src/prompt/*.cc
@@ -54,6 +55,7 @@ add_executable ( infer-layered-cpu src/frontend/infer-layered-cpu.cc )
 add_executable ( infer-cpu src/frontend/infer-cpu.cc )
 add_executable ( worker-cpu src/frontend/worker-cpu.cc )
 add_executable ( azure-storage-test src/frontend/azure-storage-test.cc )
+add_executable ( telegraf-test src/frontend/telegraf-test.cc )
 
 # Tests
 #add_executable ( test_ops_cpu tests/ops_cpu.cc )
