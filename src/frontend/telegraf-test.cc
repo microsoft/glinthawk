@@ -10,15 +10,9 @@ using namespace glinthawk::monitoring;
 
 int main()
 {
-  Measurement m { "test" };
-  m.tag( "tag1", "value1" );
-  m.tag( "tag2", "value2" );
-  m.field( "field1", 1.5f );
-  m.field( "field2", 5.4 );
-  m.field( "field3", -1500 );
-  m.field( "field4", true );
-  m.field( "field5", "string" );
-  m.field( "field6", 1500u );
+  auto m = global_measurement();
+  m.tag( "sender", "telegraf-test" );
+  m.tag( "user", "sadjad" );
 
   EventLoop loop;
 
@@ -36,6 +30,11 @@ int main()
 
   for ( int i = 0; i < 10; i++ ) {
     logger.push_measurement( m );
+    m.increment<Counters::PromptsCompleted>();
+    m.increment<Counters::PromptsStarted>();
+
+    m.add_point<IntDistributions::KernelForwardTime>( 100 );
+    m.add_point<IntDistributions::KernelForwardTime>( 200 );
   }
 
   while ( loop.wait_next_event( -1 ) != EventLoop::Result::Exit ) {

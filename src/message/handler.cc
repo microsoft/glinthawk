@@ -131,12 +131,10 @@ namespace core {
 class Message;
 }
 
-namespace monitoring {
 class Measurement;
-}
 
 template class MessageHandler<TCPSession, models::InferenceState, models::InferenceState>;
 template class MessageHandler<TCPSession, core::Message, core::Message>;
-template class MessageHandler<UDSSession, monitoring::Measurement, util::Void>;
+template class MessageHandler<UDSSession, Measurement, util::Void>;
 
 } // namespace glinthawk
