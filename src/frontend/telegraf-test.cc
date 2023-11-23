@@ -11,7 +11,14 @@ using namespace glinthawk::monitoring;
 int main()
 {
   Measurement m { "test" };
-  m.tag( "tag1", "value1" ).tag( "tag2", "value2" ).field( "field1", 1.5f ).field( "field2", 5.5 );
+  m.tag( "tag1", "value1" );
+  m.tag( "tag2", "value2" );
+  m.field( "field1", 1.5f );
+  m.field( "field2", 5.4 );
+  m.field( "field3", -1500 );
+  m.field( "field4", true );
+  m.field( "field5", "string" );
+  m.field( "field6", 1500u );
 
   EventLoop loop;
 
