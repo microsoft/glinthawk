@@ -1,6 +1,7 @@
 #include "worker.hh"
 
 #include <chrono>
+#include <filesystem>
 #include <random>
 
 #include <glog/logging.h>
@@ -22,6 +23,32 @@ using namespace glinthawk::core;
 using namespace glinthawk::net;
 
 template<typename Model>
+void Worker<Model>::setup_stats_handler()
+{
+  /* let's see if telegraph is listening */
+  error_code err;
+  const filesystem::path telegraf_socket { "/tmp/telegraf.sock" };
+  if ( filesystem::is_socket( telegraf_socket, err ) ) {
+    LOG( INFO ) << "Telegraf socket found at " << telegraf_socket.string();
+    telegraf_logger_ = make_unique<monitoring::TelegrafLogger>( telegraf_socket );
+  } else {
+    LOG( WARNING ) << "Telegraf socket not found at " << telegraf_socket.string();
+    return;
+  }
+
+  telegraf_logger_->install_rules(
+    event_loop_, telegraf_rule_categories_, []( auto&& ) { return true; }, [] {} );
+
+  event_loop_.add_rule(
+    "Stats timer",
+    Direction::In,
+    stats_timer_,
+    bind( &Worker<Model>::handle_stats, this ),
+    [] { return true; },
+    [] { LOG( ERROR ) << "Stats timer stopped."; } );
+}
+
+template<typename Model>
 void Worker<Model>::setup_peer( std::map<net::Address, Peer>::iterator peer_it )
 {
   peer_it->second.message_handler.install_rules( this->event_loop_,
@@ -35,7 +62,6 @@ void Worker<Model>::setup_peer( std::map<net::Address, Peer>::iterator peer_it )
       for ( auto& state : peer_it->second.outgoing_states ) {
         DLOG( INFO ) << "Sending state to " << peer_it->first.to_string() << ": " << state.to_string();
         auto state_ser = state.serialize();
-        this->worker_stats_.bytes_sent += state_ser.size();
         peer_it->second.message_handler.push_message( Message( Message::OpCode::InferenceState, move( state_ser ) ) );
       }
 
@@ -117,17 +143,11 @@ Worker<Model>::Worker( const Address& worker_address,
     [] { return true; },
     [] { LOG( ERROR ) << "Worker stopped listening."; } );
 
-  event_loop_.add_rule(
-    "Stats timer",
-    Direction::In,
-    stats_timer_,
-    bind( &Worker<Model>::handle_stats, this ),
-    [] { return true; },
-    [] { LOG( ERROR ) << "Stats timer stopped."; } );
-
   // Send "HEY" to coordinator
   Message hey_message { Message::OpCode::Hey, this->listen_address_.to_string() };
   coordinator_.message_handler.push_message( move( hey_message ) );
+
+  setup_stats_handler();
 }
 
 template<typename Model>
@@ -193,7 +213,7 @@ bool Worker<Model>::handle_coordinator_message( core::Message&& msg )
     case Message::OpCode::PushDummyPrompts: {
       // create some random inference states and feed them into the system
       const size_t prompt_count = stoull( msg.payload() );
-      CHECK_LT( prompt_count, 512 ) << "Too many dummy prompts requested.";
+      CHECK_LE( prompt_count, 2048 ) << "Too many dummy prompts requested.";
 
       if ( current_route_.empty() ) {
         LOG( ERROR ) << "No route set; cannot push dummy prompts.";
@@ -281,7 +301,7 @@ void Worker<Model>::handle_compute_kernel_event()
 
   models::InferenceState state;
   while ( this->compute_kernel_->pop( state ) ) {
-    worker_stats_.states_processed++;
+    __stats__.increment<Counters::StatesProcessed>();
 
     DLOG( INFO ) << "Got state from compute kernel: " << state.to_string();
 
@@ -316,8 +336,7 @@ bool Worker<Model>::handle_peer_message( core::Message&& msg )
 
   switch ( msg.opcode() ) {
     case Message::OpCode::InferenceState: {
-      worker_stats_.states_received++;
-      worker_stats_.bytes_received += msg.payload_length();
+      __stats__.increment<Counters::StatesReceived>();
 
       auto state = models::InferenceState( msg.payload() );
       DLOG( INFO ) << "Inference state: " << state.to_string();
@@ -329,26 +348,20 @@ bool Worker<Model>::handle_peer_message( core::Message&& msg )
         // otherwise, we load the next token from the prompt.
 
         if ( state.token_pos() > 0 ) {
-          worker_stats_.tokens_processed++;
+          __stats__.increment<Counters::TokensProcessed>();
         }
 
         if ( state.token_pos() >= state.prompt_length() ) {
-          worker_stats_.tokens_generated++;
+          __stats__.increment<Counters::TokensGenerated>();
 
           /* we're done processing the prompt */
           auto& completion = this->completion_manager_->get( state.prompt_id() );
           completion.add_token( state.token() );
 
           if ( state.finished() ) {
-            worker_stats_.prompts_completed++;
+            __stats__.increment<Counters::PromptsCompleted>();
+            __stats__.add_point<IntDistributions::PromptLength>( state.token_pos() );
             completion.terminate();
-
-            // telling the coordinator we completed this prompt
-            // XXX(sadjad): revisit this later
-            protobuf::PromptCompleted proto;
-            proto.add_prompt_ids( state.prompt_id().base58digest() );
-            this->coordinator_.message_handler.push_message(
-              Message( Message::OpCode::PromptCompleted, proto.SerializeAsString() ) );
           }
         } else {
           /* we're still processing the prompt, load the next token */
@@ -379,25 +392,8 @@ void Worker<Model>::handle_stats()
 {
   stats_timer_.read_event();
 
-  const auto now = chrono::steady_clock::now();
-
-  protobuf::WorkerStats proto;
-  proto.set_states_received( worker_stats_.states_received );
-  proto.set_states_sent( worker_stats_.states_sent );
-  proto.set_states_processed( worker_stats_.states_processed );
-
-  proto.set_tokens_processed( worker_stats_.tokens_processed );
-  proto.set_tokens_generated( worker_stats_.tokens_generated );
-  proto.set_prompts_completed( worker_stats_.prompts_completed );
-
-  proto.set_bytes_sent( worker_stats_.bytes_sent );
-  proto.set_bytes_received( worker_stats_.bytes_received );
-
-  Message stats_message { Message::OpCode::WorkerStats, proto.SerializeAsString() };
-  coordinator_.message_handler.push_message( move( stats_message ) );
-
-  worker_stats_ = {};
-  worker_stats_.last_stats_time = now;
+  telegraf_logger_->push_measurement( __stats__ );
+  __stats__.zero_out();
 }
 
 template<typename Model>
@@ -432,6 +428,7 @@ void Worker<Model>::prompt_preparation_thread_func()
 
     if ( not states.empty() ) {
       LOG( INFO ) << "Pushing states to compute kernel: " << states.size();
+      __stats__.increment<Counters::PromptsStarted>( states.size() );
       this->compute_kernel_->push( move( states ) );
     }
 

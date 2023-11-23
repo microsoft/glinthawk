@@ -13,6 +13,7 @@
 #include "message/handler.hh"
 #include "message/message.hh"
 #include "models/llama2/base.hh"
+#include "monitoring/telegraf.hh"
 #include "net/address.hh"
 #include "net/session.hh"
 #include "net/socket.hh"
@@ -41,23 +42,6 @@ private:
       , message_handler( std::move( socket ) )
     {
     }
-  };
-
-  class Stats
-  {
-  public:
-    uint64_t states_received { 0 };
-    uint64_t states_sent { 0 };
-    uint64_t states_processed { 0 };
-
-    uint64_t tokens_processed { 0 };
-    uint64_t tokens_generated { 0 };
-    uint64_t prompts_completed { 0 };
-
-    uint64_t bytes_sent { 0 };
-    uint64_t bytes_received { 0 };
-
-    std::chrono::steady_clock::time_point last_stats_time { std::chrono::steady_clock::now() };
   };
 
 private:
@@ -91,8 +75,16 @@ private:
   std::thread prompt_preparation_thread_ {};
   std::thread completion_commit_thread_ {};
 
-  TimerFD stats_timer_ { std::chrono::seconds { 1 } };
-  Stats worker_stats_ {};
+  monitoring::TelegrafLogger::RuleCategories telegraf_rule_categories_ {
+    .session = event_loop_.add_category( "Telegraf session" ),
+    .endpoint_read = event_loop_.add_category( "Telegraf endpoint read" ),
+    .endpoint_write = event_loop_.add_category( "Telegraf endpoint write" ),
+    .response = event_loop_.add_category( "Telegraf response" ),
+  };
+
+  Measurement& __stats__ { global_measurement() };
+  std::unique_ptr<monitoring::TelegrafLogger> telegraf_logger_ { nullptr };
+  TimerFD stats_timer_ { std::chrono::seconds { 5 } };
 
   void setup_peer( std::map<net::Address, Peer>::iterator peer_it );
   void setup_blobstore( const std::string& blobstore_uri );
@@ -100,6 +92,7 @@ private:
                              const int start_layer,
                              const int end_layer,
                              const int concurrency_size );
+  void setup_stats_handler();
 
   void listen_callback();
   void handle_compute_kernel_event();

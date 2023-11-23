@@ -24,7 +24,7 @@ public:
     ProcessPrompts,
     SetRoute,
     PromptCompleted,
-    WorkerStats,
+    __deprecated__WorkerStats, // DEPRECATED
     PushDummyPrompts,
 
     __COUNT

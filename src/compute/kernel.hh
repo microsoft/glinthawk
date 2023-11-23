@@ -11,6 +11,7 @@
 #include "models/common/model.hh"
 #include "prompt/prompt.hh"
 #include "util/eventfd.hh"
+#include "monitoring/measurement.hh"
 
 namespace glinthawk::compute {
 
@@ -73,6 +74,8 @@ private:
   std::thread execution_thread_;
   std::thread bookkeeping_thread_;
   std::thread backlog_thread_;
+
+  Measurement& __stats__ { global_measurement() };
 
 public:
   ComputeKernel( std::unique_ptr<Model>&& model, const uint64_t target_conc_size )

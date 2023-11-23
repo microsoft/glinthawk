@@ -1,5 +1,6 @@
 #include "kernel.hh"
 
+#include <chrono>
 #include <glog/logging.h>
 
 #include "models/llama2/cpu/model.cc"
@@ -39,7 +40,10 @@ void ComputeKernel<Model>::execution_thread_func()
       }
     }
 
+    const auto start = chrono::steady_clock::now();
     auto results = model_->forward( move( input_states ), contexts );
+    const auto duration = chrono::duration_cast<chrono::microseconds>( chrono::steady_clock::now() - start );
+    __stats__.add_point<IntDistributions::KernelForwardTime>( duration.count() );
 
     {
       lock_guard lock( outgoing_mutex_ );
