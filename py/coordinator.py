@@ -22,7 +22,6 @@ import functools
 from dataclasses import dataclass, field
 
 from common.message import Message
-from common.inference import InferenceState
 from protobuf import glinthawk_pb2 as glinthawk_pb
 
 from coordinator.ui import CoordinatorUI
