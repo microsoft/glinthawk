@@ -38,7 +38,7 @@ public:
 
     auto context = std::make_shared<typename Model::ContextType>( config_ );
 
-    if ( not context.get()->empty or emplace_empty ) {
+    if ( not context.get()->empty() or emplace_empty ) {
       contexts_.emplace( prompt_id, context );
     }
 
