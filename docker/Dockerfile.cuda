@@ -18,11 +18,12 @@ COPY . ./
 WORKDIR /app/build
 ENV CXX="g++-12" CC="gcc-12"
 RUN cmake -DCMAKE_BUILD_TYPE=MinSizeRel -DGCC_TARGET_ARCH=znver2 ../src
-RUN cmake --build . --target worker-cuda -j$(nproc)
+RUN cmake --build . --target worker-cuda profile-cuda -j$(nproc)
 
 FROM nvidia/cuda:12.3.0-runtime-ubuntu22.04
 RUN apt-get update -qq
 RUN apt-get install -y libprotobuf23 libssl3 libgoogle-glog0v5 libgomp1
 WORKDIR /app
 COPY --from=0 /app/build/worker-cuda /app/worker-cuda
+COPY --from=0 /app/build/profile-cuda /app/profile-cuda
 ENTRYPOINT ["/app/worker-cuda"]
