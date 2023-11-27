@@ -67,6 +67,10 @@ int main( int argc, char* argv[] )
       state.set_token_pos( i );
       state.set_next_layer( 0 );
       state.set_temperature( 0.0f );
+      models::DataBuffer activations { models::SerializedDataType::Type::Float16,
+                                       nullptr,
+                                       0 };
+      state.set_activations( move( activations ) );
 
       input_states.push_back( state.serialize() );
     }

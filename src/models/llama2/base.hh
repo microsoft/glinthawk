@@ -164,6 +164,7 @@ struct RunState
 template<typename DType>
 struct InferenceContext
 {
+  // TODO: add context state here
   static size_t context_size( const Config& config );
 
   DType* buffer_ { nullptr };

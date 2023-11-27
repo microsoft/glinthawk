@@ -79,6 +79,10 @@ int main( int argc, char* argv[] )
         state.set_temperature( 0.0f );
         if ( start_slice == 0 ) {
           state.set_token( 5 );
+          models::DataBuffer activations { models::SerializedDataType::Type::Float32,
+                                           nullptr,
+                                           0 };
+          state.set_activations( move( activations ) );
         } else {
           models::DataBuffer activations { models::SerializedDataType::Type::Float32,
                                            make_unique<uint8_t[]>( dim * sizeof( float ) ),
