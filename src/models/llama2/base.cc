@@ -344,15 +344,15 @@ void BaseLlama2<DType, Context>::assert_safe_forward( const vector<InferenceStat
     CHECK_EQ( item.next_layer(), next_layer_batch ) << "next_layer must be the same across batch";
     if constexpr ( is_same_v<DType, _Float16> )
       CHECK_EQ( item.activations().dtype.dtype, glinthawk::models::SerializedDataType::Type::Float16 )
-        << "Inference State data type does not match model data type (float16)";
+        << "Inference State data type does not match model data type";
 #ifdef GLINTHAWK_CUDA_ENABLED
     if constexpr ( is_same_v<DType, __half> )
       CHECK_EQ( item.activations().dtype.dtype, glinthawk::models::SerializedDataType::Type::Float16 )
-        << "Inference State data type does not match model data type (float16)";
+        << "Inference State data type does not match model data type";
 #endif
     if constexpr ( is_same_v<DType, float> )
       CHECK_EQ( item.activations().dtype.dtype, glinthawk::models::SerializedDataType::Type::Float32 )
-        << "Inference State data type does not match model data type (float16)";
+        << "Inference State data type does not match model data type";
     CHECK_LT( item.token_pos(), this->config_.seq_len ) << "token position cannot be larger than sequence length";
   }
   CHECK_EQ( inference_states.size(), contexts.size() ) << "token size must be the same as context size";
@@ -380,15 +380,15 @@ void BaseLlama2<DType, Context>::assert_safe_pre_attention( const vector<Inferen
     CHECK_EQ( item.next_layer(), next_layer_batch ) << "next_layer must be the same across batch";
     if constexpr ( is_same_v<DType, _Float16> )
       CHECK_EQ( item.activations().dtype.dtype, glinthawk::models::SerializedDataType::Type::Float16 )
-        << "Inference State data type does not match model data type (float16)";
+        << "Inference State data type does not match model data type";
 #ifdef GLINTHAWK_CUDA_ENABLED
     if constexpr ( is_same_v<DType, __half> )
       CHECK_EQ( item.activations().dtype.dtype, glinthawk::models::SerializedDataType::Type::Float16 )
-        << "Inference State data type does not match model data type (float16)";
+        << "Inference State data type does not match model data type";
 #endif
     if constexpr ( is_same_v<DType, float> )
       CHECK_EQ( item.activations().dtype.dtype, glinthawk::models::SerializedDataType::Type::Float32 )
-        << "Inference State data type does not match model data type (float16)";
+        << "Inference State data type does not match model data type";
     CHECK_LT( item.token_pos(), this->config_.seq_len ) << "token position cannot be larger than sequence length";
   }
   CHECK_EQ( inference_states.size(), contexts.size() ) << "token size must be the same as context size";
@@ -436,15 +436,15 @@ void BaseLlama2<DType, Context>::assert_safe_post_attention( const vector<Infere
     CHECK_EQ( item.next_layer(), next_layer_batch ) << "next_layer must be the same across batch";
     if constexpr ( is_same_v<DType, _Float16> )
       CHECK_EQ( item.activations().dtype.dtype, glinthawk::models::SerializedDataType::Type::Float16 )
-        << "Inference State data type does not match model data type (float16)";
+        << "Inference State data type does not match model data type";
 #ifdef GLINTHAWK_CUDA_ENABLED
     if constexpr ( is_same_v<DType, __half> )
       CHECK_EQ( item.activations().dtype.dtype, glinthawk::models::SerializedDataType::Type::Float16 )
-        << "Inference State data type does not match model data type (float16)";
+        << "Inference State data type does not match model data type";
 #endif
     if constexpr ( is_same_v<DType, float> )
       CHECK_EQ( item.activations().dtype.dtype, glinthawk::models::SerializedDataType::Type::Float32 )
-        << "Inference State data type does not match model data type (float16)";
+        << "Inference State data type does not match model data type";
     CHECK_LT( item.token_pos(), this->config_.seq_len ) << "token position cannot be larger than sequence length";
   }
 }
