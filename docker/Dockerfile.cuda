@@ -17,7 +17,7 @@ COPY . ./
 
 WORKDIR /app/build
 ENV CXX="g++-12" CC="gcc-12"
-RUN cmake -DCMAKE_BUILD_TYPE=MinSizeRel ../src
+RUN cmake -DCMAKE_BUILD_TYPE=MinSizeRel -DGCC_TARGET_ARCH=znver2 ../src
 RUN cmake --build . --target worker-cuda -j$(nproc)
 
 FROM nvidia/cuda:12.3.0-runtime-ubuntu22.04

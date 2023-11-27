@@ -17,4 +17,4 @@ docker run -it --rm \
   --network host --no-healthcheck --read-only --ulimit nofile=65535:65535 \
   --mount type=bind,src="$1",dst="/app/model/",readonly \
   --mount type=bind,src="$2",dst="/app/prompts/" \
-  glinthawk-worker /app/model/ $LISTEN_IP $LISTEN_PORT $COORD_IP $COORD_PORT
+  glinthawk.azurecr.io/glinthawk-worker-cuda /app/model/ $LISTEN_IP $LISTEN_PORT $COORD_IP $COORD_PORT
