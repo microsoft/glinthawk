@@ -32,29 +32,29 @@ const float beta = 0.0f;
 void CHECK_CUBLAS( const cublasStatus_t err, const source_location location = source_location::current() )
 {
   if ( err != CUBLAS_STATUS_SUCCESS ) {
-    throw runtime_error( "CUBLAS error "s + cublasGetStatusName( err ) + ": " + cublasGetStatusString( err ) + " ("
-                         + location.file_name() + ":" + to_string( location.line() ) + ")" );
+    LOG( FATAL ) << "CUBLAS error "s << cublasGetStatusName( err ) << ": " << cublasGetStatusString( err ) << " ("
+                 << location.file_name() << ":" << to_string( location.line() ) << ")";
   }
 }
 
 void CHECK_CUDA( const cudaError_t err, const source_location location )
 {
   if ( err != cudaSuccess ) {
-    throw runtime_error( "CUDA error " + string( cudaGetErrorName( err ) ) + ": " + string( cudaGetErrorString( err ) )
-                         + " (" + location.file_name() + ":" + to_string( location.line() ) + ")" );
+    LOG( FATAL ) << "CUDA error " << string( cudaGetErrorName( err ) ) << ": " << string( cudaGetErrorString( err ) )
+                 << " (" << location.file_name() << ":" << to_string( location.line() ) << ")";
   }
 }
 
 void init( const int num_streams )
 {
-  cublasCreate( &cublas_handle_default );
+  CHECK_CUBLAS( cublasCreate( &cublas_handle_default ) );
   cublas_handle_count = num_streams;
   streams = (cudaStream_t*)malloc( num_streams * sizeof( cudaStream_t ) );
   cublas_handle_array = (cublasHandle_t*)malloc( num_streams * sizeof( cublasHandle_t ) );
   for ( int i = 0; i < num_streams; i++ ) {
     cudaStreamCreate( &( streams[i] ) );
-    cublasCreate( &( cublas_handle_array[i] ) );
-    cublasSetStream( cublas_handle_array[i], streams[i] );
+    CHECK_CUBLAS( cublasCreate( &( cublas_handle_array[i] ) ) );
+    CHECK_CUBLAS( cublasSetStream( cublas_handle_array[i], streams[i] ) );
   }
 }
 
@@ -672,7 +672,8 @@ void apply_rope( const uint64_t head_size,
                                                            freq_cis_real + token_positions[i] * head_size / 2,
                                                            freq_cis_imag + token_positions[i] * head_size / 2,
                                                            state_q + i * n_kv_heads * gqa_size * head_size,
-                                                           context_pointers[i] );
+                                                           context_pointers[i]
+                                                             + token_positions[i] * n_kv_heads * head_size * 2 );
   }
 }
 
