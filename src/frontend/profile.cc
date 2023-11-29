@@ -4,12 +4,14 @@
 
 #include <glog/logging.h>
 
-#include "compute/kernel.hh"
+#include "compute/simple.hh"
 #include "models/llama2/cpu/model.hh"
 #include "util/timer.hh"
 
 #define OOF_IMPL
 #include "oof/oof.hh"
+
+#include "platform_macros.hh"
 
 using namespace std;
 using namespace glinthawk;
@@ -22,7 +24,7 @@ static void signal_handler( int )
 
 void usage( const char* argv0 )
 {
-  cout << "Usage: " << argv0 << " <model_dir_path> begin_slice end_slice batch_size" << endl;
+  cout << "Usage: " << argv0 << " <model_root> <model_name> begin_slice end_slice batch_size" << endl;
 }
 
 int main( int argc, char* argv[] )
@@ -31,7 +33,7 @@ int main( int argc, char* argv[] )
     abort();
   }
 
-  if ( argc != 5 ) {
+  if ( argc != 6 ) {
     usage( argv[0] );
     return EXIT_FAILURE;
   }
@@ -45,27 +47,24 @@ int main( int argc, char* argv[] )
   google::InitGoogleLogging( argv[0] );
 
   try {
-    const filesystem::path model_dir_path { argv[1] };
+    const filesystem::path model_dir { argv[1] };
+    const string model_name { argv[2] };
+    const uint32_t start_slice = atoi( argv[3] );
+    const uint32_t end_slice = atoi( argv[4] );
+    const uint64_t batch_size = atoi( argv[5] );
 
-    const uint32_t start_slice = atoi( argv[2] );
-    const uint32_t end_slice = atoi( argv[3] );
-    const uint64_t batch_size = atoi( argv[4] );
+    compute::SimpleComputeKernel<compute::Platform::_GLINTHAWK_PLATFORM_NAME_,
+                                 compute::DataType::_GLINTHAWK_DTYPE_NAME_>
+      llama { model_dir, model_name, start_slice, end_slice, batch_size };
 
-    using Llama2 = models::llama2::cpu::Llama2<float>;
-
-    Llama2 llama { model_dir_path, start_slice, end_slice, batch_size };
-    compute::ContextManager<Llama2> context_manager = compute::ContextManager<Llama2>( llama.config() );
-    const uint64_t seq_len = llama.config().seq_len;
-    const uint64_t dim = llama.config().dim;
+    const uint64_t seq_len = llama.max_seq_len();
+    const uint64_t dim = llama.dim();
 
     auto input_states = vector<vector<models::InferenceState>>( seq_len );
-    auto contexts = vector<vector<shared_ptr<Llama2::ContextType>>>( seq_len );
 
     for ( size_t i = 0; i < input_states.size(); i++ ) {
       input_states[i] = vector<models::InferenceState>();
       input_states[i].reserve( batch_size );
-      contexts[i] = vector<shared_ptr<Llama2::ContextType>>();
-      contexts[i].reserve( batch_size );
 
       for ( uint64_t j = 0; j < batch_size; j++ ) {
         PromptID id;
@@ -77,27 +76,30 @@ int main( int argc, char* argv[] )
         state.set_token_pos( i );
         state.set_next_layer( start_slice );
         state.set_temperature( 0.0f );
+
         if ( start_slice == 0 ) {
           state.set_token( 5 );
-          models::DataBuffer activations { models::SerializedDataType::Type::Float32,
-                                           nullptr,
-                                           0 };
+          models::DataBuffer activations { models::SerializedDataType::Type::_GLINTHAWK_DTYPE_NAME_, nullptr, 0 };
           state.set_activations( move( activations ) );
         } else {
-          models::DataBuffer activations { models::SerializedDataType::Type::Float32,
-                                           make_unique<uint8_t[]>( dim * sizeof( float ) ),
-                                           dim };
+          models::DataBuffer activations {
+            models::SerializedDataType::Type::_GLINTHAWK_DTYPE_NAME_,
+            make_unique<uint8_t[]>(
+              dim
+              * sizeof(
+                models::SerializedDataType { models::SerializedDataType::Type::_GLINTHAWK_DTYPE_NAME_ }.size() ) ),
+            dim
+          };
           state.set_activations( move( activations ) );
         }
 
         input_states[i].emplace_back( state.serialize() );
-        contexts[i].push_back( context_manager.get_context( id ) );
       }
     }
 
     for ( size_t i = 0; i < input_states.size(); i++ ) {
       GlobalScopeTimer<Timer::Category::TokenGeneration> _;
-      llama.forward( move( input_states[i] ), contexts[i] );
+      llama.forward( move( input_states[i] ) );
     }
 
     cerr << endl << global_timer().summary() << endl;

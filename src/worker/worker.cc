@@ -22,6 +22,8 @@ using namespace glinthawk;
 using namespace glinthawk::core;
 using namespace glinthawk::net;
 
+using glinthawk::models::InferenceState;
+
 template<typename Model>
 void Worker<Model>::setup_stats_handler()
 {
@@ -36,8 +38,7 @@ void Worker<Model>::setup_stats_handler()
     return;
   }
 
-  telegraf_logger_->install_rules(
-    event_loop_, telegraf_rule_categories_, []( auto&& ) { return true; }, [] {} );
+  telegraf_logger_->install_rules( event_loop_, telegraf_rule_categories_, []( auto&& ) { return true; }, [] {} );
 
   event_loop_.add_rule(
     "Stats timer",
@@ -399,8 +400,7 @@ void Worker<Model>::handle_stats()
 template<typename Model>
 void Worker<Model>::run()
 {
-  while ( event_loop_.wait_next_event( -1 ) != EventLoop::Result::Exit ) {
-  }
+  while ( event_loop_.wait_next_event( -1 ) != EventLoop::Result::Exit ) {}
 }
 
 template<typename Model>
@@ -464,11 +464,21 @@ Worker<Model>::~Worker()
 
 namespace glinthawk::core {
 
-#ifdef GLINTHAWK_CUDA_ENABLED
-template class Worker<models::llama2::cuda::Llama2<__half>>;
-#endif
+template class Worker<models::llama2::cpu::Llama2_7B_Chat<_Float16>>;
+template class Worker<models::llama2::cpu::Llama2_13B_Chat<_Float16>>;
+template class Worker<models::llama2::cpu::Llama2_70B_Chat<_Float16>>;
+template class Worker<models::llama2::cpu::Stories_110M<_Float16>>;
 
-template class Worker<models::llama2::cpu::Llama2<_Float16>>;
-template class Worker<models::llama2::cpu::Llama2<float>>;
+template class Worker<models::llama2::cpu::Llama2_7B_Chat<float>>;
+template class Worker<models::llama2::cpu::Llama2_13B_Chat<float>>;
+template class Worker<models::llama2::cpu::Llama2_70B_Chat<float>>;
+template class Worker<models::llama2::cpu::Stories_110M<float>>;
+
+#ifdef GLINTHAWK_CUDA_ENABLED
+template class Worker<models::llama2::cuda::Llama2_7B_Chat<__half>>;
+template class Worker<models::llama2::cuda::Llama2_13B_Chat<__half>>;
+template class Worker<models::llama2::cuda::Llama2_70B_Chat<__half>>;
+template class Worker<models::llama2::cuda::Stories_110M<__half>>;
+#endif
 
 } // namespace glinthawk::core

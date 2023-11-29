@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <atomic>
 #include <condition_variable>
 #include <memory>
@@ -9,22 +10,34 @@
 #include <unordered_map>
 
 #include "models/common/model.hh"
+#include "monitoring/measurement.hh"
 #include "prompt/prompt.hh"
 #include "util/eventfd.hh"
-#include "monitoring/measurement.hh"
 
 namespace glinthawk::compute {
+
+enum class Platform
+{
+  CPU, // TODO rename to AMD64
+  CUDA
+};
+
+enum class DataType
+{
+  Float16,
+  Float32
+};
 
 template<typename Model>
 class ContextManager
 {
 private:
   std::unordered_map<glinthawk::PromptID, std::shared_ptr<typename Model::ContextType>> contexts_ {};
-  const typename Model::ConfigType config_ {};
+  const typename Model::SettingsType settings_ {};
 
 public:
-  ContextManager( const typename Model::ConfigType& config )
-    : config_( config )
+  ContextManager( const typename Model::SettingsType& settings )
+    : settings_( settings )
   {
   }
 
@@ -36,7 +49,7 @@ public:
       return it->second;
     }
 
-    auto context = std::make_shared<typename Model::ContextType>( config_ );
+    auto context = std::make_shared<typename Model::ContextType>( settings_ );
 
     if ( not context.get()->empty() or emplace_empty ) {
       contexts_.emplace( prompt_id, context );
@@ -80,7 +93,7 @@ private:
 public:
   ComputeKernel( std::unique_ptr<Model>&& model, const uint64_t target_conc_size )
     : model_( std::move( model ) )
-    , context_manager_( model_->config() )
+    , context_manager_( model_->settings() )
     , target_conc_size_( target_conc_size )
     , released_( 0 )
     , running_( true )

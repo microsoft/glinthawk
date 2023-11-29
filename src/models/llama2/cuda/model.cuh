@@ -2,28 +2,52 @@
 
 #include "models/llama2/base.hh"
 
+#include <cstdint>
+#include <fcntl.h>
 #include <limits>
+#include <memory>
+#include <optional>
+#include <set>
+#include <source_location>
+
+#include <cuda_fp16.h>
+
+#include "util/exception.hh"
+#include "util/file_descriptor.hh"
+#include "util/ring_buffer.hh"
+
+#include "models/common/cuda/ops.cuh"
+#include "models/llama2/base.hh"
+
+#include "models/llama2/variants.hh"
 
 namespace glinthawk::models::llama2::cuda {
 
 template<typename DType>
-struct Context : public glinthawk::models::llama2::InferenceContext<DType>
+using CUDADeleter = models::common::cuda::ops::CUDADeleter<DType>;
+
+template<typename Config, typename DType>
+requires ModelConfig<Config>
+struct Context : public InferenceContext<Config, DType>
 {
 private:
-  std::unique_ptr<DType, void ( * )( DType* )> storage_;
+  std::unique_ptr<DType, CUDADeleter<DType>> storage_;
 
 public:
-  Context( const Config& config );
+  Context( const Settings<Config>& settings );
 };
 
-template<typename DType>
-class Llama2 : public glinthawk::models::llama2::BaseLlama2<DType, Context<DType>>
+template<typename Config, typename DType>
+class Llama2 : public BaseLlama2<Config, DType, Context<Config, DType>, CUDADeleter<DType>>
 {
 public:
-  using ContextType = glinthawk::models::llama2::BaseLlama2<DType, Context<DType>>::ContextType;
-  using ConfigType = glinthawk::models::llama2::BaseLlama2<DType, Context<DType>>::ConfigType;
-  using DataType = glinthawk::models::llama2::BaseLlama2<DType, Context<DType>>::DataType;
-  using TokenizerType = glinthawk::models::llama2::BaseLlama2<DType, Context<DType>>::TokenizerType;
+  using BaseModel = BaseLlama2<Config, DType, Context<Config, DType>, CUDADeleter<DType>>;
+
+  using ContextType = BaseModel::ContextType;
+  using SettingsType = BaseModel::SettingsType;
+  using ConfigType = BaseModel::ConfigType;
+  using DataType = BaseModel::DataType;
+  using TokenizerType = BaseModel::TokenizerType;
 
 private:
   void pass_begin( const std::vector<uint32_t>& token );
@@ -66,5 +90,17 @@ public:
 
   std::vector<InferenceState> post_attention_forward( std::vector<InferenceState>&& inference_states ) override;
 };
+
+template<typename T>
+using Llama2_70B_Chat = Llama2<configs::Llama2_70B_Chat, T>;
+
+template<typename T>
+using Llama2_13B_Chat = Llama2<configs::Llama2_13B_Chat, T>;
+
+template<typename T>
+using Llama2_7B_Chat = Llama2<configs::Llama2_7B_Chat, T>;
+
+template<typename T>
+using Stories_110M = Llama2<configs::Stories_110M, T>;
 
 } // namespace glinthawk::models::llama2::cuda

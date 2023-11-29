@@ -4,12 +4,14 @@
 
 #include <glog/logging.h>
 
-#include "compute/kernel.hh"
+#include "compute/simple.hh"
 #include "models/llama2/cpu/model.hh"
 #include "util/timer.hh"
 
 #define OOF_IMPL
 #include "oof/oof.hh"
+
+#include "platform_macros.hh"
 
 using namespace std;
 using namespace glinthawk;
@@ -22,7 +24,8 @@ static void signal_handler( int )
 
 void usage( const char* argv0 )
 {
-  cout << "Usage: " << argv0 << " <model_dir_path> <tokenizer_path> batch_size temperature prompt_print_id" << endl;
+  cout << "Usage: " << argv0 << " <model_dir> <model_name> <tokenizer_path> batch_size temperature prompt_print_id"
+       << endl;
 }
 
 int main( int argc, char* argv[] )
@@ -31,7 +34,7 @@ int main( int argc, char* argv[] )
     abort();
   }
 
-  if ( argc != 6 ) {
+  if ( argc != 7 ) {
     usage( argv[0] );
     return EXIT_FAILURE;
   }
@@ -44,25 +47,28 @@ int main( int argc, char* argv[] )
 
   try {
     const filesystem::path model_dir_path { argv[1] };
-    const filesystem::path tokenizer_path { argv[2] };
-
-    const size_t batch_size = atoi( argv[3] );
-    const float temp = atof( argv[4] );
+    const string model_name { argv[2] };
+    const filesystem::path tokenizer_path { argv[3] };
+    const size_t batch_size = atoi( argv[4] );
+    const float temp = atof( argv[5] );
 
     PromptID id_print;
-    util::digest::sha256( argv[5], id_print );
+    util::digest::sha256( argv[6], id_print );
 
-    using Llama2 = models::llama2::cpu::Llama2<_Float16>;
     models::llama2::Vocabulary vocabulary { tokenizer_path };
 
-    vector<uint32_t> prompt_tokens { 1,   518,  25580, 29962, 25538, 2211,  25562, 363,  7952,
-                                     292, 9045, 29891, 29889, 518,   29914, 25580, 29962 };
+    vector<uint32_t> prompt_tokens { 1 };
 
     vector<models::InferenceState> input_states;
 
     for ( size_t j = 0; j < batch_size; j++ ) {
       PromptID id;
-      util::digest::sha256( to_string( j ), id );
+
+      if ( j != 0 ) {
+        util::digest::sha256( to_string( j ), id );
+      } else {
+        id = id_print;
+      }
 
       for ( size_t i = 0; i < prompt_tokens.size(); i++ ) {
         models::InferenceState state;
@@ -72,30 +78,27 @@ int main( int argc, char* argv[] )
         state.set_token_pos( i );
         state.set_next_layer( 0 );
         state.set_temperature( temp );
-        models::DataBuffer activations { models::SerializedDataType::Type::Float16,
-                                         nullptr,
-                                         0 };
-        state.set_activations( move( activations ) );
+        state.set_activations( { models::SerializedDataType::Type::_GLINTHAWK_DTYPE_NAME_, nullptr, 0 } );
 
         input_states.emplace_back( state.serialize() );
       }
     }
 
-    Llama2 llama { model_dir_path, 0, UINT32_MAX, input_states.size() };
-    compute::ContextManager<Llama2> context_manager = compute::ContextManager<Llama2>( llama.config() );
-    const unsigned int seq_len = llama.config().seq_len;
+    compute::SimpleComputeKernel<compute::Platform::_GLINTHAWK_PLATFORM_NAME_,
+                                 compute::DataType::_GLINTHAWK_DTYPE_NAME_>
+      llama { model_dir_path, model_name, 0, std::numeric_limits<uint32_t>::max(), input_states.size() };
+
+    const unsigned int seq_len = llama.max_seq_len();
 
     bool prompt_processed = false;
 
     while ( input_states.size() > 0 ) {
-      vector<shared_ptr<Llama2::ContextType>> contexts;
-
-      // get the contexts
-      for ( const auto& state : input_states ) {
-        contexts.push_back( context_manager.get_context( state.prompt_id() ) );
+      vector<models::InferenceState> output_states;
+      {
+        GlobalScopeTimer<Timer::Category::TokenGeneration> _;
+        output_states = llama.forward( move( input_states ) );
       }
-      GlobalScopeTimer<Timer::Category::TokenGeneration> _;
-      auto output_states = llama.forward( move( input_states ), contexts );
+
       input_states.clear();
 
       if ( not prompt_processed ) {
@@ -110,9 +113,10 @@ int main( int argc, char* argv[] )
         cout << oof::reset_formatting();
 
         // remove all elements in the input states except the last one in each prompt
-        for ( const auto& state : output_states ) {
+        for ( auto& state : output_states ) {
           if ( state.token_pos() == prompt_tokens.size() && state.token_pos() < seq_len
                && state.token() != 2 /* EOS */ ) {
+            state.set_activations( { models::SerializedDataType::Type::_GLINTHAWK_DTYPE_NAME_, nullptr, 0 } );
             input_states.emplace_back( state.serialize() );
             if ( state.prompt_id() == id_print )
               cout << vocabulary.get_word( state.token() ) << flush;
@@ -120,7 +124,8 @@ int main( int argc, char* argv[] )
         }
       } else {
         // (2) let's print the output
-        for ( const auto& state : output_states ) {
+        for ( auto& state : output_states ) {
+          state.set_activations( { models::SerializedDataType::Type::_GLINTHAWK_DTYPE_NAME_, nullptr, 0 } );
           if ( state.prompt_id() == id_print )
             cout << vocabulary.get_word( state.token() ) << flush;
           if ( state.token_pos() < seq_len && state.token() != 2 /* EOS */ )

@@ -1,47 +1,51 @@
+#pragma once
+
 #include <concepts>
 #include <cstdint>
+#include <type_traits>
 
-namespace glinthawk::models {
+namespace glinthawk::models::llama2 {
 
 template<class T>
-concept Model = requires( T t ) {
-  {
-    T::dim
-  } -> std::unsigned_integral;
-  {
-    T::kv_dim
-  } -> std::unsigned_integral;
-  {
-    T::hidden_dim
-  } -> std::unsigned_integral;
-  {
-    T::n_layers
-  } -> std::unsigned_integral;
-  {
-    T::head_size
-  } -> std::unsigned_integral;
-  {
-    T::n_heads
-  } -> std::unsigned_integral;
-  {
-    T::n_kv_heads
-  } -> std::unsigned_integral;
-  {
-    T::gqa_size
-  } -> std::unsigned_integral;
-  {
-    T::vocab_size
-  } -> std::unsigned_integral;
-  {
-    T::seq_len
-  } -> std::unsigned_integral;
+concept ModelConfig = requires( T t ) {
+  T::dim;
+  requires std::is_unsigned_v<decltype( T::dim )>;
+
+  T::kv_dim;
+  requires std::is_unsigned_v<decltype( T::kv_dim )>;
+
+  T::hidden_dim;
+  requires std::is_unsigned_v<decltype( T::hidden_dim )>;
+
+  T::n_layers;
+  requires std::is_unsigned_v<decltype( T::n_layers )>;
+
+  T::head_size;
+  requires std::is_unsigned_v<decltype( T::head_size )>;
+
+  T::n_heads;
+  requires std::is_unsigned_v<decltype( T::n_heads )>;
+
+  T::n_kv_heads;
+  requires std::is_unsigned_v<decltype( T::n_kv_heads )>;
+
+  T::gqa_size;
+  requires std::is_unsigned_v<decltype( T::gqa_size )>;
+
+  T::vocab_size;
+  requires std::is_unsigned_v<decltype( T::vocab_size )>;
+
+  T::seq_len;
+  requires std::is_unsigned_v<decltype( T::seq_len )>;
+
+  T::wcls_present;
+  requires std::is_convertible_v<decltype( T::wcls_present ), bool>;
 };
 
-template<typename T>
-  requires Model<T>
-struct Llama2_70B
-{
+namespace configs {
 
+struct Llama2_70B_Chat
+{
   constexpr static uint64_t dim = 8192;
   constexpr static uint64_t kv_dim = 1024;
   constexpr static uint64_t hidden_dim = 28672;
@@ -52,11 +56,11 @@ struct Llama2_70B
   constexpr static uint64_t gqa_size = 8;
   constexpr static uint64_t vocab_size = 32000;
   constexpr static uint64_t seq_len = 2048;
+  constexpr static bool wcls_present = true;
 };
 
-struct Llama2_13B
+struct Llama2_13B_Chat
 {
-
   constexpr static uint64_t dim = 5120;
   constexpr static uint64_t kv_dim = 5120;
   constexpr static uint64_t hidden_dim = 13824;
@@ -67,11 +71,11 @@ struct Llama2_13B
   constexpr static uint64_t gqa_size = 1;
   constexpr static uint64_t vocab_size = 32000;
   constexpr static uint64_t seq_len = 2048;
+  constexpr static bool wcls_present = true;
 };
 
-struct Llama2_7B
+struct Llama2_7B_Chat
 {
-
   constexpr static uint64_t dim = 4096;
   constexpr static uint64_t kv_dim = 4096;
   constexpr static uint64_t hidden_dim = 11008;
@@ -82,11 +86,11 @@ struct Llama2_7B
   constexpr static uint64_t gqa_size = 1;
   constexpr static uint64_t vocab_size = 32000;
   constexpr static uint64_t seq_len = 2048;
+  constexpr static bool wcls_present = true;
 };
 
 struct Stories_110M
 {
-
   constexpr static uint64_t dim = 768;
   constexpr static uint64_t kv_dim = 768;
   constexpr static uint64_t hidden_dim = 2048;
@@ -97,6 +101,9 @@ struct Stories_110M
   constexpr static uint64_t gqa_size = 1;
   constexpr static uint64_t vocab_size = 32000;
   constexpr static uint64_t seq_len = 1024;
+  constexpr static bool wcls_present = false;
 };
 
-}
+} // namespace configs
+
+} // namespace glinthawk::models::llama2

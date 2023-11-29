@@ -43,10 +43,8 @@ public:
   size_t size() const
   {
     switch ( dtype ) {
-      case Type::Float16:
-        return 2;
-      case Type::Float32:
-        return 4;
+      case Type::Float16: return 2;
+      case Type::Float32: return 4;
     }
 
     throw std::runtime_error( "invalid dtype" );

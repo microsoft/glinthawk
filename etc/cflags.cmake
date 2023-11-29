@@ -10,7 +10,7 @@ else ()
         set ( GCC_TARGET_ARCH native )
     endif ()
 
-    message ( STATUS "GCC_TARGET_ARCH: ${GCC_TARGET_ARCH}" )
+    message ( NOTICE "GCC_TARGET_ARCH: ${GCC_TARGET_ARCH}" )
 
     set ( GCC_OPTIMIZATION_FLAGS -march=${GCC_TARGET_ARCH} -O3 -ffast-math -fsingle-precision-constant )
     set ( GCC_STRICT_FLAGS -pedantic -pedantic-errors -Werror -Wall -Wextra -Wshadow -Wpointer-arith -Wcast-qual -Wformat=2 -Weffc++ -Wold-style-cast )

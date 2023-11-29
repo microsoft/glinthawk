@@ -6,6 +6,7 @@
 #include <curand_kernel.h>
 #include <source_location>
 #include <vector>
+#include <iostream>
 
 namespace glinthawk::models::common::cuda::ops {
 
@@ -18,6 +19,16 @@ T div_ceil( const T x, const T y )
 {
   return x / y + ( x % y != 0 );
 }
+
+template<typename DType>
+struct CUDADeleter
+{
+  void operator()( DType* ptr ) const
+  {
+    if ( ptr )
+      cudaFree( ptr );
+  }
+};
 
 void init( const int num_streams );
 void destroy();
