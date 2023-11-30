@@ -68,26 +68,21 @@ public:
 
   ~Llama2();
 
-  InferenceState forward( InferenceState&& inference_state, std::shared_ptr<ContextType> context ) override;
+  InferenceState forward( InferenceState&& inference_state, std::shared_ptr<ContextType> context );
+  InferenceState pre_attention_forward( InferenceState&& inference_state, std::shared_ptr<ContextType> context );
+  InferenceState attention_forward( InferenceState&& inference_state, std::shared_ptr<ContextType> context );
+  InferenceState post_attention_forward( InferenceState&& inference_state );
 
   std::vector<InferenceState> forward( std::vector<InferenceState>&& inference_states,
-                                       const std::vector<std::shared_ptr<ContextType>>& contexts ) override;
+                                       const std::vector<std::shared_ptr<ContextType>>& contexts );
 
-  InferenceState pre_attention_forward( InferenceState&& inference_state,
-                                        std::shared_ptr<ContextType> context ) override;
-
-  std::vector<InferenceState> pre_attention_forward(
-    std::vector<InferenceState>&& inference_states,
-    const std::vector<std::shared_ptr<ContextType>>& contexts ) override;
-
-  InferenceState attention_forward( InferenceState&& inference_state, std::shared_ptr<ContextType> context ) override;
+  std::vector<InferenceState> pre_attention_forward( std::vector<InferenceState>&& inference_states,
+                                                     const std::vector<std::shared_ptr<ContextType>>& contexts );
 
   std::vector<InferenceState> attention_forward( std::vector<InferenceState>&& inference_states,
-                                                 const std::vector<std::shared_ptr<ContextType>>& contexts ) override;
+                                                 const std::vector<std::shared_ptr<ContextType>>& contexts );
 
-  InferenceState post_attention_forward( InferenceState&& inference_state ) override;
-
-  std::vector<InferenceState> post_attention_forward( std::vector<InferenceState>&& inference_states ) override;
+  std::vector<InferenceState> post_attention_forward( std::vector<InferenceState>&& inference_states );
 };
 
 template<typename T>

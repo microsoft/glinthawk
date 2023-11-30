@@ -320,8 +320,8 @@ bool BaseLlama2<Config, DType, Context, StorageDeleter>::is_finished( const Infe
 
 template<typename Config, typename DType, typename Context, typename StorageDeleter>
 void BaseLlama2<Config, DType, Context, StorageDeleter>::assert_safe_forward(
-  const std::vector<InferenceState>& inference_states,
-  const std::vector<std::shared_ptr<Context>>& contexts ) const
+  const InferenceStateVector& inference_states,
+  const ContextVector& contexts ) const
 {
   CHECK_GT( inference_states.size(), 0 ) << "batch size must be at least 1";
   CHECK_LE( inference_states.size(), settings_.concurrency_limit )
@@ -338,10 +338,10 @@ void BaseLlama2<Config, DType, Context, StorageDeleter>::assert_safe_forward(
     if constexpr ( std::is_same_v<DType, _Float16> )
       CHECK_EQ( item.dtype(), DataType::Float16 ) << "Inference State data type does not match model data type";
 #ifdef GLINTHAWK_CUDA_ENABLED
-    if constexpr ( std::is_same_v<DType, __half> )
+    else if constexpr ( std::is_same_v<DType, __half> )
       CHECK_EQ( item.dtype(), DataType::Float16 ) << "Inference State data type does not match model data type";
 #endif
-    if constexpr ( std::is_same_v<DType, float> )
+    else if constexpr ( std::is_same_v<DType, float> )
       CHECK_EQ( item.dtype(), DataType::Float32 ) << "Inference State data type does not match model data type";
     CHECK_LT( item.token_pos(), Config::seq_len ) << "token position cannot be larger than sequence length";
   }
@@ -350,8 +350,8 @@ void BaseLlama2<Config, DType, Context, StorageDeleter>::assert_safe_forward(
 
 template<typename Config, typename DType, typename Context, typename StorageDeleter>
 void BaseLlama2<Config, DType, Context, StorageDeleter>::assert_safe_pre_attention(
-  const std::vector<InferenceState>& inference_states,
-  const std::vector<std::shared_ptr<Context>>& contexts ) const
+  const InferenceStateVector& inference_states,
+  const ContextVector& contexts ) const
 {
   CHECK_GT( inference_states.size(), 0 ) << "batch size must be at least 1";
   CHECK_LE( inference_states.size(), settings_.concurrency_limit )
@@ -368,10 +368,10 @@ void BaseLlama2<Config, DType, Context, StorageDeleter>::assert_safe_pre_attenti
     if constexpr ( std::is_same_v<DType, _Float16> )
       CHECK_EQ( item.dtype(), DataType::Float16 ) << "Inference State data type does not match model data type";
 #ifdef GLINTHAWK_CUDA_ENABLED
-    if constexpr ( std::is_same_v<DType, __half> )
+    else if constexpr ( std::is_same_v<DType, __half> )
       CHECK_EQ( item.dtype(), DataType::Float16 ) << "Inference State data type does not match model data type";
 #endif
-    if constexpr ( std::is_same_v<DType, float> )
+    else if constexpr ( std::is_same_v<DType, float> )
       CHECK_EQ( item.dtype(), DataType::Float32 ) << "Inference State data type does not match model data type";
     CHECK_LT( item.token_pos(), Config::seq_len ) << "token position cannot be larger than sequence length";
   }
@@ -380,8 +380,8 @@ void BaseLlama2<Config, DType, Context, StorageDeleter>::assert_safe_pre_attenti
 
 template<typename Config, typename DType, typename Context, typename StorageDeleter>
 void BaseLlama2<Config, DType, Context, StorageDeleter>::assert_safe_attention(
-  const std::vector<InferenceState>& inference_states,
-  const std::vector<std::shared_ptr<Context>>& contexts ) const
+  const InferenceStateVector& inference_states,
+  const ContextVector& contexts ) const
 {
   CHECK_GT( inference_states.size(), 0 ) << "batch size must be at least 1";
   CHECK_LE( inference_states.size(), settings_.concurrency_limit )
@@ -401,7 +401,7 @@ void BaseLlama2<Config, DType, Context, StorageDeleter>::assert_safe_attention(
 
 template<typename Config, typename DType, typename Context, typename StorageDeleter>
 void BaseLlama2<Config, DType, Context, StorageDeleter>::assert_safe_post_attention(
-  const std::vector<InferenceState>& inference_states ) const
+  const InferenceStateVector& inference_states ) const
 {
   CHECK_GT( inference_states.size(), 0 ) << "batch size must be at least 1";
   CHECK_LE( inference_states.size(), settings_.concurrency_limit )
@@ -418,10 +418,10 @@ void BaseLlama2<Config, DType, Context, StorageDeleter>::assert_safe_post_attent
     if constexpr ( std::is_same_v<DType, _Float16> )
       CHECK_EQ( item.dtype(), DataType::Float16 ) << "Inference State data type does not match model data type";
 #ifdef GLINTHAWK_CUDA_ENABLED
-    if constexpr ( std::is_same_v<DType, __half> )
+    else if constexpr ( std::is_same_v<DType, __half> )
       CHECK_EQ( item.dtype(), DataType::Float16 ) << "Inference State data type does not match model data type";
 #endif
-    if constexpr ( std::is_same_v<DType, float> )
+    else if constexpr ( std::is_same_v<DType, float> )
       CHECK_EQ( item.dtype(), DataType::Float32 ) << "Inference State data type does not match model data type";
     CHECK_LT( item.token_pos(), Config::seq_len ) << "token position cannot be larger than sequence length";
   }
@@ -457,7 +457,6 @@ INSTANTIATE_FOR_MODEL_CPU( configs::Llama2_70B_Chat )
 INSTANTIATE_FOR_MODEL_CPU( configs::Stories_110M )
 
 #ifdef GLINTHAWK_CUDA_ENABLED
-
 #define INSTANTIATE_FOR_MODEL_CUDA( X )                                                                                \
   INSTANTIATE_FOR_MODEL( X, __half )                                                                                   \
   template class BaseLlama2<X, __half, cuda::Context<X, __half>, common::cuda::ops::CUDADeleter<__half>>;              \
@@ -467,7 +466,6 @@ INSTANTIATE_FOR_MODEL_CUDA( configs::Llama2_7B_Chat )
 INSTANTIATE_FOR_MODEL_CUDA( configs::Llama2_13B_Chat )
 INSTANTIATE_FOR_MODEL_CUDA( configs::Llama2_70B_Chat )
 INSTANTIATE_FOR_MODEL_CUDA( configs::Stories_110M )
-
 #endif
 
 } // namespace glinthawk::models::llama2

@@ -185,6 +185,10 @@ template<typename Config, typename DType, typename Context, typename StorageDele
 requires ModelConfig<Config>
 class BaseLlama2 : public glinthawk::models::Model<Context>
 {
+public:
+  using InferenceStateVector = std::vector<InferenceState>;
+  using ContextVector = std::vector<std::shared_ptr<Context>>;
+
 protected:
   Settings<Config> settings_ {};
 
@@ -203,19 +207,13 @@ protected:
 
   BaseLlama2() = default;
 
-  void assert_safe_forward( const std::vector<InferenceState>& inference_states,
-                            const std::vector<std::shared_ptr<Context>>& contexts ) const;
-
-  void assert_safe_pre_attention( const std::vector<InferenceState>& inference_states,
-                                  const std::vector<std::shared_ptr<Context>>& contexts ) const;
-
-  void assert_safe_attention( const std::vector<InferenceState>& inference_states,
-                              const std::vector<std::shared_ptr<Context>>& contexts ) const;
-
-  void assert_safe_post_attention( const std::vector<InferenceState>& inference_states ) const;
+  void assert_safe_forward( const InferenceStateVector& inference_states, const ContextVector& contexts ) const;
+  void assert_safe_pre_attention( const InferenceStateVector& inference_states, const ContextVector& contexts ) const;
+  void assert_safe_attention( const InferenceStateVector& inference_states, const ContextVector& contexts ) const;
+  void assert_safe_post_attention( const InferenceStateVector& inference_states ) const;
 
 public:
-  virtual ~BaseLlama2() = default;
+  ~BaseLlama2() = default;
 
   BaseLlama2( BaseLlama2&& ) = default;
   BaseLlama2& operator=( BaseLlama2&& ) = default;
@@ -227,8 +225,8 @@ public:
   using ContextType = Context;
   using TokenizerType = Vocabulary;
 
-  void dummy_forward( InferenceState& inference_state ) override;
-  bool is_finished( const InferenceState& inference_state ) override;
+  void dummy_forward( InferenceState& inference_state );
+  bool is_finished( const InferenceState& inference_state );
 
   Settings<Config> settings() const { return settings_; }
 };
