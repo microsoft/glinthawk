@@ -55,7 +55,7 @@ int main( int argc, char* argv[] )
 
     compute::SimpleComputeKernel<compute::Platform::_GLINTHAWK_PLATFORM_NAME_,
                                  compute::DataType::_GLINTHAWK_DTYPE_NAME_>
-      llama { model_dir, model_name, start_slice, end_slice, batch_size };
+      llama { model_dir, model_name, start_slice, end_slice, batch_size, true /* random params */ };
 
     const uint64_t seq_len = llama.max_seq_len();
     const uint64_t dim = llama.dim();

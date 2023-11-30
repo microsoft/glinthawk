@@ -33,7 +33,8 @@ struct Settings
   Settings( const std::filesystem::path& config_file,
             const uint32_t start_layer,
             const uint32_t end_layer,
-            uint64_t concurrency_limit_ );
+            const uint64_t concurrency_limit,
+            const bool randomize_parameters );
 
   std::string to_string() const;
 
@@ -44,6 +45,7 @@ struct Settings
   uint64_t start_layer_num {};
   uint64_t end_layer_num {};
   uint64_t concurrency_limit { 1 }; // max concurrent inference size
+  bool randomize_parameters { false };
 };
 
 class Vocabulary

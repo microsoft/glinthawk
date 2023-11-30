@@ -1,5 +1,7 @@
 #include "model.hh"
 
+#include <random>
+
 namespace glinthawk::models::llama2::cpu {
 
 namespace {
@@ -16,26 +18,51 @@ std::string dtype_str()
   }
 }
 
+template<typename DType>
+void randomize_buffer( DType* buffer, size_t len, const float min, const float max )
+{
+  static thread_local std::mt19937 generator { std::random_device {}() };
+  std::uniform_real_distribution<float> distribution( min, max );
+
+  size_t i;
+#pragma omp parallel for schedule( static ) private( i )
+  for ( i = 0; i < len; i++ ) {
+    if constexpr ( std::is_same_v<DType, float> ) {
+      buffer[i] = distribution( generator );
+    } else {
+      buffer[i] = static_cast<DType>( distribution( generator ) );
+    }
+  }
 }
+
+} // namespace
 
 template<typename Config, typename DType>
 Context<Config, DType>::Context( const Settings<Config>& settings )
   : storage_( reinterpret_cast<DType*>( new uint8_t[InferenceContext<Config, DType>::context_size( settings )] ) )
 {
   this->buffer_ = storage_.get();
+  if ( settings.randomize_parameters ) {
+    LOG( WARNING ) << "Randomizing context...";
+    randomize_buffer( storage_.get(),
+                      InferenceContext<Config, DType>::context_size( settings ) / sizeof( DType ),
+                      -10.0 / sqrt( Config::dim ),
+                      10.0 / sqrt( Config::dim ) );
+  }
 }
 
 template<typename Config, typename DType>
 Llama2<Config, DType>::Llama2( const std::filesystem::path& model_path,
                                const uint32_t start_layer,
                                const uint32_t end_layer,
-                               const uint64_t concurrency_limit )
+                               const uint64_t concurrency_limit,
+                               const bool randomize_parameters )
 {
   const std::string filename_suffix = "_" + dtype_str<DType>();
   const auto config_path = model_path / "CONFIG";
   const auto base_path = model_path / ( "BASEWEIGHTS" + filename_suffix );
 
-  llama2::Settings<Config> settings { config_path, start_layer, end_layer, concurrency_limit };
+  llama2::Settings<Config> settings { config_path, start_layer, end_layer, concurrency_limit, randomize_parameters };
 
   constexpr auto base_size = BaseWeights<Config, DType>::base_size();
   constexpr auto layer_size = LayerWeights<Config, DType>::layer_size();
@@ -51,30 +78,41 @@ Llama2<Config, DType>::Llama2( const std::filesystem::path& model_path,
   // Load the model
 
   // (1) loading the base weights
-  {
+  if ( not randomize_parameters ) {
     CHECK_EQ( std::filesystem::file_size( base_path ), base_size ) << "Base weights are not the expected size.";
 
     FileDescriptor base_fd { CHECK_SYSCALL( "open", open( base_path.c_str(), O_RDONLY ) ) };
     MMap_Region base_mmap { nullptr, base_size, PROT_READ, MAP_PRIVATE, base_fd.fd_num(), 0 };
     memcpy( base.get(), base_mmap.addr(), base_size );
-
     LOG( INFO ) << "Loaded base weights (" << base_size << " bytes).";
+  } else {
+    LOG( WARNING ) << "Randomizing BASEWEIGHTS...";
+    randomize_buffer(
+      base.get(), base_size / sizeof( DType ), -10.0 / sqrt( Config::dim ), 10.0 / sqrt( Config::dim ) );
   }
 
   // (2) load the layers
-  for ( auto i = settings.start_layer_num; i <= settings.end_layer_num; i++ ) {
-    const auto layer_path = model_path / ( "LAYER" + std::to_string( i ) + filename_suffix );
+  if ( not randomize_parameters ) {
+    for ( auto i = settings.start_layer_num; i <= settings.end_layer_num; i++ ) {
+      const auto layer_path = model_path / ( "LAYER" + std::to_string( i ) + filename_suffix );
 
-    CHECK_EQ( std::filesystem::file_size( layer_path ), layer_size ) << "Layer " << i << " is not the expected size.";
+      CHECK_EQ( std::filesystem::file_size( layer_path ), layer_size ) << "Layer " << i << " is not the expected size.";
 
-    FileDescriptor layer_fd { CHECK_SYSCALL( "open", open( layer_path.c_str(), O_RDONLY ) ) };
-    MMap_Region layer_mmap { nullptr, layer_size, PROT_READ, MAP_PRIVATE, layer_fd.fd_num(), 0 };
+      FileDescriptor layer_fd { CHECK_SYSCALL( "open", open( layer_path.c_str(), O_RDONLY ) ) };
+      MMap_Region layer_mmap { nullptr, layer_size, PROT_READ, MAP_PRIVATE, layer_fd.fd_num(), 0 };
 
-    memcpy( reinterpret_cast<uint8_t*>( layers.get() ) + ( i - settings.start_layer_num ) * layer_size,
-            layer_mmap.addr(),
-            layer_size );
+      memcpy( reinterpret_cast<uint8_t*>( layers.get() ) + ( i - settings.start_layer_num ) * layer_size,
+              layer_mmap.addr(),
+              layer_size );
 
-    LOG( INFO ) << "Loaded layer " << i << " (" << layer_size << " bytes).";
+      LOG( INFO ) << "Loaded layer " << i << " (" << layer_size << " bytes).";
+    }
+  } else {
+    LOG( WARNING ) << "Randomizing LAYERS...";
+    randomize_buffer( layers.get(),
+                      layer_size * settings.n_layers_loaded() / sizeof( DType ),
+                      -10.0 / sqrt( Config::dim ),
+                      10.0 / sqrt( Config::dim ) );
   }
 
   this->init( settings, std::move( base ), std::move( layers ), std::move( run_state ) );

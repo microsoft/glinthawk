@@ -1,5 +1,7 @@
 #include "model.cuh"
 
+#include <random>
+
 using namespace glinthawk::models::common::cuda;
 
 namespace glinthawk::models::llama2::cuda {
@@ -18,6 +20,23 @@ std::string dtype_str()
   }
 }
 
+template<typename DType>
+void randomize_buffer( DType* buffer, size_t len, const float min, const float max )
+{
+  static thread_local std::mt19937 generator { std::random_device {}() };
+  std::uniform_real_distribution<float> distribution( min, max );
+
+  size_t i;
+#pragma omp parallel for schedule( static ) private( i )
+  for ( i = 0; i < len; i++ ) {
+    if constexpr ( std::is_same_v<DType, float> ) {
+      buffer[i] = distribution( generator );
+    } else {
+      buffer[i] = static_cast<DType>( distribution( generator ) );
+    }
+  }
+}
+
 }
 
 template<typename Config, typename DType>
@@ -26,6 +45,18 @@ Context<Config, DType>::Context( const Settings<Config>& settings )
     DType* ptr;
     const cudaError_t err = cudaMalloc( &ptr, InferenceContext<Config, DType>::context_size( settings ) );
     if ( err == cudaSuccess ) {
+      if ( settings.randomize_parameters ) {
+        LOG( WARNING ) << "Randomizing context...";
+        std::unique_ptr<DType> host_ptr {
+          new DType[InferenceContext<Config, DType>::context_size( settings ) / sizeof( DType )]
+        };
+        randomize_buffer( host_ptr.get(),
+                          InferenceContext<Config, DType>::context_size( settings ) / sizeof( DType ),
+                          -10.0 / sqrt( Config::dim ),
+                          10.0 / sqrt( Config::dim ) );
+        ops::CHECK_CUDA( cudaMemcpy(
+          ptr, host_ptr.get(), InferenceContext<Config, DType>::context_size( settings ), cudaMemcpyHostToDevice ) );
+      }
       return std::unique_ptr<DType, CUDADeleter<DType>> { ptr };
     } else {
       return std::unique_ptr<DType, CUDADeleter<DType>> { nullptr };
@@ -45,7 +76,8 @@ template<typename Config, typename DType>
 Llama2<Config, DType>::Llama2( const std::filesystem::path& model_path,
                                const uint32_t start_layer,
                                const uint32_t end_layer,
-                               const uint64_t concurrency_limit )
+                               const uint64_t concurrency_limit,
+                               const bool randomize_parameters )
 {
   ops::init( concurrency_limit );
 
@@ -53,7 +85,7 @@ Llama2<Config, DType>::Llama2( const std::filesystem::path& model_path,
   const auto config_path = model_path / "CONFIG";
   const auto base_path = model_path / ( "BASEWEIGHTS" + filename_suffix );
 
-  llama2::Settings<Config> settings { config_path, start_layer, end_layer, concurrency_limit };
+  llama2::Settings<Config> settings { config_path, start_layer, end_layer, concurrency_limit, randomize_parameters };
 
   CHECK_GE( 1024, Config::n_heads ) << "Attention softmax has n_heads threads, and this cannot surpass 1024.";
   CHECK_GE( 1024, Config::dim / Config::n_heads / 2 ) << "RoPE has head_size / 2 threads and cannot surpass 1024.";
@@ -107,7 +139,7 @@ Llama2<Config, DType>::Llama2( const std::filesystem::path& model_path,
   // Load the model
 
   // (1) loading the base weights
-  {
+  if ( not randomize_parameters ) {
     CHECK_EQ( std::filesystem::file_size( base_path ), base_size ) << "Base weights are not the expected size.";
 
     FileDescriptor base_fd { CHECK_SYSCALL( "open", open( base_path.c_str(), O_RDONLY ) ) };
@@ -115,24 +147,41 @@ Llama2<Config, DType>::Llama2( const std::filesystem::path& model_path,
     ops::CHECK_CUDA( cudaMemcpy( base.get(), base_mmap.addr(), base_size, cudaMemcpyHostToDevice ) );
 
     LOG( INFO ) << "Loaded base weights (" << base_size << " bytes).";
+  } else {
+    LOG( WARNING ) << "Randomizing BASEWEIGHTS...";
+    std::unique_ptr<DType> base_host { new DType[base_size / sizeof( DType )] };
+    randomize_buffer(
+      base_host.get(), base_size / sizeof( DType ), -10.0 / sqrt( Config::dim ), 10.0 / sqrt( Config::dim ) );
+    ops::CHECK_CUDA( cudaMemcpy( base.get(), base_host.get(), base_size, cudaMemcpyHostToDevice ) );
   }
 
   // (2) load the layers
-  for ( auto i = settings.start_layer_num; i <= settings.end_layer_num; i++ ) {
-    const auto layer_path = model_path / ( "LAYER" + std::to_string( i ) + filename_suffix );
+  if ( not randomize_parameters ) {
+    for ( auto i = settings.start_layer_num; i <= settings.end_layer_num; i++ ) {
+      const auto layer_path = model_path / ( "LAYER" + std::to_string( i ) + filename_suffix );
 
-    CHECK_EQ( std::filesystem::file_size( layer_path ), layer_size ) << "Layer " << i << " is not the expected size.";
+      CHECK_EQ( std::filesystem::file_size( layer_path ), layer_size ) << "Layer " << i << " is not the expected size.";
 
-    FileDescriptor layer_fd { CHECK_SYSCALL( "open", open( layer_path.c_str(), O_RDONLY ) ) };
-    MMap_Region layer_mmap { nullptr, layer_size, PROT_READ, MAP_PRIVATE, layer_fd.fd_num(), 0 };
+      FileDescriptor layer_fd { CHECK_SYSCALL( "open", open( layer_path.c_str(), O_RDONLY ) ) };
+      MMap_Region layer_mmap { nullptr, layer_size, PROT_READ, MAP_PRIVATE, layer_fd.fd_num(), 0 };
 
+      ops::CHECK_CUDA(
+        cudaMemcpy( reinterpret_cast<uint8_t*>( layers.get() ) + ( i - settings.start_layer_num ) * layer_size,
+                    layer_mmap.addr(),
+                    layer_size,
+                    cudaMemcpyHostToDevice ) );
+
+      LOG( INFO ) << "Loaded layer " << i << " (" << layer_size << " bytes).";
+    }
+  } else {
+    LOG( WARNING ) << "Randomizing LAYERS...";
+    std::unique_ptr<DType> layer_host { new DType[layer_size * layer_count / sizeof( DType )] };
+    randomize_buffer( layer_host.get(),
+                      layer_size * layer_count / sizeof( DType ),
+                      -10.0 / sqrt( Config::dim ),
+                      10.0 / sqrt( Config::dim ) );
     ops::CHECK_CUDA(
-      cudaMemcpy( reinterpret_cast<uint8_t*>( layers.get() ) + ( i - settings.start_layer_num ) * layer_size,
-                  layer_mmap.addr(),
-                  layer_size,
-                  cudaMemcpyHostToDevice ) );
-
-    LOG( INFO ) << "Loaded layer " << i << " (" << layer_size << " bytes).";
+      cudaMemcpy( layers.get(), layer_host.get(), layer_size * layer_count, cudaMemcpyHostToDevice ) );
   }
 
   this->init( settings, std::move( base ), std::move( layers ), std::move( run_state ) );

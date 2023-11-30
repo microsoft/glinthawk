@@ -34,10 +34,11 @@ public:
   SimpleComputeKernelBase& operator=( SimpleComputeKernelBase&& ) = default;
 
   SimpleComputeKernelBase( const std::filesystem::path& model_path,
-                           uint32_t start_slice,
-                           uint32_t end_slice,
-                           uint64_t batch_size )
-    : model_( model_path, start_slice, end_slice, batch_size )
+                           const uint32_t start_slice,
+                           const uint32_t end_slice,
+                           const uint64_t batch_size,
+                           const bool randomize_parameters )
+    : model_( model_path, start_slice, end_slice, batch_size, randomize_parameters )
   {
   }
 
@@ -144,37 +145,28 @@ private:
 public:
   SimpleComputeKernel( const std::filesystem::path model_path,
                        const std::string model_name,
-                       uint32_t start_slice,
-                       uint32_t end_slice,
-                       uint64_t batch_size )
+                       const uint32_t start_slice,
+                       const uint32_t end_slice,
+                       const uint64_t batch_size,
+                       const bool randomize_parameters = false )
     : kernel_( [&]() -> KernelVariantT {
-      if ( model_name == "llama2-7b-chat" ) {
-        return KernelVariantT { std::in_place_type<SimpleComputeKernelBase<typename Traits::Llama2_7B_Chat>>,
-                                model_path,
-                                start_slice,
-                                end_slice,
-                                batch_size };
-      } else if ( model_name == "llama2-13b-chat" ) {
-        return KernelVariantT { std::in_place_type<SimpleComputeKernelBase<typename Traits::Llama2_13B_Chat>>,
-                                model_path,
-                                start_slice,
-                                end_slice,
-                                batch_size };
-      } else if ( model_name == "llama2-70b-chat" ) {
-        return KernelVariantT { std::in_place_type<SimpleComputeKernelBase<typename Traits::Llama2_70B_Chat>>,
-                                model_path,
-                                start_slice,
-                                end_slice,
-                                batch_size };
-      } else if ( model_name == "stories-110m" ) {
-        return KernelVariantT { std::in_place_type<SimpleComputeKernelBase<typename Traits::Stories_110M>>,
-                                model_path,
-                                start_slice,
-                                end_slice,
-                                batch_size };
-      } else {
-        throw std::runtime_error( "Unknown model name" );
-      }
+
+#define CREATE_MODEL( MODEL_NAME, CLASS_NAME )                                                                         \
+  if ( model_name == MODEL_NAME )                                                                                      \
+    return KernelVariantT { std::in_place_type<SimpleComputeKernelBase<typename Traits::CLASS_NAME>>,                  \
+                            model_path,                                                                                \
+                            start_slice,                                                                               \
+                            end_slice,                                                                                 \
+                            batch_size,                                                                                \
+                            randomize_parameters };                                                                    \
+  // clang-format off
+    CREATE_MODEL( "llama2-7b-chat", Llama2_7B_Chat )
+    else CREATE_MODEL( "llama2-13b-chat", Llama2_13B_Chat )
+    else CREATE_MODEL( "llama2-70b-chat", Llama2_70B_Chat )
+    else CREATE_MODEL( "stories-110m", Stories_110M )
+    else throw std::runtime_error( "Unknown model name" );
+    // clang-format on
+#undef CREATE_MODEL
     }() )
   {
   }
