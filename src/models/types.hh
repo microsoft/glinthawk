@@ -53,4 +53,12 @@ public:
   const uint8_t* data() const { return ptr_.get(); }
 };
 
+enum class CopyType
+{
+  HostToDevice,
+  DeviceToHost,
+  DeviceToDevice,
+  HostToHost
+};
+
 } // namespace glinthawk
