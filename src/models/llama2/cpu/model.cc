@@ -37,8 +37,8 @@ Llama2<Config, DType>::Llama2( const std::filesystem::path& model_path,
 
   llama2::Settings<Config> settings { config_path, start_layer, end_layer, concurrency_limit };
 
-  const auto base_size = BaseWeights<Config, DType>::base_size();
-  const auto layer_size = LayerWeights<Config, DType>::layer_size();
+  constexpr auto base_size = BaseWeights<Config, DType>::base_size();
+  constexpr auto layer_size = LayerWeights<Config, DType>::layer_size();
   const auto run_state_size = RunState<Config, DType>::state_size( settings );
 
   // Allocate memory for the base weights, layers and run state
@@ -231,8 +231,9 @@ std::vector<InferenceState> Llama2<Config, DType>::forward( std::vector<Inferenc
 
   if ( next_layer_batch == 0 ) {
     std::vector<uint32_t> token_vector;
-    for ( size_t i = 0; i < inference_states.size(); i++ ) {
-      token_vector.push_back( inference_states[i].token() );
+    token_vector.reserve( inference_states.size() );
+    for ( auto& state : inference_states ) {
+      token_vector.push_back( state.token() );
     }
     pass_begin( token_vector );
   } else {
@@ -246,6 +247,7 @@ std::vector<InferenceState> Llama2<Config, DType>::forward( std::vector<Inferenc
     for ( size_t i = 0; i < inference_states.size(); i++ ) {
       this->state_.batch_context_pointers[i] = contexts[i]->key( this->settings_, layer_num, 0 );
     }
+
     pre_attention_ops( layer_num );
     attention_ops();
     post_attention_ops( layer_num );
@@ -257,18 +259,19 @@ std::vector<InferenceState> Llama2<Config, DType>::forward( std::vector<Inferenc
     pass_end();
 
     std::vector<float> batch_temps;
+    batch_temps.reserve( inference_states.size() );
+
     for ( size_t i = 0; i < inference_states.size(); i++ )
       batch_temps.push_back( inference_states[i].temperature() );
 
     extract_batch_token( this->state_, batch_temps );
 
     for ( size_t i = 0; i < inference_states.size(); i++ ) {
+      inference_states[i].set_token( this->state_.argmax_pos[i] );
+      inference_states[i].set_token_pos( inference_states[i].token_pos() + 1 );
+      inference_states[i].set_next_layer( 0 );
+      inference_states[i].set_activations( {} );
       output_states.push_back( std::move( inference_states[i] ) );
-      auto& item = output_states.back();
-      item.set_token( this->state_.argmax_pos[i] );
-      item.set_token_pos( item.token_pos() + 1 );
-      item.set_next_layer( 0 );
-      item.set_activations( {} );
     }
 
     return output_states;
