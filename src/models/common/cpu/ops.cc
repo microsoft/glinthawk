@@ -535,7 +535,7 @@ void apply_rope( const uint64_t head_size,
                  freq_cis_real + token_positions[i] * head_size / 2,
                  freq_cis_imag + token_positions[i] * head_size / 2,
                  state_q + i * n_kv_heads * gqa_size * head_size,
-                 context_pointers[i],
+                 context_pointers[i] + token_positions[i] * n_kv_heads * head_size * 2,
                  head_q_num,
                  head_k_num,
                  elem_idx );

@@ -1,6 +1,8 @@
 #include "worker.hh"
 
 #include <chrono>
+#include <filesystem>
+#include <random>
 
 #include <glog/logging.h>
 
@@ -20,6 +22,33 @@ using namespace glinthawk;
 using namespace glinthawk::core;
 using namespace glinthawk::net;
 
+using glinthawk::models::InferenceState;
+
+template<typename Model>
+void Worker<Model>::setup_stats_handler()
+{
+  /* let's see if telegraph is listening */
+  error_code err;
+  const filesystem::path telegraf_socket { "/tmp/telegraf.sock" };
+  if ( filesystem::is_socket( telegraf_socket, err ) ) {
+    LOG( INFO ) << "Telegraf socket found at " << telegraf_socket.string();
+    telegraf_logger_ = make_unique<monitoring::TelegrafLogger>( telegraf_socket );
+  } else {
+    LOG( WARNING ) << "Telegraf socket not found at " << telegraf_socket.string();
+    return;
+  }
+
+  telegraf_logger_->install_rules( event_loop_, telegraf_rule_categories_, []( auto&& ) { return true; }, [] {} );
+
+  event_loop_.add_rule(
+    "Stats timer",
+    Direction::In,
+    stats_timer_,
+    bind( &Worker<Model>::handle_stats, this ),
+    [] { return true; },
+    [] { LOG( ERROR ) << "Stats timer stopped."; } );
+}
+
 template<typename Model>
 void Worker<Model>::setup_peer( std::map<net::Address, Peer>::iterator peer_it )
 {
@@ -32,8 +61,9 @@ void Worker<Model>::setup_peer( std::map<net::Address, Peer>::iterator peer_it )
     "Outgoing message",
     [this, peer_it] {
       for ( auto& state : peer_it->second.outgoing_states ) {
-        LOG( INFO ) << "Sending state to " << peer_it->first.to_string() << ": " << state.to_string();
-        peer_it->second.message_handler.push_message( Message( Message::OpCode::InferenceState, state.serialize() ) );
+        DLOG( INFO ) << "Sending state to " << peer_it->first.to_string() << ": " << state.to_string();
+        auto state_ser = state.serialize();
+        peer_it->second.message_handler.push_message( Message( Message::OpCode::InferenceState, move( state_ser ) ) );
       }
 
       peer_it->second.outgoing_states.clear();
@@ -117,6 +147,8 @@ Worker<Model>::Worker( const Address& worker_address,
   // Send "HEY" to coordinator
   Message hey_message { Message::OpCode::Hey, this->listen_address_.to_string() };
   coordinator_.message_handler.push_message( move( hey_message ) );
+
+  setup_stats_handler();
 }
 
 template<typename Model>
@@ -158,9 +190,7 @@ bool Worker<Model>::handle_coordinator_message( core::Message&& msg )
     case Message::OpCode::InferenceState: {
       // got an inference state from the coordinator
       auto state = models::InferenceState( msg.payload() );
-      LOG( WARNING ) << "Got inference state from coordinator; this behavior is deprecated.";
-      LOG( INFO ) << "Inference state: " << state.to_string();
-      this->compute_kernel_->push( move( state ) );
+      LOG( ERROR ) << "Got inference state from coordinator; this behavior is not supported.";
       break;
     }
 
@@ -178,6 +208,45 @@ bool Worker<Model>::handle_coordinator_message( core::Message&& msg )
 
       LOG( INFO ) << "Route set; will be used for future prompts.";
 
+      break;
+    }
+
+    case Message::OpCode::PushDummyPrompts: {
+      // create some random inference states and feed them into the system
+      const size_t prompt_count = stoull( msg.payload() );
+      CHECK_LE( prompt_count, 2048 ) << "Too many dummy prompts requested.";
+
+      if ( current_route_.empty() ) {
+        LOG( ERROR ) << "No route set; cannot push dummy prompts.";
+        break;
+      }
+
+      vector<InferenceState> states {};
+
+      // generating random temperatures
+      random_device rd {};
+      mt19937 temp_gen { rd() };
+      uniform_real_distribution<float> temp_dist( 0.0f, 1.0f );
+
+      for ( size_t i = 0; i < prompt_count; i++ ) {
+        PromptID prompt_id;
+        util::digest::sha256( { reinterpret_cast<const char*>( &i ), sizeof( i ) }, prompt_id );
+
+        // generate a random number between 0 and 1
+
+        InferenceState state {};
+        state.set_prompt_id( prompt_id );
+        state.set_token( 1 /* BOS */ );
+        state.set_token_pos( 0 );
+        state.set_next_layer( 0 );
+        state.set_prompt_length( 1 );
+        state.set_temperature( temp_dist( temp_gen ) );
+        state.set_layer_workers( current_route_ );
+
+        states.push_back( move( state ) );
+      }
+
+      this->compute_kernel_->push( move( states ) );
       break;
     }
 
@@ -233,7 +302,9 @@ void Worker<Model>::handle_compute_kernel_event()
 
   models::InferenceState state;
   while ( this->compute_kernel_->pop( state ) ) {
-    LOG( INFO ) << "Got state from compute kernel: " << state.to_string();
+    __stats__.increment<Counters::StatesProcessed>();
+
+    DLOG( INFO ) << "Got state from compute kernel: " << state.to_string();
 
     // little hack to test pull queue on one GPU without running out of memory.
     // if (state.next_layer() == 10)
@@ -262,12 +333,14 @@ void Worker<Model>::handle_compute_kernel_event()
 template<typename Model>
 bool Worker<Model>::handle_peer_message( core::Message&& msg )
 {
-  LOG( INFO ) << "(Peer) Incoming message: " << msg.info();
+  DLOG( INFO ) << "(Peer) Incoming message: " << msg.info();
 
   switch ( msg.opcode() ) {
     case Message::OpCode::InferenceState: {
+      __stats__.increment<Counters::StatesReceived>();
+
       auto state = models::InferenceState( msg.payload() );
-      LOG( INFO ) << "Inference state: " << state.to_string();
+      DLOG( INFO ) << "Inference state: " << state.to_string();
 
       this->compute_kernel_->check_finished( state );
 
@@ -275,20 +348,21 @@ bool Worker<Model>::handle_peer_message( core::Message&& msg )
         // We are the first layer: if this inference state contains a generated token, we should save it.
         // otherwise, we load the next token from the prompt.
 
+        if ( state.token_pos() > 0 ) {
+          __stats__.increment<Counters::TokensProcessed>();
+        }
+
         if ( state.token_pos() >= state.prompt_length() ) {
+          __stats__.increment<Counters::TokensGenerated>();
+
           /* we're done processing the prompt */
           auto& completion = this->completion_manager_->get( state.prompt_id() );
           completion.add_token( state.token() );
 
           if ( state.finished() ) {
+            __stats__.increment<Counters::PromptsCompleted>();
+            __stats__.add_point<IntDistributions::PromptLength>( state.token_pos() );
             completion.terminate();
-
-            // telling the coordinator we completed this prompt
-            // XXX(sadjad): revisit this later
-            protobuf::PromptCompleted proto;
-            proto.add_prompt_ids( state.prompt_id().base58digest() );
-            this->coordinator_.message_handler.push_message(
-              Message( Message::OpCode::PromptCompleted, proto.SerializeAsString() ) );
           }
         } else {
           /* we're still processing the prompt, load the next token */
@@ -315,10 +389,18 @@ bool Worker<Model>::handle_peer_message( core::Message&& msg )
 }
 
 template<typename Model>
+void Worker<Model>::handle_stats()
+{
+  stats_timer_.read_event();
+
+  telegraf_logger_->push_measurement( __stats__ );
+  __stats__.zero_out();
+}
+
+template<typename Model>
 void Worker<Model>::run()
 {
-  while ( event_loop_.wait_next_event( -1 ) != EventLoop::Result::Exit ) {
-  }
+  while ( event_loop_.wait_next_event( -1 ) != EventLoop::Result::Exit ) {}
 }
 
 template<typename Model>
@@ -328,8 +410,8 @@ void Worker<Model>::prompt_preparation_thread_func()
     vector<InferenceState> states {};
     PromptID prompt_id;
 
-    if ( prompt_queue_.wait_dequeue_timed( prompt_id, chrono::seconds { 1 } ) ) {
-      LOG( INFO ) << "Preparing states for the prompt: " << prompt_id.base58digest();
+    while ( prompt_queue_.try_dequeue( prompt_id ) && states.size() < 1'000 ) {
+      DLOG( INFO ) << "Preparing the state for the prompt: " << prompt_id.base58digest();
 
       auto prompt = prompt_manager_->get( prompt_id );
 
@@ -341,10 +423,16 @@ void Worker<Model>::prompt_preparation_thread_func()
       state.set_prompt_length( prompt.token_count() );
       state.set_temperature( 0.0f );
       state.set_layer_workers( current_route_ );
-
-      LOG( INFO ) << "Pushing states to compute kernel: " << states.size();
-      this->compute_kernel_->push( move( state ) );
+      states.push_back( move( state ) );
     }
+
+    if ( not states.empty() ) {
+      LOG( INFO ) << "Pushing states to compute kernel: " << states.size();
+      __stats__.increment<Counters::PromptsStarted>( states.size() );
+      this->compute_kernel_->push( move( states ) );
+    }
+
+    this_thread::sleep_for( chrono::seconds { 1 } );
   }
 }
 
@@ -376,11 +464,21 @@ Worker<Model>::~Worker()
 
 namespace glinthawk::core {
 
-#ifdef GLINTHAWK_CUDA_ENABLED
-template class Worker<models::llama2::cuda::Llama2<__half>>;
-#endif
+template class Worker<models::llama2::cpu::Llama2_7B_Chat<_Float16>>;
+template class Worker<models::llama2::cpu::Llama2_13B_Chat<_Float16>>;
+template class Worker<models::llama2::cpu::Llama2_70B_Chat<_Float16>>;
+template class Worker<models::llama2::cpu::Stories_110M<_Float16>>;
 
-template class Worker<models::llama2::cpu::Llama2<_Float16>>;
-template class Worker<models::llama2::cpu::Llama2<float>>;
+template class Worker<models::llama2::cpu::Llama2_7B_Chat<float>>;
+template class Worker<models::llama2::cpu::Llama2_13B_Chat<float>>;
+template class Worker<models::llama2::cpu::Llama2_70B_Chat<float>>;
+template class Worker<models::llama2::cpu::Stories_110M<float>>;
+
+#ifdef GLINTHAWK_CUDA_ENABLED
+template class Worker<models::llama2::cuda::Llama2_7B_Chat<__half>>;
+template class Worker<models::llama2::cuda::Llama2_13B_Chat<__half>>;
+template class Worker<models::llama2::cuda::Llama2_70B_Chat<__half>>;
+template class Worker<models::llama2::cuda::Stories_110M<__half>>;
+#endif
 
 } // namespace glinthawk::core

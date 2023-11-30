@@ -1,5 +1,6 @@
 #include "kernel.hh"
 
+#include <chrono>
 #include <glog/logging.h>
 
 #include "models/llama2/cpu/model.cc"
@@ -39,7 +40,10 @@ void ComputeKernel<Model>::execution_thread_func()
       }
     }
 
+    const auto start = chrono::steady_clock::now();
     auto results = model_->forward( move( input_states ), contexts );
+    const auto duration = chrono::duration_cast<chrono::microseconds>( chrono::steady_clock::now() - start );
+    __stats__.add_point<IntDistributions::KernelForwardTime>( duration.count() );
 
     {
       lock_guard lock( outgoing_mutex_ );
@@ -142,8 +146,23 @@ void ComputeKernel<Model>::backlog_thread_func()
   }
 }
 
+namespace glinthawk::compute {
+
+template class ComputeKernel<models::llama2::cpu::Llama2_7B_Chat<float>>;
+template class ComputeKernel<models::llama2::cpu::Llama2_13B_Chat<float>>;
+template class ComputeKernel<models::llama2::cpu::Llama2_70B_Chat<float>>;
+template class ComputeKernel<models::llama2::cpu::Stories_110M<float>>;
+
+template class ComputeKernel<models::llama2::cpu::Llama2_7B_Chat<_Float16>>;
+template class ComputeKernel<models::llama2::cpu::Llama2_13B_Chat<_Float16>>;
+template class ComputeKernel<models::llama2::cpu::Llama2_70B_Chat<_Float16>>;
+template class ComputeKernel<models::llama2::cpu::Stories_110M<_Float16>>;
+
 #ifdef GLINTHAWK_CUDA_ENABLED
-template class glinthawk::compute::ComputeKernel<glinthawk::models::llama2::cuda::Llama2<__half>>;
+template class ComputeKernel<models::llama2::cuda::Llama2_7B_Chat<__half>>;
+template class ComputeKernel<models::llama2::cuda::Llama2_13B_Chat<__half>>;
+template class ComputeKernel<models::llama2::cuda::Llama2_70B_Chat<__half>>;
+template class ComputeKernel<models::llama2::cuda::Stories_110M<__half>>;
 #endif
-template class glinthawk::compute::ComputeKernel<glinthawk::models::llama2::cpu::Llama2<_Float16>>;
-template class glinthawk::compute::ComputeKernel<glinthawk::models::llama2::cpu::Llama2<float>>;
+
+} // namespace glinthawk::compute

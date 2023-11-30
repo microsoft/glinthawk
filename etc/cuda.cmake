@@ -5,7 +5,7 @@ cmake_policy ( SET CMP0074 NEW )
 find_package ( CUDAToolkit REQUIRED )
 
 if ( CMAKE_CUDA_COMPILER )
-  message ( "CUDA compiler found: ${CMAKE_CUDA_COMPILER}" )
+  message ( NOTICE "CMAKE_CUDA_COMPILER: ${CMAKE_CUDA_COMPILER}" )
 
   add_definitions ( -DGLINTHAWK_CUDA_ENABLED )
   set ( CMAKE_CUDA_ARCHITECTURES 75 )

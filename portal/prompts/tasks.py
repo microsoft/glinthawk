@@ -17,8 +17,8 @@ from django.core.files.base import ContentFile
 from django.core.files.storage import default_storage
 
 sys.path.append(os.path.join(os.path.dirname(__file__), "..", "..", "py"))
-from preprocess.tokenizer import Tokenizer
-from preprocess import serdes
+from common.tokenizer import Tokenizer
+from common import serdes
 
 logging.basicConfig(level=logging.INFO)
 tokenizer = Tokenizer(django_settings.GLINTHAWK_TOKENIZER_PATH)

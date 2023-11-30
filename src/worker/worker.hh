@@ -1,6 +1,7 @@
 #pragma once
 
 #include <atomic>
+#include <chrono>
 #include <filesystem>
 #include <list>
 #include <map>
@@ -12,12 +13,14 @@
 #include "message/handler.hh"
 #include "message/message.hh"
 #include "models/llama2/base.hh"
+#include "monitoring/telegraf.hh"
 #include "net/address.hh"
 #include "net/session.hh"
 #include "net/socket.hh"
 #include "prompt/prompt.hh"
 #include "storage/blobstore.hh"
 #include "util/eventloop.hh"
+#include "util/timerfd.hh"
 
 #include "concurrentqueue/blockingconcurrentqueue.h"
 
@@ -72,17 +75,30 @@ private:
   std::thread prompt_preparation_thread_ {};
   std::thread completion_commit_thread_ {};
 
+  monitoring::TelegrafLogger::RuleCategories telegraf_rule_categories_ {
+    .session = event_loop_.add_category( "Telegraf session" ),
+    .endpoint_read = event_loop_.add_category( "Telegraf endpoint read" ),
+    .endpoint_write = event_loop_.add_category( "Telegraf endpoint write" ),
+    .response = event_loop_.add_category( "Telegraf response" ),
+  };
+
+  Measurement& __stats__ { global_measurement() };
+  std::unique_ptr<monitoring::TelegrafLogger> telegraf_logger_ { nullptr };
+  TimerFD stats_timer_ { std::chrono::seconds { 5 } };
+
   void setup_peer( std::map<net::Address, Peer>::iterator peer_it );
   void setup_blobstore( const std::string& blobstore_uri );
   void setup_compute_kernel( const std::filesystem::path& model_root,
                              const int start_layer,
                              const int end_layer,
                              const int concurrency_size );
+  void setup_stats_handler();
 
   void listen_callback();
   void handle_compute_kernel_event();
   bool handle_coordinator_message( core::Message&& msg );
   bool handle_peer_message( core::Message&& msg );
+  void handle_stats();
 
   void prompt_preparation_thread_func();
   void completion_commit_thread_func();

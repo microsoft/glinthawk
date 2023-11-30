@@ -2,6 +2,7 @@
 
 #include "models/common/model.hh"
 #include "net/session.hh"
+#include "util/void.hh"
 
 using namespace std;
 using namespace glinthawk;
@@ -130,7 +131,10 @@ namespace core {
 class Message;
 }
 
+class Measurement;
+
 template class MessageHandler<TCPSession, models::InferenceState, models::InferenceState>;
 template class MessageHandler<TCPSession, core::Message, core::Message>;
+template class MessageHandler<UDSSession, Measurement, util::Void>;
 
 } // namespace glinthawk

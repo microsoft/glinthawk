@@ -8,6 +8,11 @@ AlwaysBreakAfterDefinitionReturnType: None
 SpaceBeforeCpp11BracedList: true
 BreakBeforeBinaryOperators: All
 AllowShortFunctionsOnASingleLine: All
+AllowShortCaseLabelsOnASingleLine: true
+AllowShortBlocksOnASingleLine: true
+RequiresClausePosition: OwnLine
+IndentRequiresClause: false
+AllowShortCompoundRequirementOnASingleLine: true
 ---
 Language: Proto
 BasedOnStyle: Mozilla
@@ -18,4 +23,3 @@ AlwaysBreakAfterDefinitionReturnType: None
 SpaceBeforeCpp11BracedList: true
 BreakBeforeBinaryOperators: All
 AllowShortFunctionsOnASingleLine: All
-...

@@ -23,8 +23,9 @@ public:
     InferenceState,
     ProcessPrompts,
     SetRoute,
-
     PromptCompleted,
+    __deprecated__WorkerStats, // DEPRECATED
+    PushDummyPrompts,
 
     __COUNT
   };
@@ -39,8 +40,9 @@ public:
     "InferenceState",
     "ProcessPrompts",
     "SetRoute",
-
     "PromptCompleted",
+    "WorkerStats",
+    "PushDummyPrompts",
   };
 
   constexpr static size_t HEADER_LENGTH = 5;

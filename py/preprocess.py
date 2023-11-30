@@ -5,8 +5,8 @@ import sys
 import logging
 import multiprocessing as mp
 
-from preprocess.tokenizer import Tokenizer
-from preprocess.serdes import serialize
+from common.tokenizer import Tokenizer
+from common.serdes import serialize
 
 logging.basicConfig(level=logging.INFO)
 

@@ -1,15 +1,21 @@
 #pragma once
 
-#include "models/common/model.hh"
 #include <filesystem>
+#include <fstream>
+#include <limits>
 #include <memory>
 #include <optional>
+#include <sstream>
 #include <string>
 #include <unordered_map>
 #include <vector>
 
+#include "models/common/model.hh"
+#include "variants.hh"
+
 #ifdef GLINTHAWK_CUDA_ENABLED
-#include "cuda_runtime.h"
+#include <cuda_fp16.h>
+#include <cuda_runtime.h>
 #include <curand.h>
 #include <curand_kernel.h>
 #endif
@@ -18,39 +24,26 @@ namespace glinthawk::models::llama2 {
 
 constexpr size_t MAX_BATCH_SIZE = 1024;
 
-struct Config
+template<typename Config>
+requires ModelConfig<Config>
+struct Settings
 {
-  Config() {}
+  Settings() {}
 
-  Config( const std::filesystem::path& config_file,
-          const uint32_t start_layer,
-          const uint32_t end_layer,
-          uint64_t concurrency_limit_ );
+  Settings( const std::filesystem::path& config_file,
+            const uint32_t start_layer,
+            const uint32_t end_layer,
+            uint64_t concurrency_limit_ );
 
   std::string to_string() const;
 
   /// @brief Size of the config stored on disk (in bytes)
   static size_t config_size() { return sizeof( int32_t ) * 7; }
+  uint64_t n_layers_loaded() const { return end_layer_num - start_layer_num + 1; }
 
-  uint64_t dim {};                  // transformer dimension
-  uint64_t kv_dim {};               // key/value dimension
-  uint64_t hidden_dim {};           // for ffn layers
-  uint64_t n_layers {};             // total number of layers
-  uint64_t head_size {};            // dimension of each head
-  uint64_t n_heads {};              // number of query heads
-  uint64_t n_kv_heads {};           // number of key/value heads (can be < query heads because of multiquery)
-  uint64_t gqa_size {};             // GQA sharing rate
-  uint64_t vocab_size {};           // vocabulary size (byte-level)
-  uint64_t seq_len {};              // max sequence length
-  uint64_t concurrency_limit { 1 }; // max concurrent inference size // XXX(sadjad): I don't like this!
-
-  // which layers to serve
   uint64_t start_layer_num {};
   uint64_t end_layer_num {};
-
-  bool wcls_present { false };
-
-  uint64_t n_layers_loaded() const { return end_layer_num - start_layer_num + 1; }
+  uint64_t concurrency_limit { 1 }; // max concurrent inference size
 };
 
 class Vocabulary
@@ -67,18 +60,24 @@ public:
   std::string get_word( const int token ) const;
 };
 
-template<typename DType>
+template<typename Config, typename DType>
+requires ModelConfig<Config>
 struct BaseWeights
 {
   BaseWeights() = default;
-  BaseWeights( const Config& config, const DType* base_weights );
+  BaseWeights( const DType* base_weights );
 
   BaseWeights( const BaseWeights& ) = delete;
   BaseWeights operator=( const BaseWeights& ) = delete;
   BaseWeights( BaseWeights&& ) = default;
   BaseWeights& operator=( BaseWeights&& ) = default;
 
-  static size_t base_size( const Config& config );
+  static consteval size_t base_size()
+  {
+    return sizeof( DType )
+           * ( Config::vocab_size * Config::dim + Config::dim + Config::seq_len * Config::dim / Config::n_heads
+               + ( Config::wcls_present ? ( Config::vocab_size * Config::dim ) : 0 ) );
+  }
 
   const DType* token_embedding_table {}; // (vocab_size, dim)
   const DType* rms_final_weight {};      // (dim,)
@@ -91,18 +90,24 @@ struct BaseWeights
   const DType* wcls {};
 };
 
-template<typename DType>
+template<typename Config, typename DType>
+requires ModelConfig<Config>
 struct LayerWeights
 {
   LayerWeights() = default;
-  LayerWeights( const Config& config, const DType* model );
+  LayerWeights( const DType* model );
 
   LayerWeights( const LayerWeights& ) = delete;
   LayerWeights operator=( const LayerWeights& ) = delete;
   LayerWeights( LayerWeights&& ) = default;
   LayerWeights& operator=( LayerWeights&& ) = default;
 
-  static size_t layer_size( const Config& config );
+  static consteval size_t layer_size()
+  {
+    return sizeof( DType )
+           * ( 2 * Config::dim + 2 * Config::dim * Config::dim + 2 * Config::dim * Config::kv_dim
+               + 3 * Config::dim * Config::hidden_dim );
+  }
 
   // weights for rmsnorms
   const DType* rms_att_weight { nullptr }; // (dim) rmsnorm weights
@@ -121,18 +126,19 @@ struct LayerWeights
 };
 
 /// @brief This class acts as the scratchpad for the computations
-template<typename DType>
+template<typename Config, typename DType>
+requires ModelConfig<Config>
 struct RunState
 {
   RunState() = default;
-  RunState( const Config& config, DType* buffer );
+  RunState( const Settings<Config>& settings, DType* buffer );
 
   RunState( const RunState& ) = delete;
   RunState operator=( const RunState& ) = delete;
   RunState( RunState&& ) = default;
   RunState& operator=( RunState&& ) = default;
 
-  static size_t state_size( const Config& config );
+  static size_t state_size( const Settings<Config>& settings );
 
   DType* buffer_ {};      // we use this buffer for everything, including activations
   DType* x {};            // activation at current time stamp (B, dim)
@@ -161,53 +167,53 @@ struct RunState
 };
 
 /// @brief InferenceContext for Llama2 model is the KV-cache
-template<typename DType>
+template<typename Config, typename DType>
+requires ModelConfig<Config>
 struct InferenceContext
 {
   // TODO: add context state here
-  static size_t context_size( const Config& config );
+  static size_t context_size( const Settings<Config>& settings );
 
   DType* buffer_ { nullptr };
-  DType* key( const Config& config, int layer_num, const int token_pos, const int head = 0 );
-  DType* value( const Config& config, int layer_num, const int token_pos, const int head = 0 );
+  DType* key( const Settings<Config>& settings, int layer_num, const int token_pos, const int head = 0 );
+  DType* value( const Settings<Config>& settings, int layer_num, const int token_pos, const int head = 0 );
 
   bool empty();
 };
 
-template<typename DType, typename Context>
+template<typename Config, typename DType, typename Context, typename StorageDeleter = std::default_delete<DType>>
+requires ModelConfig<Config>
 class BaseLlama2 : public glinthawk::models::Model<Context>
 {
+public:
+  using InferenceStateVector = std::vector<InferenceState>;
+  using ContextVector = std::vector<std::shared_ptr<Context>>;
+
 protected:
-  Config config_ {};
+  Settings<Config> settings_ {};
 
-  std::unique_ptr<DType, void ( * )( DType* )> base_weights_buffer_ { nullptr, nullptr };
-  std::unique_ptr<DType, void ( * )( DType* )> layers_buffer_ { nullptr, nullptr };
-  std::unique_ptr<DType, void ( * )( DType* )> run_state_buffer_ { nullptr, nullptr };
+  std::unique_ptr<DType, StorageDeleter> base_weights_buffer_ { nullptr };
+  std::unique_ptr<DType, StorageDeleter> layers_buffer_ { nullptr };
+  std::unique_ptr<DType, StorageDeleter> run_state_buffer_ { nullptr };
 
-  RunState<DType> state_ {};
-  BaseWeights<DType> base_weights_ {};
-  std::vector<LayerWeights<DType>> layer_weights_ {};
+  RunState<Config, DType> state_ {};
+  BaseWeights<Config, DType> base_weights_ {};
+  std::vector<LayerWeights<Config, DType>> layer_weights_ {};
 
-  void init( const Config& config,
-             std::unique_ptr<DType, void ( * )( DType* )>&& base_weights,
-             std::unique_ptr<DType, void ( * )( DType* )>&& layers_weights,
-             std::unique_ptr<DType, void ( * )( DType* )>&& run_state );
+  void init( const Settings<Config>& settings,
+             std::unique_ptr<DType, StorageDeleter>&& base_weights,
+             std::unique_ptr<DType, StorageDeleter>&& layers_weights,
+             std::unique_ptr<DType, StorageDeleter>&& run_state );
 
   BaseLlama2() = default;
 
-  void assert_safe_forward( const std::vector<InferenceState>& inference_states,
-                            const std::vector<std::shared_ptr<Context>>& contexts );
-
-  void assert_safe_pre_attention( const std::vector<InferenceState>& inference_states,
-                                  const std::vector<std::shared_ptr<Context>>& contexts );
-
-  void assert_safe_attention( const std::vector<InferenceState>& inference_states,
-                              const std::vector<std::shared_ptr<Context>>& contexts );
-
-  void assert_safe_post_attention( const std::vector<InferenceState>& inference_states );
+  void assert_safe_forward( const InferenceStateVector& inference_states, const ContextVector& contexts ) const;
+  void assert_safe_pre_attention( const InferenceStateVector& inference_states, const ContextVector& contexts ) const;
+  void assert_safe_attention( const InferenceStateVector& inference_states, const ContextVector& contexts ) const;
+  void assert_safe_post_attention( const InferenceStateVector& inference_states ) const;
 
 public:
-  virtual ~BaseLlama2() = default;
+  ~BaseLlama2() = default;
 
   BaseLlama2( BaseLlama2&& ) = default;
   BaseLlama2& operator=( BaseLlama2&& ) = default;
@@ -215,15 +221,14 @@ public:
   BaseLlama2& operator=( const BaseLlama2& ) = delete;
 
   using ConfigType = Config;
+  using SettingsType = Settings<Config>;
   using ContextType = Context;
-  using DataType = DType;
   using TokenizerType = Vocabulary;
 
-  void dummy_forward( InferenceState& inference_state ) override;
+  void dummy_forward( InferenceState& inference_state );
+  bool is_finished( const InferenceState& inference_state );
 
-  bool is_finished( const InferenceState& inference_state ) override;
-
-  Config config() const { return config_; }
+  Settings<Config> settings() const { return settings_; }
 };
 
 } // namespace glinthawk::models::llama2

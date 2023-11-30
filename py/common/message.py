@@ -18,8 +18,9 @@ class Message:
         InferenceState = enum.auto()
         ProcessPrompts = enum.auto()
         SetRoute = enum.auto()
-
         PromptCompleted = enum.auto()
+        WorkerStats = enum.auto()
+        PushDummyPrompts = enum.auto()
 
     def __init__(self, opcode: Union[OpCode, int], payload: bytes):
         if isinstance(opcode, int):
@@ -40,7 +41,6 @@ class Message:
             raise ValueError("Invalid header length")
 
         payload_length, opcode = struct.unpack("!IB", header)
-        print(f"payload_length={payload_length}, opcode={opcode}")
         return [payload_length, opcode]
 
     def __repr__(self):

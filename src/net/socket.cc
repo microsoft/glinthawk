@@ -4,6 +4,7 @@
 
 #include <cstddef>
 #include <stdexcept>
+#include <sys/un.h>
 #include <unistd.h>
 
 using namespace std;
@@ -197,6 +198,24 @@ void Socket::throw_if_error() const
   if ( socket_error ) {
     throw unix_error( "socket error", socket_error );
   }
+}
+
+void UnixDomainSocketStream::bind( const std::filesystem::path& path )
+{
+  sockaddr_un addr;
+  memset( &addr, 0, sizeof( addr ) );
+  addr.sun_family = AF_UNIX;
+  strncpy( addr.sun_path, path.c_str(), sizeof( addr.sun_path ) - 1 );
+  CHECK_SYSCALL( "bind", ::bind( fd_num(), reinterpret_cast<sockaddr*>( &addr ), sizeof( addr ) ) );
+}
+
+void UnixDomainSocketStream::connect( const std::filesystem::path& path )
+{
+  sockaddr_un addr;
+  memset( &addr, 0, sizeof( addr ) );
+  addr.sun_family = AF_UNIX;
+  strncpy( addr.sun_path, path.c_str(), sizeof( addr.sun_path ) - 1 );
+  CHECK_SYSCALL( "connect", ::connect( fd_num(), reinterpret_cast<sockaddr*>( &addr ), sizeof( addr ) ) );
 }
 
 template void Socket::setsockopt( const int level, const int option, const timeval& option_value );

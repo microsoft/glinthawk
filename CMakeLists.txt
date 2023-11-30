@@ -16,6 +16,7 @@ link_libraries ( OpenSSL::SSL )
 find_package ( Glog REQUIRED )
 link_libraries ( glog::glog )
 
+set ( Protobuf_USE_STATIC_LIBS ON )
 find_package ( Protobuf REQUIRED )
 add_subdirectory ( src/message/protobuf )
 link_libraries ( protobuf::libprotobuf )
@@ -32,10 +33,14 @@ file ( GLOB SOURCE
   src/storage/local/*.cc
   src/storage/azure/*.cc
   src/compute/*.cc
+  src/monitoring/*.cc
   src/message/*.cc
   src/worker/*.cc
   src/prompt/*.cc
 )
+
+# XXX not ready yet
+list ( REMOVE_ITEM SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/src/compute/kernel_pipes.cc" )
 
 file ( GLOB_RECURSE MODELS_SOURCE
   src/models/*.cc
@@ -48,27 +53,35 @@ add_library ( glinthawk STATIC ${SOURCE} )
 link_libraries ( glinthawk )
 link_libraries ( glinthawk_proto )
 
-add_executable ( profile-cpu src/frontend/profile-cpu.cc )
-add_executable ( infer-layered-cpu src/frontend/infer-layered-cpu.cc )
-add_executable ( infer-cpu src/frontend/infer-cpu.cc )
-add_executable ( worker-cpu src/frontend/worker-cpu.cc )
 add_executable ( azure-storage-test src/frontend/azure-storage-test.cc )
+add_executable ( telegraf-test src/frontend/telegraf-test.cc )
 
-# Tests
-#add_executable ( test_ops_cpu tests/ops_cpu.cc )
-#target_link_libraries ( test_ops_cpu GTest::gtest )
-#gtest_discover_tests ( test_ops_cpu )
+add_executable ( worker-cpu-fp16 src/frontend/worker.cc )
+add_executable ( worker-cpu-fp32 src/frontend/worker.cc )
+target_compile_definitions ( worker-cpu-fp16 PRIVATE TARGET_PLATFORM_CPU TARGET_DTYPE_FLOAT16  )
+target_compile_definitions ( worker-cpu-fp32 PRIVATE TARGET_PLATFORM_CPU TARGET_DTYPE_FLOAT32 )
 
+add_executable ( profile-cpu-fp16 src/frontend/profile.cc )
+add_executable ( profile-cpu-fp32 src/frontend/profile.cc )
+target_compile_definitions ( profile-cpu-fp16 PRIVATE TARGET_PLATFORM_CPU TARGET_DTYPE_FLOAT16 )
+target_compile_definitions ( profile-cpu-fp32 PRIVATE TARGET_PLATFORM_CPU TARGET_DTYPE_FLOAT32 )
+
+add_executable ( infer-cpu-fp16 src/frontend/infer.cc )
+add_executable ( infer-cpu-fp32 src/frontend/infer.cc )
+target_compile_definitions ( infer-cpu-fp16 PRIVATE TARGET_PLATFORM_CPU TARGET_DTYPE_FLOAT16 )
+target_compile_definitions ( infer-cpu-fp32 PRIVATE TARGET_PLATFORM_CPU TARGET_DTYPE_FLOAT32 )
 
 if ( CUDA_ENABLED )
-  add_executable ( profile-cuda src/frontend/profile-cuda.cc )
-  add_executable ( infer-cuda src/frontend/infer-cuda.cc )
-  add_executable ( infer-layered-cuda src/frontend/infer-layered-cuda.cc )
-  add_executable ( profile-offload src/frontend/profile-offload.cc )
-  add_executable ( worker-cuda src/frontend/worker-cuda.cc )
 
-  # Tests
-  add_executable ( test_ops_cuda tests/ops_cuda.cu )
-  target_link_libraries ( test_ops_cuda GTest::gtest )
-  gtest_discover_tests ( test_ops_cuda )
+  add_executable ( profile-offload src/frontend/profile-offload.cc )
+
+  add_executable ( worker-cuda-fp16 src/frontend/worker.cc )
+  target_compile_definitions ( worker-cuda-fp16 PRIVATE TARGET_PLATFORM_CUDA TARGET_DTYPE_FLOAT16 )
+
+  add_executable ( profile-cuda-fp16 src/frontend/profile.cc )
+  target_compile_definitions ( profile-cuda-fp16 PRIVATE TARGET_PLATFORM_CUDA TARGET_DTYPE_FLOAT16 )
+
+  add_executable ( infer-cuda-fp16 src/frontend/infer.cc )
+  target_compile_definitions ( infer-cuda-fp16 PRIVATE TARGET_PLATFORM_CUDA TARGET_DTYPE_FLOAT16 )
+
 endif ()
