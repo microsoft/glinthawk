@@ -2,7 +2,6 @@
 
 #include <filesystem>
 #include <fstream>
-#include <glog/logging.h>
 #include <limits>
 #include <memory>
 #include <optional>
@@ -226,7 +225,6 @@ public:
   using ConfigType = Config;
   using SettingsType = Settings<Config>;
   using ContextType = Context;
-  using DataType = DType;
   using TokenizerType = Vocabulary;
 
   void dummy_forward( InferenceState& inference_state ) override;

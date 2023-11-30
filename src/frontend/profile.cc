@@ -70,7 +70,7 @@ int main( int argc, char* argv[] )
         PromptID id;
         util::digest::sha256( to_string( j ), id );
 
-        models::InferenceState state;
+        models::InferenceState state { DataType::_GLINTHAWK_DTYPE_NAME_ };
 
         state.set_prompt_id( id );
         state.set_token_pos( i );
@@ -79,17 +79,8 @@ int main( int argc, char* argv[] )
 
         if ( start_slice == 0 ) {
           state.set_token( 5 );
-          models::DataBuffer activations { models::SerializedDataType::Type::_GLINTHAWK_DTYPE_NAME_, nullptr, 0 };
-          state.set_activations( move( activations ) );
         } else {
-          models::DataBuffer activations {
-            models::SerializedDataType::Type::_GLINTHAWK_DTYPE_NAME_,
-            make_unique<uint8_t[]>(
-              dim
-              * sizeof(
-                models::SerializedDataType { models::SerializedDataType::Type::_GLINTHAWK_DTYPE_NAME_ }.size() ) ),
-            dim
-          };
+          DataBuffer activations { dim * DataTypeSize( DataType::_GLINTHAWK_DTYPE_NAME_ ) };
           state.set_activations( move( activations ) );
         }
 

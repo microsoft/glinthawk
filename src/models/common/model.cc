@@ -7,6 +7,47 @@
 
 using namespace std;
 
+ostream& operator<<( ostream& os, const glinthawk::DataType& v )
+{
+  switch ( v ) {
+    case glinthawk::DataType::Float16: os << "FP16"; break;
+    case glinthawk::DataType::Float32: os << "FP32"; break;
+  }
+  return os;
+}
+
+ostream& operator<<( ostream& os, const glinthawk::DataBuffer& v )
+{
+  os << "DataBuffer{}.len=" << v.len() << " bytes";
+  return os;
+}
+
+ostream& operator<<( ostream& os, const glinthawk::models::InferenceState::Stage& v )
+{
+  using namespace glinthawk::models;
+
+  switch ( v ) {
+    case InferenceState::Stage::PreAttention: os << "Pre"; break;
+    case InferenceState::Stage::Attention: os << "Att"; break;
+    case InferenceState::Stage::PostAttention: os << "Post"; break;
+  }
+  return os;
+}
+
+namespace glinthawk {
+
+size_t DataTypeSize( const DataType dtype )
+{
+  switch ( dtype ) {
+    case DataType::Float16: return 2;
+    case DataType::Float32: return 4;
+  }
+
+  throw std::runtime_error( "Unknown DataType" );
+}
+
+} // namespace glinthawk
+
 namespace glinthawk::models {
 
 namespace {
@@ -28,47 +69,6 @@ void _put_and_advance( PtrType*& ptr, const FieldType& field )
 
 } // namespace
 
-ostream& operator<<( ostream& os, const SerializedDataType::Type& v )
-{
-  switch ( v ) {
-    case SerializedDataType::Type::Float16:
-      os << "FP16";
-      break;
-    case SerializedDataType::Type::Float32:
-      os << "FP32";
-      break;
-  }
-  return os;
-}
-
-std::ostream& operator<<( std::ostream& os, const SerializedDataType& v )
-{
-  os << v.dtype;
-  return os;
-}
-
-ostream& operator<<( ostream& os, const DataBuffer& v )
-{
-  os << "activation(" << v.dtype << ").len=" << v.len;
-  return os;
-}
-
-ostream& operator<<( ostream& os, const InferenceState::Stage& v )
-{
-  switch ( v ) {
-    case InferenceState::Stage::PreAttention:
-      os << "Pre";
-      break;
-    case InferenceState::Stage::Attention:
-      os << "Att";
-      break;
-    case InferenceState::Stage::PostAttention:
-      os << "Post";
-      break;
-  }
-  return os;
-}
-
 InferenceState::InferenceState( const string_view serialized )
 {
   auto ptr = serialized.data();
@@ -82,14 +82,11 @@ InferenceState::InferenceState( const string_view serialized )
   prompt_length_ = _get_and_advance<decltype( prompt_length_ )>( ptr );
   temperature_ = _get_and_advance<decltype( temperature_ )>( ptr );
   finished_ = _get_and_advance<decltype( finished_ )>( ptr );
+  dtype_ = static_cast<DataType>( _get_and_advance<underlying_type_t<DataType>>( ptr ) );
 
-  activations_.dtype.dtype
-    = static_cast<SerializedDataType::Type>( _get_and_advance<underlying_type_t<SerializedDataType::Type>>( ptr ) );
-  activations_.len = _get_and_advance<decltype( activations_.len )>( ptr );
-  activations_.ptr = make_unique<uint8_t[]>( activations_.len * activations_.dtype.size() );
-
-  memcpy( activations_.ptr.get(), ptr, activations_.len * activations_.dtype.size() );
-  ptr += activations_.len * activations_.dtype.size();
+  const auto len_data = _get_and_advance<uint64_t>( ptr );
+  activations_ = DataBuffer { len_data, ptr };
+  ptr += len_data;
 
   const auto num_workers = _get_and_advance<uint32_t>( ptr );
 
@@ -126,11 +123,11 @@ string InferenceState::serialize() const
   _put_and_advance( ptr, temperature_ );
   _put_and_advance( ptr, finished_ );
 
-  _put_and_advance( ptr, static_cast<underlying_type_t<SerializedDataType::Type>>( activations_.dtype.dtype ) );
-  _put_and_advance( ptr, activations_.len );
+  _put_and_advance( ptr, static_cast<underlying_type_t<DataType>>( dtype_ ) );
+  _put_and_advance( ptr, static_cast<uint64_t>( activations_.len() ) );
 
-  memcpy( ptr, activations_.ptr.get(), activations_.len * activations_.dtype.size() );
-  ptr += activations_.len * activations_.dtype.size();
+  memcpy( ptr, activations_.data(), activations_.len() );
+  ptr += activations_.len();
 
   _put_and_advance( ptr, static_cast<uint32_t>( layer_workers_.size() ) );
 
@@ -146,17 +143,11 @@ string InferenceState::serialize() const
 string InferenceState::to_string() const
 {
   ostringstream oss;
-  oss << "InferenceState("
-      << "prompt_id=" << prompt_id_.base58digest().substr( 0, 8 ) << ", "
-      << "token=" << token_ << ", "
-      << "token_pos=" << token_pos_ << ", "
-      << "next_layer=" << next_layer_ << ", "
-      << "next_stage=" << next_stage_ << ", "
-      << "prompt_len=" << prompt_length_ << ", "
-      << "temperature=" << temperature_ << ", "
-      << "finished=" << finished_ << ", "
-      << "activations.len=" << activations_ << ", "
-      << "peers={";
+  oss << "InferenceState(" << "prompt_id=" << prompt_id_.base58digest().substr( 0, 8 ) << ", " << "token=" << token_
+      << ", " << "token_pos=" << token_pos_ << ", " << "next_layer=" << next_layer_ << ", "
+      << "next_stage=" << next_stage_ << ", " << "prompt_len=" << prompt_length_ << ", "
+      << "temperature=" << temperature_ << ", " << "finished=" << finished_ << ", " << "dtype=" << dtype_ << ", "
+      << "activations.len=" << activations_ << ", " << "peers={";
 
   for ( auto& [layer, address] : layer_workers_ ) {
     oss << " (" << layer << " -> " << address.to_string() << ")";
@@ -178,9 +169,9 @@ size_t InferenceState::serialized_size() const
          + sizeof( prompt_length_ )                                                 /* prompt_length_ */
          + sizeof( temperature_ )                                                   /* temperature_ */
          + sizeof( finished_ )                                                      /* finished_ */
-         + sizeof( SerializedDataType::Type )                                       /* activations_.dtype.dtype */
-         + sizeof( activations_.len )                                               /* activations_.len */
-         + activations_.dtype.size() * activations_.len                             /* activations_ data */
+         + sizeof( DataType )                                                       /* dtype_ */
+         + sizeof( uint64_t /* activations_.len() */ )                              /* activations_.len */
+         + activations_.len()                                                       /* activations_ data */
          + sizeof( uint32_t )                                                       /* layer_workers_.size() */
          + layer_workers_.size() * ( 2 * sizeof( uint32_t ) + sizeof( uint16_t ) ); /* layer_workers_ */
 }

@@ -21,54 +21,53 @@ namespace glinthawk {
 using PromptID = glinthawk::util::digest::SHA256Hash;
 using ModelID = uint32_t;
 
-} // namespace glinthawk
-
-namespace glinthawk::models {
-
-class SerializedDataType
+enum class DataType : uint8_t
 {
-public:
-  enum class Type : uint8_t
-  {
-    Float16,
-    Float32
-  };
-
-public:
-  SerializedDataType( const Type t )
-    : dtype( t )
-  {
-  }
-
-  size_t size() const
-  {
-    switch ( dtype ) {
-      case Type::Float16: return 2;
-      case Type::Float32: return 4;
-    }
-
-    throw std::runtime_error( "invalid dtype" );
-  }
-
-  Type dtype;
+  Float16 = 0,
+  Float32 = 1
 };
 
-static_assert( sizeof( SerializedDataType ) == sizeof( SerializedDataType::Type ) );
+size_t DataTypeSize( const DataType dtype );
 
 struct DataBuffer
 {
-  SerializedDataType dtype { SerializedDataType::Type::Float32 };
-  std::unique_ptr<uint8_t[]> ptr { nullptr };
-  uint64_t len { 0 };
+private:
+  std::unique_ptr<uint8_t[]> ptr_ { nullptr };
 
+  /// Length of the buffer in bytes
+  uint64_t len_ { 0 };
+
+public:
   DataBuffer() = default;
-  DataBuffer( const SerializedDataType other_dtype, std::unique_ptr<uint8_t[]>&& other_ptr, const uint64_t other_len )
-    : dtype( other_dtype )
-    , ptr( std::move( other_ptr ) )
-    , len( other_len )
+
+  DataBuffer( const size_t n )
+    : ptr_( std::make_unique<uint8_t[]>( n ) )
+    , len_( n )
   {
   }
+
+  template<typename T>
+  DataBuffer( const size_t n, const T* data )
+    : ptr_( std::make_unique<uint8_t[]>( n ) )
+    , len_( n )
+  {
+    memcpy( ptr_.get(), data, n );
+  }
+
+  DataBuffer( std::unique_ptr<uint8_t[]>&& other_ptr, const uint64_t other_len )
+    : ptr_( std::move( other_ptr ) )
+    , len_( other_len )
+  {
+  }
+
+  uint64_t len() const { return len_; }
+  uint8_t* data() { return ptr_.get(); }
+  const uint8_t* data() const { return ptr_.get(); }
 };
+
+} // namespace glinthawk
+
+namespace glinthawk::models {
 
 class InferenceState
 {
@@ -78,7 +77,6 @@ public:
     PreAttention,
     Attention,
     PostAttention
-
   };
 
 private:
@@ -93,6 +91,7 @@ private:
   float temperature_ { 0.0f };
   bool finished_ { false };
 
+  DataType dtype_ { DataType::Float32 };
   DataBuffer activations_ {};
 
   // mapping from layer to worker address for this inference state
@@ -101,9 +100,21 @@ private:
   size_t serialized_size() const;
 
 public:
-  InferenceState() {}
+  InferenceState() = default;
+
+  InferenceState( const DataType dtype )
+    : dtype_( dtype )
+  {
+  }
 
   InferenceState( const std::string_view serialized_state );
+
+  /* movable, not copyable */
+  InferenceState( const InferenceState& other ) = delete;
+  InferenceState& operator=( const InferenceState& other ) = delete;
+  InferenceState( InferenceState&& other ) = default;
+  InferenceState& operator=( InferenceState&& other ) = default;
+
   std::string serialize() const;
   std::string to_string() const;
 
@@ -118,6 +129,10 @@ public:
   float temperature() const { return temperature_; }
   bool finished() const { return finished_; }
   const decltype( layer_workers_ )& layer_workers() const { return layer_workers_; }
+  DataType dtype() const { return dtype_; }
+
+  DataBuffer& activations() { return activations_; }
+  const DataBuffer& activations() const { return activations_; }
 
   void set_prompt_id( const PromptID prompt_id ) { prompt_id_ = prompt_id; }
   void set_model_id( const ModelID model_id ) { model_id_ = model_id; }
@@ -133,7 +148,6 @@ public:
 
   glinthawk::net::Address next_worker() const;
   void erase_from_workers( const uint32_t next_layer );
-  const DataBuffer& activations() const { return activations_; }
 };
 
 template<typename Context>
@@ -169,9 +183,8 @@ public:
   virtual std::vector<InferenceState> post_attention_forward( std::vector<InferenceState>&& inference_states ) = 0;
 };
 
-std::ostream& operator<<( std::ostream& os, const SerializedDataType::Type& v );
-std::ostream& operator<<( std::ostream& os, const SerializedDataType& v );
-std::ostream& operator<<( std::ostream& os, const DataBuffer& v );
-std::ostream& operator<<( std::ostream& os, const InferenceState::Stage& v );
-
 } // namespace glinthawk::models
+
+std::ostream& operator<<( std::ostream& os, const glinthawk::DataType& v );
+std::ostream& operator<<( std::ostream& os, const glinthawk::DataBuffer& v );
+std::ostream& operator<<( std::ostream& os, const glinthawk::models::InferenceState::Stage& v );

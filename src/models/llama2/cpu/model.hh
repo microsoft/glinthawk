@@ -43,7 +43,6 @@ public:
   using ContextType = BaseModel::ContextType;
   using SettingsType = BaseModel::SettingsType;
   using ConfigType = BaseModel::ConfigType;
-  using DataType = BaseModel::DataType;
   using TokenizerType = BaseModel::TokenizerType;
 
 private:

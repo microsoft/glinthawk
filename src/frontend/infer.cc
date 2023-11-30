@@ -71,14 +71,13 @@ int main( int argc, char* argv[] )
       }
 
       for ( size_t i = 0; i < prompt_tokens.size(); i++ ) {
-        models::InferenceState state;
+        models::InferenceState state { DataType::_GLINTHAWK_DTYPE_NAME_ };
 
         state.set_prompt_id( id );
         state.set_token( prompt_tokens[i] );
         state.set_token_pos( i );
         state.set_next_layer( 0 );
         state.set_temperature( temp );
-        state.set_activations( { models::SerializedDataType::Type::_GLINTHAWK_DTYPE_NAME_, nullptr, 0 } );
 
         input_states.emplace_back( state.serialize() );
       }
@@ -116,7 +115,6 @@ int main( int argc, char* argv[] )
         for ( auto& state : output_states ) {
           if ( state.token_pos() == prompt_tokens.size() && state.token_pos() < seq_len
                && state.token() != 2 /* EOS */ ) {
-            state.set_activations( { models::SerializedDataType::Type::_GLINTHAWK_DTYPE_NAME_, nullptr, 0 } );
             input_states.emplace_back( state.serialize() );
             if ( state.prompt_id() == id_print )
               cout << vocabulary.get_word( state.token() ) << flush;
@@ -125,7 +123,6 @@ int main( int argc, char* argv[] )
       } else {
         // (2) let's print the output
         for ( auto& state : output_states ) {
-          state.set_activations( { models::SerializedDataType::Type::_GLINTHAWK_DTYPE_NAME_, nullptr, 0 } );
           if ( state.prompt_id() == id_print )
             cout << vocabulary.get_word( state.token() ) << flush;
           if ( state.token_pos() < seq_len && state.token() != 2 /* EOS */ )

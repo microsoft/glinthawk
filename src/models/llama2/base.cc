@@ -1,5 +1,7 @@
 #include "base.hh"
 
+#include <glog/logging.h>
+
 #ifdef GLINTHAWK_CUDA_ENABLED
 #include "models/common/cuda/ops.cuh"
 #endif
@@ -331,19 +333,16 @@ void BaseLlama2<Config, DType, Context, StorageDeleter>::assert_safe_forward(
   CHECK_LE( next_layer_batch, settings_.end_layer_num ) << "next layer in batch can not be after end layer";
 
   for ( auto& item : inference_states ) {
-    CHECK_EQ( item.next_stage(), InferenceState::Stage::PreAttention ) << "next_stage must be pre attention";
+    CHECK( item.next_stage() == InferenceState::Stage::PreAttention ) << "next_stage must be pre attention";
     CHECK_EQ( item.next_layer(), next_layer_batch ) << "next_layer must be the same across batch";
     if constexpr ( std::is_same_v<DType, _Float16> )
-      CHECK_EQ( item.activations().dtype.dtype, SerializedDataType::Type::Float16 )
-        << "Inference State data type does not match model data type";
+      CHECK_EQ( item.dtype(), DataType::Float16 ) << "Inference State data type does not match model data type";
 #ifdef GLINTHAWK_CUDA_ENABLED
     if constexpr ( std::is_same_v<DType, __half> )
-      CHECK_EQ( item.activations().dtype.dtype, SerializedDataType::Type::Float16 )
-        << "Inference State data type does not match model data type";
+      CHECK_EQ( item.dtype(), DataType::Float16 ) << "Inference State data type does not match model data type";
 #endif
     if constexpr ( std::is_same_v<DType, float> )
-      CHECK_EQ( item.activations().dtype.dtype, SerializedDataType::Type::Float32 )
-        << "Inference State data type does not match model data type";
+      CHECK_EQ( item.dtype(), DataType::Float32 ) << "Inference State data type does not match model data type";
     CHECK_LT( item.token_pos(), Config::seq_len ) << "token position cannot be larger than sequence length";
   }
   CHECK_EQ( inference_states.size(), contexts.size() ) << "token size must be the same as context size";
@@ -364,19 +363,16 @@ void BaseLlama2<Config, DType, Context, StorageDeleter>::assert_safe_pre_attenti
   CHECK_LE( next_layer_batch, settings_.end_layer_num ) << "next layer in batch can not be after end layer";
 
   for ( auto& item : inference_states ) {
-    CHECK_EQ( item.next_stage(), InferenceState::Stage::PreAttention ) << "next_stage must be pre attention";
+    CHECK( item.next_stage() == InferenceState::Stage::PreAttention ) << "next_stage must be pre attention";
     CHECK_EQ( item.next_layer(), next_layer_batch ) << "next_layer must be the same across batch";
     if constexpr ( std::is_same_v<DType, _Float16> )
-      CHECK_EQ( item.activations().dtype.dtype, SerializedDataType::Type::Float16 )
-        << "Inference State data type does not match model data type";
+      CHECK_EQ( item.dtype(), DataType::Float16 ) << "Inference State data type does not match model data type";
 #ifdef GLINTHAWK_CUDA_ENABLED
     if constexpr ( std::is_same_v<DType, __half> )
-      CHECK_EQ( item.activations().dtype.dtype, SerializedDataType::Type::Float16 )
-        << "Inference State data type does not match model data type";
+      CHECK_EQ( item.dtype(), DataType::Float16 ) << "Inference State data type does not match model data type";
 #endif
     if constexpr ( std::is_same_v<DType, float> )
-      CHECK_EQ( item.activations().dtype.dtype, SerializedDataType::Type::Float32 )
-        << "Inference State data type does not match model data type";
+      CHECK_EQ( item.dtype(), DataType::Float32 ) << "Inference State data type does not match model data type";
     CHECK_LT( item.token_pos(), Config::seq_len ) << "token position cannot be larger than sequence length";
   }
   CHECK_EQ( inference_states.size(), contexts.size() ) << "token size must be the same as context size";
@@ -397,7 +393,7 @@ void BaseLlama2<Config, DType, Context, StorageDeleter>::assert_safe_attention(
   CHECK_LE( next_layer_batch, settings_.end_layer_num ) << "next layer in batch can not be after end layer";
 
   for ( auto& item : inference_states ) {
-    CHECK_EQ( item.next_stage(), InferenceState::Stage::Attention ) << "next_stage must be attention";
+    CHECK( item.next_stage() == InferenceState::Stage::Attention ) << "next_stage must be attention";
     CHECK_LT( item.token_pos(), Config::seq_len ) << "token position cannot be larger than sequence length";
   }
   CHECK_EQ( inference_states.size(), contexts.size() ) << "token size must be the same as context size";
@@ -417,19 +413,16 @@ void BaseLlama2<Config, DType, Context, StorageDeleter>::assert_safe_post_attent
   CHECK_LE( next_layer_batch, settings_.end_layer_num ) << "next layer in batch can not be after end layer";
 
   for ( auto& item : inference_states ) {
-    CHECK_EQ( item.next_stage(), InferenceState::Stage::PostAttention ) << "next_stage must be post attention";
+    CHECK( item.next_stage() == InferenceState::Stage::PostAttention ) << "next_stage must be post attention";
     CHECK_EQ( item.next_layer(), next_layer_batch ) << "next_layer must be the same across batch";
     if constexpr ( std::is_same_v<DType, _Float16> )
-      CHECK_EQ( item.activations().dtype.dtype, SerializedDataType::Type::Float16 )
-        << "Inference State data type does not match model data type";
+      CHECK_EQ( item.dtype(), DataType::Float16 ) << "Inference State data type does not match model data type";
 #ifdef GLINTHAWK_CUDA_ENABLED
     if constexpr ( std::is_same_v<DType, __half> )
-      CHECK_EQ( item.activations().dtype.dtype, SerializedDataType::Type::Float16 )
-        << "Inference State data type does not match model data type";
+      CHECK_EQ( item.dtype(), DataType::Float16 ) << "Inference State data type does not match model data type";
 #endif
     if constexpr ( std::is_same_v<DType, float> )
-      CHECK_EQ( item.activations().dtype.dtype, SerializedDataType::Type::Float32 )
-        << "Inference State data type does not match model data type";
+      CHECK_EQ( item.dtype(), DataType::Float32 ) << "Inference State data type does not match model data type";
     CHECK_LT( item.token_pos(), Config::seq_len ) << "token position cannot be larger than sequence length";
   }
 }
