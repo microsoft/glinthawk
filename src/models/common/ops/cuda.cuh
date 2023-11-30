@@ -28,7 +28,7 @@ constexpr size_t AMRBS = 128; /* argmax reduce block size */
 template<typename DType>
 class Operations
 {
-private:
+protected:
   void CHECK_CUBLAS( const cublasStatus_t err, const std::source_location location = std::source_location::current() );
   void CHECK_CUDA( const cudaError_t err, const source_location location = std::source_location::current() );
 

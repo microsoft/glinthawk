@@ -5,6 +5,8 @@
 #include <cstring>
 #include <vector>
 
+#include "models/types.hh"
+
 namespace glinthawk::models::common {
 
 namespace {

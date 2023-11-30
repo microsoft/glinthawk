@@ -53,6 +53,11 @@ public:
   const uint8_t* data() const { return ptr_.get(); }
 };
 
+/*
+  Definition of host is where the networking stack is running and device is where the compute kernel is running.
+  For example, in the case of a GPU, host is the CPU and device is the GPU.
+  For example, in the case of a CPU, host is the CPU and device is the CPU.
+ */
 enum class CopyType
 {
   HostToDevice,

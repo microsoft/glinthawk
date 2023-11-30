@@ -12,6 +12,7 @@ AllowShortCaseLabelsOnASingleLine: true
 AllowShortBlocksOnASingleLine: true
 RequiresClausePosition: OwnLine
 IndentRequiresClause: false
+RequiresExpressionIndentation: OuterScope
 AllowShortCompoundRequirementOnASingleLine: true
 ---
 Language: Proto
