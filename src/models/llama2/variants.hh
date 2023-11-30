@@ -104,6 +104,11 @@ struct Stories_110M
   constexpr static bool wcls_present = false;
 };
 
+static_assert( ModelConfig<Llama2_70B_Chat> );
+static_assert( ModelConfig<Llama2_13B_Chat> );
+static_assert( ModelConfig<Llama2_7B_Chat> );
+static_assert( ModelConfig<Stories_110M> );
+
 } // namespace configs
 
 } // namespace glinthawk::models::llama2
