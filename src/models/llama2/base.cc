@@ -24,8 +24,10 @@ template<typename T>
 Settings<T>::Settings( const std::filesystem::path& config_file,
                        const uint32_t start_layer,
                        const uint32_t end_layer,
-                       uint64_t concurrency_limit_ )
+                       const uint64_t concurrency_limit_,
+                       const bool randomize_parameters_ )
   : concurrency_limit( concurrency_limit_ )
+  , randomize_parameters( randomize_parameters_ )
 {
   std::ifstream fin { config_file, std::ios::binary };
   CHECK( fin ) << "Failed to open config file: " << config_file;

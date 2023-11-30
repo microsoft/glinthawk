@@ -55,36 +55,32 @@ private:
 public:
   using BaseModel::BaseLlama2;
 
+  using ContextPtr = std::shared_ptr<ContextType>;
+  using StateVector = std::vector<InferenceState>;
+  using ContextVector = std::vector<ContextPtr>;
+
   Llama2( const std::filesystem::path& model_dir,
           const uint32_t start_layer = 0,
           const uint32_t end_layer = std::numeric_limits<uint32_t>::max(),
-          const uint64_t concurrency_limit = 1 );
+          const uint64_t concurrency_limit = 1,
+          const bool randomize_parameters = false );
 
   Llama2( const Llama2& ) = delete;
   Llama2& operator=( const Llama2& ) = delete;
   Llama2( Llama2&& ) = default;
   Llama2& operator=( Llama2&& ) = default;
 
-  ~Llama2() {}
+  ~Llama2() override {}
 
-  InferenceState forward( InferenceState&& inference_state, std::shared_ptr<ContextType> context );
+  InferenceState forward( InferenceState&& inference_state, ContextPtr context ) override;
+  InferenceState pre_attention_forward( InferenceState&& inference_state, ContextPtr context ) override;
+  InferenceState attention_forward( InferenceState&& inference_state, ContextPtr context ) override;
+  InferenceState post_attention_forward( InferenceState&& inference_state ) override;
 
-  std::vector<InferenceState> forward( std::vector<InferenceState>&& inference_states,
-                                       const std::vector<std::shared_ptr<ContextType>>& contexts );
-
-  InferenceState pre_attention_forward( InferenceState&& inference_state, std::shared_ptr<ContextType> context );
-
-  std::vector<InferenceState> pre_attention_forward( std::vector<InferenceState>&& inference_states,
-                                                     const std::vector<std::shared_ptr<ContextType>>& contexts );
-
-  InferenceState attention_forward( InferenceState&& inference_state, std::shared_ptr<ContextType> context );
-
-  std::vector<InferenceState> attention_forward( std::vector<InferenceState>&& inference_states,
-                                                 const std::vector<std::shared_ptr<ContextType>>& contexts );
-
-  InferenceState post_attention_forward( InferenceState&& inference_state );
-
-  std::vector<InferenceState> post_attention_forward( std::vector<InferenceState>&& inference_states );
+  StateVector forward( StateVector&& inference_states, const ContextVector& contexts ) override;
+  StateVector pre_attention_forward( StateVector&& inference_states, const ContextVector& contexts ) override;
+  StateVector attention_forward( StateVector&& inference_states, const ContextVector& contexts ) override;
+  StateVector post_attention_forward( StateVector&& inference_states ) override;
 };
 
 template<typename DType>

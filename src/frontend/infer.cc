@@ -89,7 +89,7 @@ int main( int argc, char* argv[] )
 
     compute::SimpleComputeKernel<compute::Platform::_GLINTHAWK_PLATFORM_NAME_,
                                  compute::DataType::_GLINTHAWK_DTYPE_NAME_>
-      llama { model_dir_path, model_name, 0, std::numeric_limits<uint32_t>::max(), input_states.size() };
+      llama { model_dir_path, model_name, 0, std::numeric_limits<uint32_t>::max(), input_states.size(), false };
 
     const unsigned int seq_len = llama.max_seq_len();
 

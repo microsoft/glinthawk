@@ -33,7 +33,8 @@ struct Settings
   Settings( const std::filesystem::path& config_file,
             const uint32_t start_layer,
             const uint32_t end_layer,
-            uint64_t concurrency_limit_ );
+            const uint64_t concurrency_limit,
+            const bool randomize_parameters );
 
   std::string to_string() const;
 
@@ -44,6 +45,7 @@ struct Settings
   uint64_t start_layer_num {};
   uint64_t end_layer_num {};
   uint64_t concurrency_limit { 1 }; // max concurrent inference size
+  bool randomize_parameters { false };
 };
 
 class Vocabulary
@@ -213,7 +215,7 @@ protected:
   void assert_safe_post_attention( const InferenceStateVector& inference_states ) const;
 
 public:
-  ~BaseLlama2() = default;
+  ~BaseLlama2() override = default;
 
   BaseLlama2( BaseLlama2&& ) = default;
   BaseLlama2& operator=( BaseLlama2&& ) = default;
@@ -225,8 +227,8 @@ public:
   using ContextType = Context;
   using TokenizerType = Vocabulary;
 
-  void dummy_forward( InferenceState& inference_state );
-  bool is_finished( const InferenceState& inference_state );
+  void dummy_forward( InferenceState& inference_state ) override;
+  bool is_finished( const InferenceState& inference_state ) override;
 
   Settings<Config> settings() const { return settings_; }
 };
