@@ -213,7 +213,7 @@ protected:
   void assert_safe_post_attention( const InferenceStateVector& inference_states ) const;
 
 public:
-  ~BaseLlama2() = default;
+  ~BaseLlama2() override = default;
 
   BaseLlama2( BaseLlama2&& ) = default;
   BaseLlama2& operator=( BaseLlama2&& ) = default;
@@ -225,8 +225,8 @@ public:
   using ContextType = Context;
   using TokenizerType = Vocabulary;
 
-  void dummy_forward( InferenceState& inference_state );
-  bool is_finished( const InferenceState& inference_state );
+  void dummy_forward( InferenceState& inference_state ) override;
+  bool is_finished( const InferenceState& inference_state ) override;
 
   Settings<Config> settings() const { return settings_; }
 };

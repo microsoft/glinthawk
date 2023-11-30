@@ -104,23 +104,24 @@ template<typename Context>
 class Model
 {
 public:
-  using InferenceStateVector = std::vector<InferenceState>;
-  using ContextVector = std::vector<std::shared_ptr<Context>>;
+  using ContextPtr = std::shared_ptr<Context>;
+  using StateVector = std::vector<InferenceState>;
+  using ContextVector = std::vector<ContextPtr>;
 
-  ~Model() {}
+  virtual ~Model() = default;
 
-  void dummy_forward( InferenceState& inference_state );
-  bool is_finished( const InferenceState& inference_state );
+  virtual void dummy_forward( InferenceState& inference_state ) = 0;
+  virtual bool is_finished( const InferenceState& inference_state ) = 0;
 
-  InferenceState forward( InferenceState&& inference_state, std::shared_ptr<Context> context );
-  InferenceState pre_attention_forward( InferenceState&& inference_state, std::shared_ptr<Context> context );
-  InferenceState attention_forward( InferenceState&& inference_state, std::shared_ptr<Context> context );
-  InferenceState post_attention_forward( InferenceState&& inference_state );
+  virtual InferenceState forward( InferenceState&& inference_state, ContextPtr context ) = 0;
+  virtual InferenceState pre_attention_forward( InferenceState&& inference_state, ContextPtr context ) = 0;
+  virtual InferenceState attention_forward( InferenceState&& inference_state, ContextPtr context ) = 0;
+  virtual InferenceState post_attention_forward( InferenceState&& inference_state ) = 0;
 
-  InferenceStateVector forward( InferenceStateVector&& inference_states, const ContextVector& contexts );
-  InferenceStateVector pre_attention_forward( InferenceStateVector&& inference_states, const ContextVector& contexts );
-  InferenceStateVector attention_forward( InferenceStateVector&& inference_states, const ContextVector& contexts );
-  InferenceStateVector post_attention_forward( InferenceStateVector&& inference_states );
+  virtual StateVector forward( StateVector&& inference_states, const ContextVector& contexts ) = 0;
+  virtual StateVector pre_attention_forward( StateVector&& inference_states, const ContextVector& contexts ) = 0;
+  virtual StateVector attention_forward( StateVector&& inference_states, const ContextVector& contexts ) = 0;
+  virtual StateVector post_attention_forward( StateVector&& inference_states ) = 0;
 };
 
 } // namespace glinthawk::models
