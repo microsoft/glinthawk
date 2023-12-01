@@ -48,7 +48,7 @@ private:
   void post_attention_ops( const int32_t layer_num );
   void pass_end();
 
-  LlamaOperations<DType> ops_ {};
+  LlamaOperations<Config, DType> ops_ { BaseModel::settings_ };
 
 public:
   using BaseModel::BaseLlama2;

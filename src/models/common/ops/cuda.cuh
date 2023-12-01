@@ -19,6 +19,8 @@
 #include <thrust/functional.h>
 #include <thrust/transform_reduce.h>
 
+#include "models/llama2/base.hh"
+
 namespace glinthawk::models::common::cuda {
 
 constexpr size_t TPB = 64;    /* threads per block */
@@ -68,8 +70,6 @@ public:
              const uint64_t batch_size,
              const bool async = false,
              const CopyType type = CopyType::HostToHost );
-
-  void setup_rng( curandState* rng_state, unsigned long seed, const uint64_t size, const uint64_t batch_size );
 };
 
 static_assert( OperationsConcept<Operations<float>, float> );
@@ -584,17 +584,6 @@ void Operations<DType>::copy( DType* dst,
     CHECK_CUDA( cudaMemcpyAsync( dst, src, batch_size * sizeof( DType ), convert_to_cuda( type ) ) );
   } else {
     CHECK_CUDA( cudaMemcpy( dst, src, batch_size * sizeof( DType ), convert_to_cuda( type ) ) );
-  }
-}
-
-template<typename DType>
-void Operations<DType>::setup_rng( curandState* rng_state,
-                                   unsigned long seed,
-                                   const uint64_t size,
-                                   const uint64_t batch_size )
-{
-  for ( uint64_t i = 0; i < batch_size; i++ ) {
-    setup_rng_kernel<<<div_ceil( size, TPB ), TPB, 0, streams[i]>>>( rng_state + i * size, 1234 );
   }
 }
 

@@ -242,7 +242,9 @@ void Llama2<Config, DType>::pass_end()
 }
 
 template<typename Config, typename DType>
-void extract_batch_token( LlamaOperations<DType>& ops, RunState<Config, DType>& state, const std::vector<float>& temp )
+void extract_batch_token( LlamaOperations<Config, DType>& ops,
+                          RunState<Config, DType>& state,
+                          const std::vector<float>& temp )
 {
   ops.template soft_sample<Config::vocab_size>( state.logits, temp, temp.size() );
   ops.template argmax<Config::vocab_size>( state.argmax_pos, state.logits, state.x, temp.size() );

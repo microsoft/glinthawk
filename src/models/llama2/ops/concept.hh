@@ -12,7 +12,7 @@ namespace glinthawk::models::llama2 {
 namespace {
 constexpr uint64_t UI64 = 1;
 
-template<typename T, typename DType, typename T1 = DType, typename T2 = DType>
+template<typename T, typename DType, typename T1, typename T2, typename Settings>
 concept AdditionalLlamaOperationsConcept = requires( T t,
                                                      T1* t1_ptr,
                                                      T2* t2_ptr,
@@ -22,7 +22,9 @@ concept AdditionalLlamaOperationsConcept = requires( T t,
                                                      const DType* carr[],
                                                      const uint64_t size,
                                                      const uint32_t* int_arr,
-                                                     const CopyType cpt ) {
+                                                     const CopyType cpt,
+                                                     const Settings& s ) {
+  { T( s ) };
   { t.template attention_0_gemm<UI64, UI64, UI64, UI64>( cptr, carr, ptr, size, int_arr ) } -> std::same_as<void>;
   { t.template attention_2_gemm<UI64, UI64, UI64, UI64, UI64>( cptr, carr, ptr, size, int_arr ) } -> std::same_as<void>;
   { t.template attention_softmax<UI64, UI64>( ptr, int_arr, ptr, size ) } -> std::same_as<void>;
@@ -33,8 +35,8 @@ concept AdditionalLlamaOperationsConcept = requires( T t,
 
 }
 
-template<typename T, typename DType, typename T1, typename T2>
+template<typename T, typename DType, typename T1, typename T2, typename Settings>
 concept LlamaOperationsConcept
-  = AdditionalLlamaOperationsConcept<T, DType, T1, T2> && common::OperationsConcept<T, DType>;
+  = AdditionalLlamaOperationsConcept<T, DType, T1, T2, Settings> && common::OperationsConcept<T, DType>;
 
 } // namespace glinthawk::models::common

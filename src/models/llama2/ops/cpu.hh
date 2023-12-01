@@ -1,20 +1,22 @@
 #pragma once
 
+#include <glog/logging.h>
 #include <random>
 #include <type_traits>
-#include <glog/logging.h>
 
 #include "concept.hh"
 #include "models/common/ops/cpu.hh"
+#include "models/llama2/variants.hh"
+#include "models/llama2/base.hh"
 
 namespace glinthawk::models::llama2::cpu {
 
-template<typename DType>
+template<typename Config, typename DType>
+requires ModelConfig<Config>
 class LlamaOperations : public common::cpu::Operations<DType>
 {
 public:
-  using common::cpu::Operations<DType>::Operations;
-
+  LlamaOperations( const Settings<Config>& ) {}
   ~LlamaOperations() {}
 
   template<uint64_t seq_len, uint64_t head_size, uint64_t n_kv_heads, uint64_t gqa_size>
@@ -53,8 +55,17 @@ public:
   void convert_and_copy( DTypeDst* dst, const DTypeSrc* src, const uint64_t size, const CopyType );
 };
 
-static_assert( LlamaOperationsConcept<LlamaOperations<float>, float, float, _Float16> );
-static_assert( LlamaOperationsConcept<LlamaOperations<_Float16>, _Float16, _Float16, float> );
+static_assert( LlamaOperationsConcept<LlamaOperations<configs::Llama2_7B_Chat, float>,
+                                      float,
+                                      float,
+                                      _Float16,
+                                      Settings<configs::Llama2_7B_Chat>> );
+
+static_assert( LlamaOperationsConcept<LlamaOperations<configs::Llama2_7B_Chat, _Float16>,
+                                      _Float16,
+                                      _Float16,
+                                      float,
+                                      Settings<configs::Llama2_7B_Chat>> );
 
 // helper functions are in this anonymous namespace`
 namespace {
@@ -121,13 +132,13 @@ inline void do_rope( const DType* freq_cis_real_row,
 
 }
 
-template<typename DType>
+template<typename Config, typename DType>
 template<uint64_t seq_len, uint64_t head_size, uint64_t n_kv_heads, uint64_t gqa_size>
-void LlamaOperations<DType>::attention_0_gemm( const DType* query,
-                                               const DType* const context_pointers[],
-                                               DType* att,
-                                               const uint64_t batch_size,
-                                               const uint32_t* token_positions )
+void LlamaOperations<Config, DType>::attention_0_gemm( const DType* query,
+                                                       const DType* const context_pointers[],
+                                                       DType* att,
+                                                       const uint64_t batch_size,
+                                                       const uint32_t* token_positions )
 {
   const float scale = 1.0f / sqrtf( head_size );
 
@@ -176,13 +187,13 @@ void LlamaOperations<DType>::attention_0_gemm( const DType* query,
   }
 }
 
-template<typename DType>
+template<typename Config, typename DType>
 template<uint64_t seq_len, uint64_t head_size, uint64_t n_kv_heads, uint64_t gqa_size, uint64_t rounds>
-void LlamaOperations<DType>::attention_2_gemm( const DType* att,
-                                               const DType* const context_pointers[],
-                                               DType* xb,
-                                               const uint64_t batch_size,
-                                               const uint32_t* token_positions )
+void LlamaOperations<Config, DType>::attention_2_gemm( const DType* att,
+                                                       const DType* const context_pointers[],
+                                                       DType* xb,
+                                                       const uint64_t batch_size,
+                                                       const uint32_t* token_positions )
 {
   constexpr uint64_t ld_val = n_kv_heads * head_size * 2;
   constexpr uint64_t ld_att = seq_len;
@@ -230,12 +241,12 @@ void LlamaOperations<DType>::attention_2_gemm( const DType* att,
   }
 }
 
-template<typename DType>
+template<typename Config, typename DType>
 template<uint64_t seq_len, uint64_t n_heads>
-void LlamaOperations<DType>::attention_softmax( DType* att,
-                                                const uint32_t* token_positions,
-                                                DType*, /* CPU doesn't use the temp buffer */
-                                                const uint64_t batch_size )
+void LlamaOperations<Config, DType>::attention_softmax( DType* att,
+                                                        const uint32_t* token_positions,
+                                                        DType*, /* CPU doesn't use the temp buffer */
+                                                        const uint64_t batch_size )
 {
   uint64_t i;
   uint64_t j;
@@ -248,14 +259,14 @@ void LlamaOperations<DType>::attention_softmax( DType* att,
   }
 }
 
-template<typename DType>
+template<typename Config, typename DType>
 template<uint64_t head_size, uint64_t n_kv_heads, uint64_t gqa_size>
-void LlamaOperations<DType>::apply_rope( const uint64_t batch_size,
-                                         const uint32_t* token_positions,
-                                         const DType* freq_cis_real,
-                                         const DType* freq_cis_imag,
-                                         DType* state_q,
-                                         DType* context_pointers[] )
+void LlamaOperations<Config, DType>::apply_rope( const uint64_t batch_size,
+                                                 const uint32_t* token_positions,
+                                                 const DType* freq_cis_real,
+                                                 const DType* freq_cis_imag,
+                                                 DType* state_q,
+                                                 DType* context_pointers[] )
 {
   uint64_t i;
   uint64_t j;
@@ -279,13 +290,13 @@ void LlamaOperations<DType>::apply_rope( const uint64_t batch_size,
   }
 }
 
-template<typename DType>
+template<typename Config, typename DType>
 template<uint64_t dim>
-void LlamaOperations<DType>::copy_kv_cache( DType* context_pointers[],
-                                            const DType* state_k,
-                                            const DType* state_v,
-                                            const uint64_t batch_size,
-                                            const uint32_t* token_positions )
+void LlamaOperations<Config, DType>::copy_kv_cache( DType* context_pointers[],
+                                                    const DType* state_k,
+                                                    const DType* state_v,
+                                                    const uint64_t batch_size,
+                                                    const uint32_t* token_positions )
 {
   uint64_t i;
 #pragma omp parallel for private( i )
@@ -302,9 +313,12 @@ void LlamaOperations<DType>::copy_kv_cache( DType* context_pointers[],
   }
 }
 
-template<typename DType>
+template<typename Config, typename DType>
 template<typename DTypeDst, typename DTypeSrc>
-void LlamaOperations<DType>::convert_and_copy( DTypeDst* dst, const DTypeSrc* src, const uint64_t size, const CopyType )
+void LlamaOperations<Config, DType>::convert_and_copy( DTypeDst* dst,
+                                                       const DTypeSrc* src,
+                                                       const uint64_t size,
+                                                       const CopyType )
 {
   if constexpr ( std::is_same_v<DTypeSrc, DTypeDst> ) {
     memcpy( dst, src, sizeof( DTypeSrc ) * size );
