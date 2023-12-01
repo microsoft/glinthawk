@@ -25,11 +25,11 @@ concept AdditionalLlamaOperationsConcept = requires( T t,
                                                      const CopyType cpt,
                                                      const Settings& s ) {
   { T( s ) };
-  { t.template attention_0_gemm<UI64, UI64, UI64, UI64>( cptr, carr, ptr, size, int_arr ) } -> std::same_as<void>;
-  { t.template attention_2_gemm<UI64, UI64, UI64, UI64, UI64>( cptr, carr, ptr, size, int_arr ) } -> std::same_as<void>;
-  { t.template attention_softmax<UI64, UI64>( ptr, int_arr, ptr, size ) } -> std::same_as<void>;
-  { t.template apply_rope<UI64, UI64, UI64>( size, int_arr, cptr, cptr, ptr, arr ) } -> std::same_as<void>;
-  { t.template copy_kv_cache<UI64>( arr, cptr, cptr, size, int_arr ) } -> std::same_as<void>;
+  { t.template attention_0_gemm( cptr, carr, ptr, size, int_arr ) } -> std::same_as<void>;
+  { t.template attention_2_gemm( cptr, carr, ptr, size, int_arr ) } -> std::same_as<void>;
+  { t.template attention_softmax( ptr, int_arr, ptr, size ) } -> std::same_as<void>;
+  { t.template apply_rope( size, int_arr, cptr, cptr, ptr, arr ) } -> std::same_as<void>;
+  { t.template copy_kv_cache( arr, cptr, cptr, size, int_arr ) } -> std::same_as<void>;
   { t.template convert_and_copy<T1, T2>( t1_ptr, t2_ptr, size, cpt ) } -> std::same_as<void>;
 };
 

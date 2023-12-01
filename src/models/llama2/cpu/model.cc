@@ -147,11 +147,11 @@ void Llama2<Config, DType>::pre_attention_ops( const int32_t layer_num )
   ops_.template matmul<Config::dim, Config::kv_dim>( this->state_.v, this->state_.xb, layer_weights.wv, curr_conc_lvl );
 
   // save key, value at each time step (pos) to our kv cache, if the context resides on memory
-  ops_.template copy_kv_cache<Config::kv_dim>( this->state_.batch_context_pointers,
-                                               this->state_.k,
-                                               this->state_.v,
-                                               curr_conc_lvl,
-                                               this->state_.batch_token_positions );
+  ops_.copy_kv_cache( this->state_.batch_context_pointers,
+                      this->state_.k,
+                      this->state_.v,
+                      curr_conc_lvl,
+                      this->state_.batch_token_positions );
 }
 
 template<typename Config, typename DType>
@@ -159,36 +159,30 @@ void Llama2<Config, DType>::attention_ops()
 {
   const uint64_t curr_conc_lvl = this->state_.curr_concurrency_size;
 
-  ops_.template apply_rope<Config::head_size, Config::n_kv_heads, Config::gqa_size>(
-    curr_conc_lvl,
-    this->state_.batch_token_positions,
-    this->base_weights_.freq_cis_real,
-    this->base_weights_.freq_cis_imag,
-    this->state_.q,
-    this->state_.batch_context_pointers );
+  ops_.apply_rope( curr_conc_lvl,
+                   this->state_.batch_token_positions,
+                   this->base_weights_.freq_cis_real,
+                   this->base_weights_.freq_cis_imag,
+                   this->state_.q,
+                   this->state_.batch_context_pointers );
 
   // <multihead attention> for each head and for each token up to and including the current one
 
-  ops_.template attention_0_gemm<Config::seq_len, Config::head_size, Config::n_kv_heads, Config::gqa_size>(
-    this->state_.q,
-    this->state_.batch_context_pointers,
-    this->state_.att,
-    curr_conc_lvl,
-    this->state_.batch_token_positions );
+  ops_.attention_0_gemm( this->state_.q,
+                         this->state_.batch_context_pointers,
+                         this->state_.att,
+                         curr_conc_lvl,
+                         this->state_.batch_token_positions );
 
   // softmax
-  ops_.template attention_softmax<Config::seq_len, Config::n_heads>(
+  ops_.attention_softmax(
     this->state_.att, this->state_.batch_token_positions, this->state_.temp_softmax, curr_conc_lvl );
 
-  ops_.template attention_2_gemm<Config::seq_len,
-                                 Config::head_size,
-                                 Config::n_kv_heads,
-                                 Config::gqa_size,
-                                 Config::attention_rounds>( this->state_.att,
-                                                            this->state_.batch_context_pointers,
-                                                            this->state_.xb,
-                                                            curr_conc_lvl,
-                                                            this->state_.batch_token_positions );
+  ops_.attention_2_gemm( this->state_.att,
+                         this->state_.batch_context_pointers,
+                         this->state_.xb,
+                         curr_conc_lvl,
+                         this->state_.batch_token_positions );
 
   // </multihead attention>
 }

@@ -28,24 +28,20 @@ public:
   LlamaOperations( const Settings<Config>& settings );
   ~LlamaOperations() {}
 
-  template<uint64_t seq_len, uint64_t head_size, uint64_t n_kv_heads, uint64_t gqa_size>
   void attention_0_gemm( const DType* query,
                          const DType* const context_pointers[],
                          DType* att,
                          const uint64_t batch_size,
                          const uint32_t* token_positions );
 
-  template<uint64_t seq_len, uint64_t head_size, uint64_t n_kv_heads, uint64_t gqa_size, uint64_t rounds>
   void attention_2_gemm( const DType* att,
                          const DType* const context_pointers[],
                          DType* xb,
                          const uint64_t batch_size,
                          const uint32_t* token_positions );
 
-  template<uint64_t seq_len, uint64_t n_heads>
   void attention_softmax( DType* att, const uint32_t* token_positions, DType* temp_buffer, const uint64_t batch_size );
 
-  template<uint64_t head_size, uint64_t n_kv_heads, uint64_t gqa_size>
   void apply_rope( const uint64_t curr_batch_size,
                    const uint32_t* token_positions,
                    const DType* freq_cis_real,
@@ -53,7 +49,6 @@ public:
                    DType* state_q,
                    DType* context_pointers[] );
 
-  template<uint64_t dim>
   void copy_kv_cache( DType* context_pointers[],
                       const DType* state_k,
                       const DType* state_v,
@@ -187,7 +182,6 @@ LlamaOperations<Config, DType>::LlamaOperations( const Settings<Config>& setting
 }
 
 template<typename Config, typename DType>
-template<uint64_t seq_len, uint64_t head_size, uint64_t n_kv_heads, uint64_t gqa_size>
 void LlamaOperations<Config, DType>::attention_0_gemm( const DType* query,
                                                        const DType* const context_pointers[],
                                                        DType* att,
@@ -195,18 +189,18 @@ void LlamaOperations<Config, DType>::attention_0_gemm( const DType* query,
                                                        const uint32_t* token_positions )
 {
   constexpr cudaDataType_t cuda_arg_type = is_same_v<DType, __half> ? CUDA_R_16F : CUDA_R_32F;
-  constexpr float scale = 1.0f / sqrtf( head_size );
-  constexpr uint64_t k = head_size;
-  constexpr uint64_t n = gqa_size;
-  constexpr uint64_t lda = n_kv_heads * head_size * 2;
+  constexpr float scale = 1.0f / sqrtf( Config::head_size );
+  constexpr uint64_t k = Config::head_size;
+  constexpr uint64_t n = Config::gqa_size;
+  constexpr uint64_t lda = Config::n_kv_heads * Config::head_size * 2;
   constexpr uint64_t ldb = k;
-  constexpr uint64_t ldc = seq_len;
-  constexpr uint64_t strideA = head_size;
-  constexpr uint64_t strideB = head_size * gqa_size;
-  constexpr uint64_t strideC = seq_len * gqa_size;
-  constexpr uint64_t gemm_batch_count = n_kv_heads;
-  constexpr uint64_t dim = head_size * n_kv_heads * gqa_size;
-  constexpr uint64_t att_dim = seq_len * n_kv_heads * gqa_size;
+  constexpr uint64_t ldc = Config::seq_len;
+  constexpr uint64_t strideA = Config::head_size;
+  constexpr uint64_t strideB = Config::head_size * Config::gqa_size;
+  constexpr uint64_t strideC = Config::seq_len * Config::gqa_size;
+  constexpr uint64_t gemm_batch_count = Config::n_kv_heads;
+  constexpr uint64_t dim = Config::head_size * Config::n_kv_heads * Config::gqa_size;
+  constexpr uint64_t att_dim = Config::seq_len * Config::n_kv_heads * Config::gqa_size;
 
   for ( size_t i = 0; i < batch_size; i++ ) {
     const uint64_t m = token_positions[i] + 1;
@@ -237,7 +231,6 @@ void LlamaOperations<Config, DType>::attention_0_gemm( const DType* query,
 }
 
 template<typename Config, typename DType>
-template<uint64_t seq_len, uint64_t head_size, uint64_t n_kv_heads, uint64_t gqa_size, uint64_t rounds>
 void LlamaOperations<Config, DType>::attention_2_gemm( const DType* att,
                                                        const DType* const context_pointers[],
                                                        DType* xb,
@@ -246,22 +239,22 @@ void LlamaOperations<Config, DType>::attention_2_gemm( const DType* att,
 {
   constexpr cudaDataType_t cuda_arg_type = is_same_v<DType, __half> ? CUDA_R_16F : CUDA_R_32F;
 
-  constexpr uint64_t m = head_size;
-  constexpr uint64_t n = gqa_size;
+  constexpr uint64_t m = Config::head_size;
+  constexpr uint64_t n = Config::gqa_size;
 
-  constexpr uint64_t lda = n_kv_heads * head_size * 2;
-  constexpr uint64_t ldb = seq_len;
+  constexpr uint64_t lda = Config::n_kv_heads * Config::head_size * 2;
+  constexpr uint64_t ldb = Config::seq_len;
   constexpr uint64_t ldc = m;
 
-  constexpr uint64_t strideA = head_size;
-  constexpr uint64_t strideB = seq_len * gqa_size;
-  constexpr uint64_t strideC = head_size * gqa_size;
+  constexpr uint64_t strideA = Config::head_size;
+  constexpr uint64_t strideB = Config::seq_len * Config::gqa_size;
+  constexpr uint64_t strideC = Config::head_size * Config::gqa_size;
 
-  constexpr uint64_t gemm_batch_count = n_kv_heads;
+  constexpr uint64_t gemm_batch_count = Config::n_kv_heads;
 
-  constexpr uint64_t kv_dim = head_size * n_kv_heads;
-  constexpr uint64_t dim = head_size * n_kv_heads * gqa_size;
-  constexpr uint64_t att_dim = seq_len * n_kv_heads * gqa_size;
+  constexpr uint64_t kv_dim = Config::head_size * Config::n_kv_heads;
+  constexpr uint64_t dim = Config::head_size * Config::n_kv_heads * Config::gqa_size;
+  constexpr uint64_t att_dim = Config::seq_len * Config::n_kv_heads * Config::gqa_size;
 
   for ( size_t i = 0; i < batch_size; i++ ) {
     const uint64_t k = token_positions[i] + 1;
@@ -293,32 +286,33 @@ void LlamaOperations<Config, DType>::attention_2_gemm( const DType* att,
 }
 
 template<typename Config, typename DType>
-template<uint64_t seq_len, uint64_t n_heads>
 void LlamaOperations<Config, DType>::attention_softmax( DType* att,
                                                         const uint32_t* token_positions,
                                                         DType* temp_buffer,
                                                         const uint64_t batch_size )
 {
   for ( uint64_t i = 0; i < batch_size; i++ ) {
-    DType* this_att = att + i * n_heads * seq_len;
-    DType* this_buff = temp_buffer + i * n_heads;
+    DType* this_att = att + i * Config::n_heads * Config::seq_len;
+    DType* this_buff = temp_buffer + i * Config::n_heads;
 
     // (1) find the max value for each head (each row)
-    find_max_for_rows<<<1, n_heads, 0, streams[i]>>>( this_att, this_buff, token_positions[i], seq_len );
+    find_max_for_rows<<<1, Config::n_heads, 0, streams[i]>>>(
+      this_att, this_buff, token_positions[i], Config::seq_len );
 
     // (2) exp(att - max)
-    subtract_and_expf<<<token_positions[i] + 1, n_heads, 0, streams[i]>>>( this_buff, this_att, seq_len );
+    subtract_and_expf<<<token_positions[i] + 1, Config::n_heads, 0, streams[i]>>>(
+      this_buff, this_att, Config::seq_len );
 
     // (3) sum each row
-    sum_rows<<<1, n_heads, 0, streams[i]>>>( this_att, this_buff, token_positions[i], seq_len );
+    sum_rows<<<1, Config::n_heads, 0, streams[i]>>>( this_att, this_buff, token_positions[i], Config::seq_len );
 
     // (4) normalize each row by its sum
-    normalize_by_sum<<<token_positions[i] + 1, n_heads, 0, streams[i]>>>( this_att, this_buff, seq_len );
+    normalize_by_sum<<<token_positions[i] + 1, Config::n_heads, 0, streams[i]>>>(
+      this_att, this_buff, Config::seq_len );
   }
 }
 
 template<typename Config, typename DType>
-template<uint64_t head_size, uint64_t n_kv_heads, uint64_t gqa_size>
 void LlamaOperations<Config, DType>::apply_rope( const uint64_t curr_batch_size,
                                                  const uint32_t* token_positions,
                                                  const DType* freq_cis_real,
@@ -327,13 +321,13 @@ void LlamaOperations<Config, DType>::apply_rope( const uint64_t curr_batch_size,
                                                  DType* context_pointers[] )
 {
   for ( uint64_t i = 0; i < curr_batch_size; i++ ) {
-    do_rope<<<n_kv_heads, head_size / 2, 0, streams[i]>>>( head_size,
-                                                           gqa_size,
-                                                           freq_cis_real + token_positions[i] * head_size / 2,
-                                                           freq_cis_imag + token_positions[i] * head_size / 2,
-                                                           state_q + i * n_kv_heads * gqa_size * head_size,
-                                                           context_pointers[i]
-                                                             + token_positions[i] * n_kv_heads * head_size * 2 );
+    do_rope<<<Config::n_kv_heads, Config::head_size / 2, 0, streams[i]>>>(
+      Config::head_size,
+      Config::gqa_size,
+      freq_cis_real + token_positions[i] * Config::head_size / 2,
+      freq_cis_imag + token_positions[i] * Config::head_size / 2,
+      state_q + i * Config::n_kv_heads * Config::gqa_size * Config::head_size,
+      context_pointers[i] + token_positions[i] * Config::n_kv_heads * Config::head_size * 2 );
   }
 }
 
@@ -350,14 +344,15 @@ void LlamaOperations<Config, DType>::copy_kv_cache( DType* context_pointers[],
       continue;
     }
 
-    DType* k_cache_pos = context_pointers[i] + token_positions[i] * kv_dim * 2;
-    DType* v_cache_pos = k_cache_pos + kv_dim;
+    DType* k_cache_pos = context_pointers[i] + token_positions[i] * Config::kv_dim * 2;
+    DType* v_cache_pos = k_cache_pos + Config::kv_dim;
 
     // XXX why not just one memcpy?
-    CHECK_CUDA(
-      cudaMemcpyAsync( k_cache_pos, state_k + i * kv_dim, kv_dim * sizeof( DType ), cudaMemcpyDeviceToDevice ) );
-    CHECK_CUDA(
-      cudaMemcpyAsync( v_cache_pos, state_v + i * kv_dim, kv_dim * sizeof( DType ), cudaMemcpyDeviceToDevice ) );
+    CHECK_CUDA( cudaMemcpyAsync(
+      k_cache_pos, state_k + i * Config::kv_dim, Config::kv_dim * sizeof( DType ), cudaMemcpyDeviceToDevice ) );
+
+    CHECK_CUDA( cudaMemcpyAsync(
+      v_cache_pos, state_v + i * Config::kv_dim, Config::kv_dim * sizeof( DType ), cudaMemcpyDeviceToDevice ) );
   }
 }
 
