@@ -6,22 +6,14 @@
 
 namespace glinthawk::models::llama2::cuda {
 
-template<typename DType>
-struct CUDADeleter
-{
-  void operator()( DType* ptr ) const
-  {
-    if ( ptr )
-      cudaFree( ptr );
-  }
-};
-
 template<typename Config, typename DType>
 class LlamaOperations : public common::cuda::Operations<DType>
 {
+public:
+  using common::cuda::Operations<DType>::DeviceUniquePtr;
+
 private:
   std::unique_ptr<curandState, CUDADeleter<curandState>> rng_state { nullptr };
-
   void setup_rng( unsigned long seed, const uint64_t size, const uint64_t batch_size );
 
 public:
@@ -201,6 +193,42 @@ LlamaOperations<Config, DType>::LlamaOperations( const Settings<Config>& setting
   : common::cuda::Operations<DType>( settings.concurrency_limit )
 {
   setup_rng( 1234ul, Config::vocab_size, settings.concurrency_limit );
+
+  // Summary of Checks:
+  // (a) Config::n_heads must not exceed 1024.
+  // (b) Config::dim / Config::n_heads / 2 must not exceed 1024.
+  // (c) Config::n_heads must not exceed (1 << 16) - 1. RoPE has n_heads blocks, which cannot surpass 2^16.
+  // (d) Config::seq_len must not exceed (1 << 16) - 1. Attention softmax has seq_len blocks, which cannot surpass 2^16.
+  // (e) ops::TPB must not exceed 1024. Threads per block cannot surpass 1024.
+  // (f) Accum blocks must not exceed (1 << 16) - 1.
+  // (g) Silu blocks must not exceed (1 << 16) - 1.
+  // (h) CuRAND blocks must not exceed (1 << 16) - 1.
+  // (i) RMS Norm blocks must not exceed (1 << 16) - 1.
+  // (j) RMS Norm scratch pad must have enough space for calculations.
+  // (k) Argmax scratch pad must have enough space.
+
+  CHECK_GE( 1024, Config::n_heads );                                                                       // (a)
+  CHECK_GE( 1024, Config::dim / Config::n_heads / 2 );                                                     // (b)
+  CHECK_GE( ( 1 << 16 ) - 1, Config::n_heads );                                                            // (c)
+  CHECK_GE( ( 1 << 16 ) - 1, Config::seq_len );                                                            // (d)
+  CHECK_GE( 1024, ops::TPB );                                                                              // (e)
+  CHECK_GE( ( 1 << 16 ) - 1, ops::div_ceil( Config::dim * settings.concurrency_limit, ops::TPB ) );        // (f)
+  CHECK_GE( ( 1 << 16 ) - 1, ops::div_ceil( Config::hidden_dim * settings.concurrency_limit, ops::TPB ) ); // (g)
+  CHECK_GE( ( 1 << 16 ) - 1, ops::div_ceil( Config::vocab_size, ops::TPB ) );                              // (h)
+  CHECK_GE( ( 1 << 16 ) - 1, ops::div_ceil( Config::dim, ops::NRBS ) );                                    // (i)
+
+  CHECK_GE( sizeof( DType ) * Config::dim,
+            sizeof( float )
+              * ( ops::div_ceil( Config::dim, 2 * ops::NRBS )
+                  + ops::div_ceil( ops::div_ceil( Config::dim, 2 * ops::NRBS ), 2 * ops::NRBS ) + 1 ) ); // (j)
+
+  CHECK_GE( sizeof( DType ) * ( 4 * Config::dim + 2 * Config::hidden_dim ),
+            sizeof( uint32_t )
+                * ( ops::div_ceil( Config::vocab_size, 2 * ops::AMRBS )
+                    + ops::div_ceil( ops::div_ceil( Config::vocab_size, 2 * ops::AMRBS ), 2 * ops::AMRBS ) + 1 )
+              + sizeof( DType )
+                  * ( ops::div_ceil( Config::vocab_size, 2 * ops::AMRBS )
+                      + ops::div_ceil( ops::div_ceil( Config::vocab_size, 2 * ops::AMRBS ), 2 * ops::AMRBS ) ) ); // (k)
 }
 
 template<typename Config, typename DType>
