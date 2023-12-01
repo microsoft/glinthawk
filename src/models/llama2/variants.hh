@@ -40,6 +40,9 @@ concept ModelConfig = requires( T t ) {
 
   T::wcls_present;
   requires std::is_convertible_v<decltype( T::wcls_present ), bool>;
+
+  T::attention_rounds;
+  requires std::is_unsigned_v<decltype( T::attention_rounds )>;
 };
 
 namespace configs {
@@ -57,6 +60,7 @@ struct Llama2_70B_Chat
   constexpr static uint64_t vocab_size = 32000;
   constexpr static uint64_t seq_len = 2048;
   constexpr static bool wcls_present = true;
+  constexpr static uint64_t attention_rounds = 1;
 };
 
 struct Llama2_13B_Chat
@@ -72,6 +76,7 @@ struct Llama2_13B_Chat
   constexpr static uint64_t vocab_size = 32000;
   constexpr static uint64_t seq_len = 2048;
   constexpr static bool wcls_present = true;
+  constexpr static uint64_t attention_rounds = 2;
 };
 
 struct Llama2_7B_Chat
@@ -87,6 +92,7 @@ struct Llama2_7B_Chat
   constexpr static uint64_t vocab_size = 32000;
   constexpr static uint64_t seq_len = 2048;
   constexpr static bool wcls_present = true;
+  constexpr static uint64_t attention_rounds = 2;
 };
 
 struct Stories_110M
@@ -102,6 +108,7 @@ struct Stories_110M
   constexpr static uint64_t vocab_size = 32000;
   constexpr static uint64_t seq_len = 1024;
   constexpr static bool wcls_present = false;
+  constexpr static uint64_t attention_rounds = 4;
 };
 
 static_assert( ModelConfig<Llama2_70B_Chat> );

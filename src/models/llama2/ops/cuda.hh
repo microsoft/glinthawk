@@ -19,7 +19,7 @@ public:
                          const uint64_t batch_size,
                          const uint32_t* token_positions );
 
-  template<uint64_t seq_len, uint64_t head_size, uint64_t n_kv_heads, uint64_t gqa_size>
+  template<uint64_t seq_len, uint64_t head_size, uint64_t n_kv_heads, uint64_t gqa_size, uint64_t rounds>
   void attention_2_gemm( const DType* att,
                          const DType* const context_pointers[],
                          DType* xb,
@@ -48,8 +48,8 @@ public:
   void convert_and_copy( DTypeDst* dst, const DTypeSrc* src, const uint64_t size, const CopyType );
 };
 
-static_assert( LlamaOperationsConcept<LlamaOperations<float>, float> );
-static_assert( LlamaOperationsConcept<LlamaOperations<__half>, __half> );
+static_assert( LlamaOperationsConcept<LlamaOperations<float>, float, float, __half> );
+static_assert( LlamaOperationsConcept<LlamaOperations<__half>, __half, __half, float> );
 
 namespace {
 
@@ -203,7 +203,7 @@ void LlamaOperations<DType>::attention_0_gemm( const DType* query,
 }
 
 template<typename DType>
-template<uint64_t seq_len, uint64_t head_size, uint64_t n_kv_heads, uint64_t gqa_size>
+template<uint64_t seq_len, uint64_t head_size, uint64_t n_kv_heads, uint64_t gqa_size, uint64_t rounds>
 void LlamaOperations<DType>::attention_2_gemm( const DType* att,
                                                const DType* const context_pointers[],
                                                DType* xb,

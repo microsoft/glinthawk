@@ -24,13 +24,12 @@ concept OperationsConcept = requires( T t,
                                       const bool flag,
                                       const CopyType cpt ) {
   { t.template accum<UI64>( ptr1, ptr2, size ) } -> std::same_as<void>;
-  { t.template rmsnorm<UI64>( ptr1, ptr2, ptr2, size ) } -> std::same_as<void>;
-  { t.template argmax<UI64>( ptr_uint32, ptr2, size ) } -> std::same_as<void>;
+  { t.template rmsnorm<UI64>( ptr1, ptr2, ptr1, ptr2, size ) } -> std::same_as<void>;
+  { t.template argmax<UI64>( ptr_uint32, ptr2, ptr1, size ) } -> std::same_as<void>;
   { t.template silu<UI64>( ptr1, ptr1, size ) } -> std::same_as<void>;
   { t.template matmul<UI64, UI64>( ptr1, ptr2, ptr2, size ) } -> std::same_as<void>;
   { t.template soft_sample<UI64>( ptr1, vec, size ) } -> std::same_as<void>;
   { t.copy( ptr1, ptr2, size, flag, cpt ) } -> std::same_as<void>;
-  { t.randomize_buffer( ptr1, size, val_f, val_f ) } -> std::same_as<void>;
 };
 
 } // namespace glinthawk::models::common

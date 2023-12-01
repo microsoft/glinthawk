@@ -17,10 +17,10 @@ public:
   void accum( DType* a, const DType* b, const uint64_t batch_size );
 
   template<uint64_t size>
-  void rmsnorm( DType* o, const DType* x, const DType* weight, const uint64_t batch_size );
+  void rmsnorm( DType* o, const DType* x, DType* temp, const DType* weight, const uint64_t batch_size );
 
   template<uint64_t n>
-  void argmax( uint32_t* output, const DType* v, const uint64_t batch_size );
+  void argmax( uint32_t* output, const DType* v, DType* temp, const uint64_t batch_size );
 
   template<uint64_t hidden_dim>
   void silu( DType* hb, DType* hb2, const uint64_t batch_size );
@@ -33,11 +33,9 @@ public:
 
   void copy( DType* dst,
              const DType* src,
-             const uint64_t batch_size,
+             const uint64_t len_bytes,
              const bool async = false,
              const CopyType type = CopyType::HostToHost );
-
-  void randomize_buffer( DType* buffer, const uint64_t len, const float min, const float max );
 };
 
 static_assert( OperationsConcept<Operations<float>, float> );
@@ -48,7 +46,7 @@ namespace {
 
 namespace { // matmul
 
-template<typename DType, uint64_t m, uint64_t k, uint64_t lda, uint64_t n, uint64_t ldb, uint64_t ldc>
+template<typename DType, uint64_t m, uint64_t k, uint64_t lda, uint64_t ldb, uint64_t ldc>
 void fast_matmul_row_major( uint64_t n, const DType* A, const DType* B, DType* C )
 {
   uint64_t row;
@@ -66,6 +64,20 @@ void fast_matmul_row_major( uint64_t n, const DType* A, const DType* B, DType* C
 
       C[col * ldc + row] = DType( sum );
     }
+  }
+}
+
+}
+
+namespace { // softsample
+
+template<typename DType, uint64_t vocab_size>
+void gumbel_fix( DType* array, float temp )
+{
+  for ( uint64_t i = 0; i < vocab_size; i++ ) {
+    float myrandf = static_cast<float>( rand() ) / RAND_MAX;
+    myrandf = logf( -logf( myrandf ) );
+    array[i] = DType( float( array[i] ) / temp - myrandf );
   }
 }
 
@@ -89,7 +101,7 @@ void Operations<DType>::accum( DType* a, const DType* b, const uint64_t batch_si
 
 template<typename DType>
 template<uint64_t size>
-void Operations<DType>::rmsnorm( DType* o, const DType* x, const DType* weight, const uint64_t batch_size )
+void Operations<DType>::rmsnorm( DType* output, const DType* x, DType*, const DType* weight, const uint64_t batch_size )
 {
   uint64_t b;
 #pragma omp parallel for private( b )
@@ -116,7 +128,7 @@ void Operations<DType>::rmsnorm( DType* o, const DType* x, const DType* weight, 
 
 template<typename DType>
 template<uint64_t n>
-void Operations<DType>::argmax( uint32_t* output, const DType* v, const uint64_t batch_size )
+void Operations<DType>::argmax( uint32_t* output, const DType* v, DType*, const uint64_t batch_size )
 {
   uint64_t b;
 #pragma omp parallel for private( b )
@@ -156,7 +168,7 @@ void Operations<DType>::silu( DType* hb, DType* hb2, const uint64_t batch_size )
 
 template<typename DType>
 template<uint64_t s, uint64_t r>
-void Operations<DType>::matmul( DType* xo, const DType* x, const DType* w, const uint64_t b )
+void Operations<DType>::matmul( DType* xout, const DType* x, const DType* w, const uint64_t b )
 {
   // x(b,s) @ W(s,r) -> xout(b,r)
   // OR
@@ -181,7 +193,7 @@ void Operations<DType>::soft_sample( DType* v, const std::vector<float>& temp_s,
 #pragma omp parallel for private( i )
   for ( i = 0; i < batch_size; i++ ) {
     if ( temp_s[i] > 0 ) {
-      gumbel_fix( v + i * vocab_size, temp_s[i], vocab_size );
+      gumbel_fix<DType, vocab_size>( v + i * vocab_size, temp_s[i] );
     }
   }
 }
@@ -190,23 +202,6 @@ template<typename DType>
 void Operations<DType>::copy( DType* dst, const DType* src, const uint64_t len_bytes, const bool, const CopyType )
 {
   std::memcpy( dst, src, len_bytes );
-}
-
-template<typename DType>
-void Operations<DType>::randomize_buffer( DType* buffer, const uint64_t len, const float min, const float max )
-{
-  static thread_local std::mt19937 generator { std::random_device {}() };
-  std::uniform_real_distribution<float> distribution( min, max );
-
-  size_t i;
-#pragma omp parallel for schedule( static ) private( i )
-  for ( i = 0; i < len; i++ ) {
-    if constexpr ( std::is_same_v<DType, float> ) {
-      buffer[i] = distribution( generator );
-    } else {
-      buffer[i] = static_cast<DType>( distribution( generator ) );
-    }
-  }
 }
 
 } // namespace glinthawk::models::common::cpu

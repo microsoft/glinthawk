@@ -1,5 +1,6 @@
 #pragma once
 
+#include "../ops/cpu.hh"
 #include "models/llama2/base.hh"
 
 #include <cstdint>
@@ -15,12 +16,7 @@
 #include "util/file_descriptor.hh"
 #include "util/ring_buffer.hh"
 
-#include "models/common/cpu/ops.hh"
-#include "models/llama2/base.hh"
-
 namespace glinthawk::models::llama2::cpu {
-
-namespace ops = models::common::cpu::ops;
 
 template<typename Config, typename DType>
 requires ModelConfig<Config>
@@ -51,6 +47,8 @@ private:
   void attention_ops();
   void post_attention_ops( const int32_t layer_num );
   void pass_end();
+
+  LlamaOperations<DType> ops_ {};
 
 public:
   using BaseModel::BaseLlama2;

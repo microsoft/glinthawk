@@ -83,7 +83,7 @@ Llama2<Config, DType>::Llama2( const std::filesystem::path& model_path,
 
     FileDescriptor base_fd { CHECK_SYSCALL( "open", open( base_path.c_str(), O_RDONLY ) ) };
     MMap_Region base_mmap { nullptr, base_size, PROT_READ, MAP_PRIVATE, base_fd.fd_num(), 0 };
-    memcpy( base.get(), base_mmap.addr(), base_size );
+    ops_.copy( base.get(), reinterpret_cast<DType*>( base_mmap.addr() ), base_size );
     LOG( INFO ) << "Loaded base weights (" << base_size << " bytes).";
   } else {
     LOG( WARNING ) << "Randomizing BASEWEIGHTS...";
@@ -101,9 +101,10 @@ Llama2<Config, DType>::Llama2( const std::filesystem::path& model_path,
       FileDescriptor layer_fd { CHECK_SYSCALL( "open", open( layer_path.c_str(), O_RDONLY ) ) };
       MMap_Region layer_mmap { nullptr, layer_size, PROT_READ, MAP_PRIVATE, layer_fd.fd_num(), 0 };
 
-      memcpy( reinterpret_cast<uint8_t*>( layers.get() ) + ( i - settings.start_layer_num ) * layer_size,
-              layer_mmap.addr(),
-              layer_size );
+      ops_.copy( reinterpret_cast<DType*>( reinterpret_cast<uint8_t*>( layers.get() )
+                                           + ( i - settings.start_layer_num ) * layer_size ),
+                 reinterpret_cast<DType*>( layer_mmap.addr() ),
+                 layer_size );
 
       LOG( INFO ) << "Loaded layer " << i << " (" << layer_size << " bytes).";
     }
@@ -126,7 +127,7 @@ void Llama2<Config, DType>::pass_begin( const std::vector<uint32_t>& token )
     CHECK_LT( token[i], Config::vocab_size ) << "token index must not surpass vocab size";
 
     const DType* content_row = this->base_weights_.token_embedding_table + token[i] * Config::dim;
-    memcpy( this->state_.x + i * Config::dim, content_row, Config::dim * sizeof( DType ) );
+    ops_.copy( this->state_.x + i * Config::dim, content_row, Config::dim * sizeof( DType ) );
   }
 }
 
@@ -137,20 +138,20 @@ void Llama2<Config, DType>::pre_attention_ops( const int32_t layer_num )
   const auto& layer_weights = this->layer_weights_[layer_num];
 
   // attention rmsnorm
-  ops::rmsnorm( this->state_.xb, this->state_.x, layer_weights.rms_att_weight, Config::dim, curr_conc_lvl );
+  ops_.template rmsnorm<Config::dim>(
+    this->state_.xb, this->state_.x, this->state_.xb2, layer_weights.rms_att_weight, curr_conc_lvl );
 
   // qkv matmuls for this position
-  ops::matmul( this->state_.q, this->state_.xb, layer_weights.wq, curr_conc_lvl, Config::dim, Config::dim );
-  ops::matmul( this->state_.k, this->state_.xb, layer_weights.wk, curr_conc_lvl, Config::dim, Config::kv_dim );
-  ops::matmul( this->state_.v, this->state_.xb, layer_weights.wv, curr_conc_lvl, Config::dim, Config::kv_dim );
+  ops_.template matmul<Config::dim, Config::dim>( this->state_.q, this->state_.xb, layer_weights.wq, curr_conc_lvl );
+  ops_.template matmul<Config::dim, Config::kv_dim>( this->state_.k, this->state_.xb, layer_weights.wk, curr_conc_lvl );
+  ops_.template matmul<Config::dim, Config::kv_dim>( this->state_.v, this->state_.xb, layer_weights.wv, curr_conc_lvl );
 
   // save key, value at each time step (pos) to our kv cache, if the context resides on memory
-  ops::copy_kv_cache( this->state_.batch_context_pointers,
-                      this->state_.k,
-                      this->state_.v,
-                      Config::kv_dim,
-                      curr_conc_lvl,
-                      this->state_.batch_token_positions );
+  ops_.template copy_kv_cache<Config::kv_dim>( this->state_.batch_context_pointers,
+                                               this->state_.k,
+                                               this->state_.v,
+                                               curr_conc_lvl,
+                                               this->state_.batch_token_positions );
 }
 
 template<typename Config, typename DType>
@@ -158,44 +159,37 @@ void Llama2<Config, DType>::attention_ops()
 {
   const uint64_t curr_conc_lvl = this->state_.curr_concurrency_size;
 
-  ops::apply_rope( Config::head_size,
-                   Config::n_kv_heads,
-                   Config::gqa_size,
-                   curr_conc_lvl,
-                   this->state_.batch_token_positions,
-                   this->base_weights_.freq_cis_real,
-                   this->base_weights_.freq_cis_imag,
-                   this->state_.q,
-                   this->state_.batch_context_pointers );
+  ops_.template apply_rope<Config::head_size, Config::n_kv_heads, Config::gqa_size>(
+    curr_conc_lvl,
+    this->state_.batch_token_positions,
+    this->base_weights_.freq_cis_real,
+    this->base_weights_.freq_cis_imag,
+    this->state_.q,
+    this->state_.batch_context_pointers );
 
   // <multihead attention> for each head and for each token up to and including the current one
-  ops::attention_0_gemm_fast( this->state_.q,
-                              this->state_.batch_context_pointers,
-                              this->state_.att,
-                              Config::seq_len,
-                              Config::head_size,
-                              Config::n_kv_heads,
-                              Config::gqa_size,
-                              curr_conc_lvl,
-                              this->state_.batch_token_positions );
+
+  ops_.template attention_0_gemm<Config::seq_len, Config::head_size, Config::n_kv_heads, Config::gqa_size>(
+    this->state_.q,
+    this->state_.batch_context_pointers,
+    this->state_.att,
+    curr_conc_lvl,
+    this->state_.batch_token_positions );
 
   // softmax
-  ops::attention_softmax( this->state_.att,
-                          this->state_.batch_token_positions,
-                          Config::seq_len,
-                          Config::n_heads,
-                          this->state_.temp_softmax,
-                          curr_conc_lvl );
+  ops_.template attention_softmax<Config::seq_len, Config::n_heads>(
+    this->state_.att, this->state_.batch_token_positions, this->state_.temp_softmax, curr_conc_lvl );
 
-  ops::attention_2_gemm_fast( this->state_.att,
-                              this->state_.batch_context_pointers,
-                              this->state_.xb,
-                              Config::seq_len,
-                              Config::head_size,
-                              Config::n_kv_heads,
-                              Config::gqa_size,
-                              curr_conc_lvl,
-                              this->state_.batch_token_positions );
+  ops_.template attention_2_gemm<Config::seq_len,
+                                 Config::head_size,
+                                 Config::n_kv_heads,
+                                 Config::gqa_size,
+                                 Config::attention_rounds>( this->state_.att,
+                                                            this->state_.batch_context_pointers,
+                                                            this->state_.xb,
+                                                            curr_conc_lvl,
+                                                            this->state_.batch_token_positions );
+
   // </multihead attention>
 }
 
@@ -206,52 +200,52 @@ void Llama2<Config, DType>::post_attention_ops( const int32_t layer_num )
   const auto& layer_weights = this->layer_weights_[layer_num];
 
   // final matmul to get the output of the attention
-  ops::matmul( this->state_.xb2, this->state_.xb, layer_weights.wo, curr_conc_lvl, Config::dim, Config::dim );
+  ops_.template matmul<Config::dim, Config::dim>( this->state_.xb2, this->state_.xb, layer_weights.wo, curr_conc_lvl );
 
   // residual connection back into x
-  ops::accum( this->state_.x, this->state_.xb2, Config::dim, curr_conc_lvl );
+  ops_.template accum<Config::dim>( this->state_.x, this->state_.xb2, curr_conc_lvl );
 
   // ffn rmsnorm
-  ops::rmsnorm( this->state_.xb, this->state_.x, layer_weights.rms_ffn_weight, Config::dim, curr_conc_lvl );
+  ops_.template rmsnorm<Config::dim>(
+    this->state_.xb, this->state_.x, this->state_.xb2, layer_weights.rms_ffn_weight, curr_conc_lvl );
 
   // now for ffn in we have: self.w2(F.silu(self.w1(x)) * self.w3(x))
   // first calculate self.w1(x) and self.w3(x)
-  ops::matmul( this->state_.hb, this->state_.xb, layer_weights.w1, curr_conc_lvl, Config::dim, Config::hidden_dim );
-  ops::matmul( this->state_.hb2, this->state_.xb, layer_weights.w3, curr_conc_lvl, Config::dim, Config::hidden_dim );
+  ops_.template matmul<Config::dim, Config::hidden_dim>(
+    this->state_.hb, this->state_.xb, layer_weights.w1, curr_conc_lvl );
+  ops_.template matmul<Config::dim, Config::hidden_dim>(
+    this->state_.hb2, this->state_.xb, layer_weights.w3, curr_conc_lvl );
 
-  ops::silu( this->state_.hb, this->state_.hb2, Config::hidden_dim, curr_conc_lvl );
+  ops_.template silu<Config::hidden_dim>( this->state_.hb, this->state_.hb2, curr_conc_lvl );
 
   // final matmul to get the output of the ffn
-  ops::matmul( this->state_.xb, this->state_.hb, layer_weights.w2, curr_conc_lvl, Config::hidden_dim, Config::dim );
+  ops_.template matmul<Config::hidden_dim, Config::dim>(
+    this->state_.xb, this->state_.hb, layer_weights.w2, curr_conc_lvl );
 
   // residual connection
-  ops::accum( this->state_.x, this->state_.xb, Config::dim, curr_conc_lvl );
+  ops_.template accum<Config::dim>( this->state_.x, this->state_.xb, curr_conc_lvl );
 }
 
 template<typename Config, typename DType>
 void Llama2<Config, DType>::pass_end()
 {
   // final rmsnorm
-  ops::rmsnorm( this->state_.x,
-                this->state_.x,
-                this->base_weights_.rms_final_weight,
-                Config::dim,
-                this->state_.curr_concurrency_size );
+  ops_.template rmsnorm<Config::dim>( this->state_.x,
+                                      this->state_.x,
+                                      this->state_.xb2,
+                                      this->base_weights_.rms_final_weight,
+                                      this->state_.curr_concurrency_size );
 
   // classifier into logits
-  ops::matmul( this->state_.logits,
-               this->state_.x,
-               this->base_weights_.wcls,
-               this->state_.curr_concurrency_size,
-               Config::dim,
-               Config::vocab_size );
+  ops_.template matmul<Config::dim, Config::vocab_size>(
+    this->state_.logits, this->state_.x, this->base_weights_.wcls, this->state_.curr_concurrency_size );
 }
 
 template<typename Config, typename DType>
-void extract_batch_token( RunState<Config, DType>& state, const std::vector<float>& temp )
+void extract_batch_token( LlamaOperations<DType>& ops, RunState<Config, DType>& state, const std::vector<float>& temp )
 {
-  ops::soft_sample( state.logits, temp, Config::vocab_size, temp.size() );
-  ops::argmax( state.argmax_pos, state.logits, Config::vocab_size, temp.size() );
+  ops.template soft_sample<Config::vocab_size>( state.logits, temp, temp.size() );
+  ops.template argmax<Config::vocab_size>( state.argmax_pos, state.logits, state.x, temp.size() );
 }
 
 template<typename Config, typename DType>
@@ -277,8 +271,9 @@ std::vector<InferenceState> Llama2<Config, DType>::forward( std::vector<Inferenc
   } else {
     for ( size_t i = 0; i < inference_states.size(); i++ )
       // load the activations
-      memcpy(
-        this->state_.x + i * Config::dim, inference_states[i].activations().data(), Config::dim * sizeof( DType ) );
+      ops_.copy( this->state_.x + i * Config::dim,
+                 reinterpret_cast<DType*>( inference_states[i].activations().data() ),
+                 Config::dim * sizeof( DType ) );
   }
 
   for ( size_t layer_num = next_layer_batch; layer_num <= this->settings_.end_layer_num; layer_num++ ) {
@@ -302,7 +297,7 @@ std::vector<InferenceState> Llama2<Config, DType>::forward( std::vector<Inferenc
     for ( size_t i = 0; i < inference_states.size(); i++ )
       batch_temps.push_back( inference_states[i].temperature() );
 
-    extract_batch_token( this->state_, batch_temps );
+    extract_batch_token( this->ops_, this->state_, batch_temps );
 
     for ( size_t i = 0; i < inference_states.size(); i++ ) {
       inference_states[i].set_token( this->state_.argmax_pos[i] );
@@ -344,8 +339,9 @@ std::vector<InferenceState> Llama2<Config, DType>::pre_attention_forward(
   } else {
     for ( size_t i = 0; i < inference_states.size(); i++ )
       // load the activations
-      memcpy(
-        this->state_.x + i * Config::dim, inference_states[i].activations().data(), Config::dim * sizeof( DType ) );
+      ops_.copy( this->state_.x + i * Config::dim,
+                 reinterpret_cast<DType*>( inference_states[i].activations().data() ),
+                 Config::dim * sizeof( DType ) );
   }
 
   for ( size_t i = 0; i < inference_states.size(); i++ ) {
@@ -359,16 +355,17 @@ std::vector<InferenceState> Llama2<Config, DType>::pre_attention_forward(
 
   for ( size_t i = 0; i < inference_states.size(); i++ ) {
     DataBuffer activations { ( Config::dim + 2 * Config::kv_dim ) * sizeof( DType ) };
-    memcpy( activations.data(), this->state_.q + i * Config::dim, Config::dim * sizeof( DType ) );
+    ops_.copy(
+      reinterpret_cast<DType*>( activations.data() ), this->state_.q + i * Config::dim, Config::dim * sizeof( DType ) );
 
     if ( contexts[i]->empty() ) {
-      memcpy( activations.data() + Config::dim * sizeof( DType ),
-              this->state_.k + i * Config::kv_dim,
-              Config::kv_dim * sizeof( DType ) );
+      ops_.copy( reinterpret_cast<DType*>( activations.data() + Config::dim * sizeof( DType ) ),
+                 this->state_.k + i * Config::kv_dim,
+                 Config::kv_dim * sizeof( DType ) );
 
-      memcpy( activations.data() + ( Config::dim + Config::kv_dim ) * sizeof( DType ),
-              this->state_.v + i * Config::kv_dim,
-              Config::kv_dim * sizeof( DType ) );
+      ops_.copy( reinterpret_cast<DType*>( activations.data() + ( Config::dim + Config::kv_dim ) * sizeof( DType ) ),
+                 this->state_.v + i * Config::kv_dim,
+                 Config::kv_dim * sizeof( DType ) );
     }
 
     inference_states[i].set_next_stage( InferenceState::Stage::Attention );
@@ -400,27 +397,34 @@ std::vector<InferenceState> Llama2<Config, DType>::attention_forward(
     switch ( inference_states[i].dtype() ) {
       case DataType::Float16:
         // Q should go to run state
-        ops::cvt_and_copy(
-          this->state_.q + i * Config::dim, reinterpret_cast<_Float16*>( activation_data ), Config::dim );
+        ops_.template convert_and_copy( this->state_.q + i * Config::dim,
+                                        reinterpret_cast<_Float16*>( activation_data ),
+                                        Config::dim,
+                                        CopyType::HostToDevice );
 
         // if KV is not already in context, put it there
         if ( activation_len > Config::dim * DataTypeSize( inference_states[i].dtype() ) ) {
-          ops::cvt_and_copy(
+          ops_.template convert_and_copy(
             contexts[i]->key( this->settings_, inference_states[i].next_layer(), inference_states[i].token_pos() ),
             reinterpret_cast<_Float16*>( activation_data + Config::dim * sizeof( DType ) ),
-            Config::kv_dim * 2 );
+            Config::kv_dim * 2,
+            CopyType::HostToDevice );
         }
         break;
       case DataType::Float32:
         // Q should go to run state
-        ops::cvt_and_copy( this->state_.q + i * Config::dim, reinterpret_cast<float*>( activation_data ), Config::dim );
+        ops_.template convert_and_copy( this->state_.q + i * Config::dim,
+                                        reinterpret_cast<float*>( activation_data ),
+                                        Config::dim,
+                                        CopyType::HostToDevice );
 
         // if KV is not already in context, put it there
         if ( activation_len > Config::dim * DataTypeSize( inference_states[i].dtype() ) ) {
-          ops::cvt_and_copy(
+          ops_.template convert_and_copy(
             contexts[i]->key( this->settings_, inference_states[i].next_layer(), inference_states[i].token_pos() ),
             reinterpret_cast<float*>( activation_data + Config::dim * sizeof( DType ) ),
-            Config::kv_dim * 2 );
+            Config::kv_dim * 2,
+            CopyType::HostToDevice );
         }
         break;
       default: throw std::runtime_error( "invalid dtype" );
@@ -436,12 +440,16 @@ std::vector<InferenceState> Llama2<Config, DType>::attention_forward(
 
     switch ( inference_states[i].dtype() ) {
       case DataType::Float16:
-        ops::cvt_and_copy(
-          reinterpret_cast<_Float16*>( activations.data() ), this->state_.xb + i * Config::dim, Config::dim );
+        ops_.template convert_and_copy( reinterpret_cast<_Float16*>( activations.data() ),
+                                        this->state_.xb + i * Config::dim,
+                                        Config::dim,
+                                        CopyType::DeviceToHost );
         break;
       case DataType::Float32:
-        ops::cvt_and_copy(
-          reinterpret_cast<float*>( activations.data() ), this->state_.xb + i * Config::dim, Config::dim );
+        ops_.template convert_and_copy( reinterpret_cast<float*>( activations.data() ),
+                                        this->state_.xb + i * Config::dim,
+                                        Config::dim,
+                                        CopyType::DeviceToHost );
         break;
       default: throw std::runtime_error( "invalid dtype" );
     }
@@ -466,8 +474,9 @@ std::vector<InferenceState> Llama2<Config, DType>::post_attention_forward(
 
   for ( size_t i = 0; i < inference_states.size(); i++ )
     // load the activations
-    memcpy(
-      this->state_.xb + i * Config::dim, inference_states[i].activations().data(), Config::dim * sizeof( DType ) );
+    ops_.copy( this->state_.xb + i * Config::dim,
+               reinterpret_cast<DType*>( inference_states[i].activations().data() ),
+               Config::dim * sizeof( DType ) );
 
   post_attention_ops( next_layer_batch );
 
@@ -480,7 +489,7 @@ std::vector<InferenceState> Llama2<Config, DType>::post_attention_forward(
     for ( size_t i = 0; i < inference_states.size(); i++ )
       batch_temps.push_back( inference_states[i].temperature() );
 
-    extract_batch_token( this->state_, batch_temps );
+    extract_batch_token( this->ops_, this->state_, batch_temps );
 
     for ( size_t i = 0; i < inference_states.size(); i++ ) {
       inference_states[i].set_token( this->state_.argmax_pos[i] );

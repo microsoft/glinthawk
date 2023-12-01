@@ -6,8 +6,8 @@
 #warning "CUDA is not enabled"
 #endif
 
-#include <random>
 #include <glog/logging.h>
+#include <random>
 #include <source_location>
 
 #include <cublas_v2.h>
@@ -30,16 +30,16 @@ class Operations
 {
 protected:
   void CHECK_CUBLAS( const cublasStatus_t err, const std::source_location location = std::source_location::current() );
-  void CHECK_CUDA( const cudaError_t err, const source_location location = std::source_location::current() );
+  void CHECK_CUDA( const cudaError_t err, const std::source_location location = std::source_location::current() );
 
-  cudaStream_t* streams;
-  cublasHandle_t cublas_handle_default;
-  cublasHandle_t* cublas_handle_array;
-  int cublas_handle_count;
+  cudaStream_t* streams { nullptr };
+  cublasHandle_t cublas_handle_default {};
+  cublasHandle_t* cublas_handle_array { nullptr };
+  int cublas_handle_count {};
 
-  constexpr cublasComputeType_t computeType = CUBLAS_COMPUTE_32F;
-  constexpr float alpha = 1.0f;
-  constexpr float beta = 0.0f;
+  constexpr static cublasComputeType_t computeType = CUBLAS_COMPUTE_32F;
+  constexpr static float alpha = 1.0f;
+  constexpr static float beta = 0.0f;
 
 public:
   Operations( const int num_streams );
@@ -49,10 +49,10 @@ public:
   void accum( DType* a, const DType* b, const uint64_t batch_size );
 
   template<uint64_t size>
-  void rmsnorm( DType* o, const DType* x, const DType* weight, const uint64_t batch_size );
+  void rmsnorm( DType* o, const DType* x, DType* temp, const DType* weight, const uint64_t batch_size );
 
   template<uint64_t n>
-  void argmax( uint32_t* output, const DType* v, const uint64_t batch_size );
+  void argmax( uint32_t* output, const DType* v, DType* temp, const uint64_t batch_size );
 
   template<uint64_t hidden_dim>
   void silu( DType* hb, DType* hb2, const uint64_t batch_size );
@@ -69,7 +69,7 @@ public:
              const bool async = false,
              const CopyType type = CopyType::HostToHost );
 
-  void randomize_buffer( DType* buffer, const uint64_t len, const float min, const float max );
+  void setup_rng( curandState* rng_state, unsigned long seed, const uint64_t size, const uint64_t batch_size );
 };
 
 static_assert( OperationsConcept<Operations<float>, float> );
@@ -237,7 +237,7 @@ __global__ void argmax_batched_init( uint32_t* output_arg, DType* output, const 
     s_out[tid] = x[global_tid];
     a_out[tid] = local_tid;
   } else {
-    if constexpr ( is_same_v<DType, __half> ) {
+    if constexpr ( std::is_same_v<DType, __half> ) {
       s_out[tid] = -CUDART_INF_FP16;
     } else {
       s_out[tid] = -INFINITY;
@@ -247,7 +247,7 @@ __global__ void argmax_batched_init( uint32_t* output_arg, DType* output, const 
     s_out[tid + AMRBS] = x[global_tid + AMRBS];
     a_out[tid + AMRBS] = local_tid + AMRBS;
   } else {
-    if constexpr ( is_same_v<DType, __half> ) {
+    if constexpr ( std::is_same_v<DType, __half> ) {
       s_out[tid + AMRBS] = -CUDART_INF_FP16;
     } else {
       s_out[tid + AMRBS] = -INFINITY;
@@ -291,7 +291,7 @@ __global__ void argmax_batched_next( uint32_t* output_arg, DType* output, const 
     s_out[tid] = x[global_tid];
     a_out[tid] = x_arg[global_tid];
   } else {
-    if constexpr ( is_same_v<DType, __half> ) {
+    if constexpr ( std::is_same_v<DType, __half> ) {
       s_out[tid] = -CUDART_INF_FP16;
     } else {
       s_out[tid] = -INFINITY;
@@ -301,7 +301,7 @@ __global__ void argmax_batched_next( uint32_t* output_arg, DType* output, const 
     s_out[tid + AMRBS] = x[global_tid + AMRBS];
     a_out[tid + AMRBS] = x_arg[global_tid + AMRBS];
   } else {
-    if constexpr ( is_same_v<DType, __half> ) {
+    if constexpr ( std::is_same_v<DType, __half> ) {
       s_out[tid + AMRBS] = -CUDART_INF_FP16;
     } else {
       s_out[tid + AMRBS] = -INFINITY;
@@ -408,12 +408,22 @@ __global__ void gumbel_fix( DType* array, float temp, curandState* rng_state )
   if ( i < vocab_size ) {
     float myrandf = curand_uniform( rng_state + i );
     myrandf = logf( -logf( myrandf ) );
-    if constexpr ( is_same_v<DType, __half> ) {
+    if constexpr ( std::is_same_v<DType, __half> ) {
       array[i] = __float2half( __half2float( array[i] ) / temp - myrandf );
     } else {
       array[i] = array[i] / temp - myrandf;
     }
   }
+}
+
+}
+
+namespace { // rng_setup
+
+__global__ void setup_rng_kernel( curandState* state, unsigned long seed )
+{
+  int id = threadIdx.x + blockIdx.x * TPB;
+  curand_init( seed, id, 0, &state[id] );
 }
 
 }
@@ -463,7 +473,11 @@ void Operations<__half>::accum( __half* a, const __half* b, const uint64_t batch
 
 template<>
 template<uint64_t size>
-void Operations<__half>::rmsnorm( __half* o, const __half* x, const __half* weight, const uint64_t batch_size )
+void Operations<__half>::rmsnorm( __half* output,
+                                  const __half* x,
+                                  __half* temp,
+                                  const __half* weight,
+                                  const uint64_t batch_size )
 {
   square_reduce_step_1<size>( reinterpret_cast<float*>( temp ), x, batch_size );
 
@@ -473,7 +487,11 @@ void Operations<__half>::rmsnorm( __half* o, const __half* x, const __half* weig
 
 template<>
 template<uint64_t size>
-void Operations<float>::rmsnorm( float* o, const float* x, const float* weight, const uint64_t batch_size )
+void Operations<float>::rmsnorm( float* output,
+                                 const float* x,
+                                 float* temp,
+                                 const float* weight,
+                                 const uint64_t batch_size )
 {
   for ( size_t i = 0; i < batch_size; i++ ) {
     CHECK_CUBLAS( cublasSdot( cublas_handle_default, size, x + i * size, 1, x + i * size, 1, temp + i ) );
@@ -483,24 +501,24 @@ void Operations<float>::rmsnorm( float* o, const float* x, const float* weight, 
 
 template<typename DType>
 template<uint64_t n>
-void Operations<DType>::argmax( uint32_t* output, const DType* v, const uint64_t batch_size )
+void Operations<DType>::argmax( uint32_t* output, const DType* v, DType* temp, const uint64_t batch_size )
 {
   argmax_step_1<DType, n>( reinterpret_cast<uint32_t*>( temp ), v, batch_size );
-  CHECK_CUDA( cudaMemcpy( output_cpu, temp, batch_size * sizeof( uint32_t ), cudaMemcpyDeviceToHost ) );
+  CHECK_CUDA( cudaMemcpy( output, temp, batch_size * sizeof( uint32_t ), cudaMemcpyDeviceToHost ) );
 }
 
 template<typename DType>
 template<uint64_t hidden_dim>
 void Operations<DType>::silu( DType* hb, DType* hb2, const uint64_t batch_size )
 {
-  silu_direct<<<div_ceil( hidden_dim * batch_size, TPB ), TPB>>>( _hb, _hb2, hidden_dim * batch_size );
+  silu_direct<<<div_ceil( hidden_dim * batch_size, TPB ), TPB>>>( hb, hb2, hidden_dim * batch_size );
 }
 
 template<typename DType>
 template<uint64_t s, uint64_t r>
-void Operations<DType>::matmul( DType* xo, const DType* x, const DType* w, const uint64_t b )
+void Operations<DType>::matmul( DType* xout, const DType* x, const DType* W, const uint64_t b )
 {
-  constexpr cudaDataType_t cuda_arg_type = is_same_v<DType, __half> ? CUDA_R_16F : CUDA_R_32F;
+  constexpr cudaDataType_t cuda_arg_type = std::is_same_v<DType, __half> ? CUDA_R_16F : CUDA_R_32F;
 
   // x(b,s) @ W(s,r) -> xout(b,r)
   // OR
@@ -540,8 +558,8 @@ void Operations<DType>::soft_sample( DType* v, const std::vector<float>& temp_s,
 {
   for ( uint64_t i = 0; i < batch_size; i++ ) {
     if ( temp_s[i] > 0 ) {
-      gumbel_fix<vocab_size><<<div_ceil( vocab_size, TPB ), TPB, 0, streams[i]>>>(
-        v + i * vocab_size, temp_s[i], vocab_size, rng_state + i * vocab_size );
+      // gumbel_fix<vocab_size><<<div_ceil( vocab_size, TPB ), TPB, 0, streams[i]>>>(
+      //   v + i * vocab_size, temp_s[i], vocab_size, rng_state + i * vocab_size );
     }
   }
 }
@@ -570,19 +588,13 @@ void Operations<DType>::copy( DType* dst,
 }
 
 template<typename DType>
-void Operations<DType>::randomize_buffer( DType* buffer, const uint64_t len, const float min, const float max )
+void Operations<DType>::setup_rng( curandState* rng_state,
+                                   unsigned long seed,
+                                   const uint64_t size,
+                                   const uint64_t batch_size )
 {
-  static thread_local std::mt19937 generator { std::random_device {}() };
-  std::uniform_real_distribution<float> distribution( min, max );
-
-  size_t i;
-#pragma omp parallel for schedule( static ) private( i )
-  for ( i = 0; i < len; i++ ) {
-    if constexpr ( std::is_same_v<DType, float> ) {
-      buffer[i] = distribution( generator );
-    } else {
-      buffer[i] = static_cast<DType>( distribution( generator ) );
-    }
+  for ( uint64_t i = 0; i < batch_size; i++ ) {
+    setup_rng_kernel<<<div_ceil( size, TPB ), TPB, 0, streams[i]>>>( rng_state + i * size, 1234 );
   }
 }
 
