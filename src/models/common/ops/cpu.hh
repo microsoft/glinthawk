@@ -69,20 +69,6 @@ void fast_matmul_row_major( uint64_t n, const DType* A, const DType* B, DType* C
 
 }
 
-namespace { // softsample
-
-template<typename DType, uint64_t vocab_size>
-void gumbel_fix( DType* array, float temp )
-{
-  for ( uint64_t i = 0; i < vocab_size; i++ ) {
-    float myrandf = static_cast<float>( rand() ) / RAND_MAX;
-    myrandf = logf( -logf( myrandf ) );
-    array[i] = DType( float( array[i] ) / temp - myrandf );
-  }
-}
-
-}
-
 }
 
 template<typename DType>
@@ -183,19 +169,6 @@ void Operations<DType>::matmul( DType* xout, const DType* x, const DType* w, con
   constexpr uint64_t ldc = m;
 
   fast_matmul_row_major<DType, m, k, lda, ldb, ldc>( n, w, x, xout );
-}
-
-template<typename DType>
-template<uint64_t vocab_size>
-void Operations<DType>::soft_sample( DType* v, const std::vector<float>& temp_s, const uint64_t batch_size )
-{
-  uint64_t i;
-#pragma omp parallel for private( i )
-  for ( i = 0; i < batch_size; i++ ) {
-    if ( temp_s[i] > 0 ) {
-      gumbel_fix<DType, vocab_size>( v + i * vocab_size, temp_s[i] );
-    }
-  }
 }
 
 template<typename DType>

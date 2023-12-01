@@ -23,12 +23,14 @@ concept AdditionalLlamaOperationsConcept = requires( T t,
                                                      const uint64_t size,
                                                      const uint32_t* int_arr,
                                                      const CopyType cpt,
-                                                     const Settings& s ) {
+                                                     const Settings& s,
+                                                     const std::vector<float>& vec ) {
   { T( s ) };
   { t.template attention_0_gemm( cptr, carr, ptr, size, int_arr ) } -> std::same_as<void>;
   { t.template attention_2_gemm( cptr, carr, ptr, size, int_arr ) } -> std::same_as<void>;
   { t.template attention_softmax( ptr, int_arr, ptr, size ) } -> std::same_as<void>;
   { t.template apply_rope( size, int_arr, cptr, cptr, ptr, arr ) } -> std::same_as<void>;
+  { t.template soft_sample( ptr, vec, size ) } -> std::same_as<void>;
   { t.template copy_kv_cache( arr, cptr, cptr, size, int_arr ) } -> std::same_as<void>;
   { t.template convert_and_copy<T1, T2>( t1_ptr, t2_ptr, size, cpt ) } -> std::same_as<void>;
 };

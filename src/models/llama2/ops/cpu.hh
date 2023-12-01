@@ -40,6 +40,8 @@ public:
                    DType* state_q,
                    DType* context_pointers[] );
 
+  void soft_sample( DType* v, const std::vector<float>& temp_s, const uint64_t batch_size );
+
   void copy_kv_cache( DType* context_pointers[],
                       const DType* state_k,
                       const DType* state_v,
@@ -120,6 +122,20 @@ inline void do_rope( const DType* freq_cis_real_row,
     const float q1 = q[i * head_size + elem_idx + 1];
     q[i * head_size + elem_idx] = DType( q0 * fcr - q1 * fci );
     q[i * head_size + elem_idx + 1] = DType( q0 * fci + q1 * fcr );
+  }
+}
+
+}
+
+namespace { // soft_sample
+
+template<typename DType, uint64_t vocab_size>
+void gumbel_fix( DType* array, float temp )
+{
+  for ( uint64_t i = 0; i < vocab_size; i++ ) {
+    float myrandf = static_cast<float>( rand() ) / RAND_MAX;
+    myrandf = logf( -logf( myrandf ) );
+    array[i] = DType( float( array[i] ) / temp - myrandf );
   }
 }
 
@@ -279,6 +295,20 @@ void LlamaOperations<Config, DType>::apply_rope( const uint64_t batch_size,
           head_k_num,
           elem_idx );
       }
+    }
+  }
+}
+
+template<typename Config, typename DType>
+void LlamaOperations<Config, DType>::soft_sample( DType* v,
+                                                  const std::vector<float>& temp_s,
+                                                  const uint64_t batch_size )
+{
+  uint64_t i;
+#pragma omp parallel for private( i )
+  for ( i = 0; i < batch_size; i++ ) {
+    if ( temp_s[i] > 0 ) {
+      gumbel_fix<DType, Config::vocab_size>( v + i * Config::vocab_size, temp_s[i] );
     }
   }
 }

@@ -398,26 +398,6 @@ __global__ void silu_direct( __half* _hb, const __half* _hb2, const uint64_t hid
 
 }
 
-namespace { // soft_sample
-
-template<typename DType, uint64_t vocab_size>
-__global__ void gumbel_fix( DType* array, float temp, curandState* rng_state )
-{
-  const uint64_t i = threadIdx.x + blockIdx.x * TPB;
-
-  if ( i < vocab_size ) {
-    float myrandf = curand_uniform( rng_state + i );
-    myrandf = logf( -logf( myrandf ) );
-    if constexpr ( std::is_same_v<DType, __half> ) {
-      array[i] = __float2half( __half2float( array[i] ) / temp - myrandf );
-    } else {
-      array[i] = array[i] / temp - myrandf;
-    }
-  }
-}
-
-}
-
 namespace { // rng_setup
 
 __global__ void setup_rng_kernel( curandState* state, unsigned long seed )
@@ -550,18 +530,6 @@ void Operations<DType>::matmul( DType* xout, const DType* x, const DType* W, con
                               ldc,
                               computeType,
                               CUBLAS_GEMM_DEFAULT ) );
-}
-
-template<typename DType>
-template<uint64_t vocab_size>
-void Operations<DType>::soft_sample( DType* v, const std::vector<float>& temp_s, const uint64_t batch_size )
-{
-  for ( uint64_t i = 0; i < batch_size; i++ ) {
-    if ( temp_s[i] > 0 ) {
-      // gumbel_fix<vocab_size><<<div_ceil( vocab_size, TPB ), TPB, 0, streams[i]>>>(
-      //   v + i * vocab_size, temp_s[i], vocab_size, rng_state + i * vocab_size );
-    }
-  }
 }
 
 template<typename DType>

@@ -49,6 +49,8 @@ public:
                    DType* state_q,
                    DType* context_pointers[] );
 
+  void soft_sample( DType* v, const std::vector<float>& temp_s, const uint64_t batch_size );
+
   void copy_kv_cache( DType* context_pointers[],
                       const DType* state_k,
                       const DType* state_v,
@@ -157,6 +159,26 @@ __global__ void do_rope( const DType* freq_cis_real_row,
     const DType q1 = q[i * head_size + elem_idx + 1];
     q[i * head_size + elem_idx] = q0 * fcr - q1 * fci;
     q[i * head_size + elem_idx + 1] = q0 * fci + q1 * fcr;
+  }
+}
+
+}
+
+namespace { // soft_sample
+
+template<typename DType, uint64_t vocab_size>
+__global__ void gumbel_fix( DType* array, float temp, curandState* rng_state )
+{
+  const uint64_t i = threadIdx.x + blockIdx.x * TPB;
+
+  if ( i < vocab_size ) {
+    float myrandf = curand_uniform( rng_state + i );
+    myrandf = logf( -logf( myrandf ) );
+    if constexpr ( std::is_same_v<DType, __half> ) {
+      array[i] = __float2half( __half2float( array[i] ) / temp - myrandf );
+    } else {
+      array[i] = array[i] / temp - myrandf;
+    }
   }
 }
 
@@ -328,6 +350,18 @@ void LlamaOperations<Config, DType>::apply_rope( const uint64_t curr_batch_size,
       freq_cis_imag + token_positions[i] * Config::head_size / 2,
       state_q + i * Config::n_kv_heads * Config::gqa_size * Config::head_size,
       context_pointers[i] + token_positions[i] * Config::n_kv_heads * Config::head_size * 2 );
+  }
+}
+
+template<typename DType>
+template<uint64_t vocab_size>
+void Operations<DType>::soft_sample( DType* v, const std::vector<float>& temp_s, const uint64_t batch_size )
+{
+  for ( uint64_t i = 0; i < batch_size; i++ ) {
+    if ( temp_s[i] > 0 ) {
+      gumbel_fix<Config::vocab_size><<<div_ceil( Config::vocab_size, TPB ), TPB, 0, streams[i]>>>(
+        v + i * Config::vocab_size, temp_s[i], Config::vocab_size, rng_state + i * Config::vocab_size );
+    }
   }
 }
 

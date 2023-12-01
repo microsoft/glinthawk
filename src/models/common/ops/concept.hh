@@ -3,7 +3,6 @@
 #include <concepts>
 #include <cstdint>
 #include <cstring>
-#include <vector>
 
 #include "models/types.hh"
 
@@ -17,7 +16,6 @@ template<typename T, typename DType>
 concept OperationsConcept = requires( T t,
                                       DType* ptr1,
                                       const DType* ptr2,
-                                      const std::vector<float>& vec,
                                       uint32_t* ptr_uint32,
                                       const uint64_t size,
                                       const float val_f,
@@ -28,7 +26,6 @@ concept OperationsConcept = requires( T t,
   { t.template argmax<UI64>( ptr_uint32, ptr2, ptr1, size ) } -> std::same_as<void>;
   { t.template silu<UI64>( ptr1, ptr1, size ) } -> std::same_as<void>;
   { t.template matmul<UI64, UI64>( ptr1, ptr2, ptr2, size ) } -> std::same_as<void>;
-  { t.template soft_sample<UI64>( ptr1, vec, size ) } -> std::same_as<void>;
   { t.copy( ptr1, ptr2, size, flag, cpt ) } -> std::same_as<void>;
 };
 
