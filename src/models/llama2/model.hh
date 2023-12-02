@@ -50,7 +50,7 @@ protected:
   void pre_attention_ops( const int32_t layer_num );
   void attention_ops();
   void post_attention_ops( const int32_t layer_num );
-  StateVector forward_postlude( StateVector&& inference_state );
+  [[nodiscard]] StateVector forward_postlude( StateVector&& inference_state );
 
 public:
   Llama2( const std::filesystem::path& model_dir,
@@ -59,15 +59,16 @@ public:
           const uint64_t concurrency_limit = 1,
           const bool randomize_parameters = false );
 
-  InferenceState forward( InferenceState&& inference_state, ContextPtr context ) override;
-  InferenceState pre_attention_forward( InferenceState&& inference_state, ContextPtr context ) override;
-  InferenceState attention_forward( InferenceState&& inference_state, ContextPtr context ) override;
-  InferenceState post_attention_forward( InferenceState&& inference_state ) override;
+  [[nodiscard]] InferenceState forward( InferenceState&& inference_state, ContextPtr context ) override;
+  [[nodiscard]] InferenceState pre_attention_forward( InferenceState&& inference_state, ContextPtr context ) override;
+  [[nodiscard]] InferenceState attention_forward( InferenceState&& inference_state, ContextPtr context ) override;
+  [[nodiscard]] InferenceState post_attention_forward( InferenceState&& inference_state ) override;
 
-  StateVector forward( StateVector&& inference_states, const ContextVector& contexts ) override;
-  StateVector pre_attention_forward( StateVector&& inference_states, const ContextVector& contexts ) override;
-  StateVector attention_forward( StateVector&& inference_states, const ContextVector& contexts ) override;
-  StateVector post_attention_forward( StateVector&& inference_states ) override;
+  [[nodiscard]] StateVector forward( StateVector&& inference_states, const ContextVector& contexts ) override;
+  [[nodiscard]] StateVector pre_attention_forward( StateVector&& inference_states,
+                                                   const ContextVector& contexts ) override;
+  [[nodiscard]] StateVector attention_forward( StateVector&& inference_states, const ContextVector& contexts ) override;
+  [[nodiscard]] StateVector post_attention_forward( StateVector&& inference_states ) override;
 
   void dummy_forward( InferenceState& inference_state ) override;
   bool is_finished( const InferenceState& inference_state ) override;

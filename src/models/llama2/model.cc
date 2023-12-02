@@ -106,6 +106,7 @@ Llama2<Config, DType, LlamaOperations, Context>::Llama2( const std::filesystem::
     FileDescriptor base_fd { CHECK_SYSCALL( "open", open( base_path.c_str(), O_RDONLY ) ) };
     MMap_Region base_mmap { nullptr, base_size, PROT_READ, MAP_PRIVATE, base_fd.fd_num(), 0 };
 
+
     ops_.copy(
       base_weights_buffer_.get(), reinterpret_cast<DType*>( base_mmap.addr() ), base_size, CopyType::HostToDevice );
 
