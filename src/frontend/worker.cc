@@ -5,17 +5,14 @@
 #include <glog/logging.h>
 
 #include "compute/kernel.hh"
-#include "models/llama2/cpu/model.hh"
 #include "worker/worker.hh"
+
+#include "models/llama2/model.hh"
 
 #define OOF_IMPL
 #include "oof/oof.hh"
 
 #include "platform_macros.hh"
-
-#ifdef GLINTHAWK_CUDA_ENABLED
-#include "models/llama2/cuda/model.cuh"
-#endif
 
 using namespace std;
 using namespace glinthawk;

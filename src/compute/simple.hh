@@ -7,11 +7,7 @@
 #include <vector>
 
 #include "kernel.hh"
-#include "models/llama2/cpu/model.hh"
-
-#ifdef GLINTHAWK_CUDA_ENABLED
-#include "models/llama2/cuda/model.cuh"
-#endif
+#include "models/llama2/model.hh"
 
 namespace glinthawk::compute {
 
@@ -63,6 +59,9 @@ public:
 template<Platform platform, DataType data_type>
 struct SimpleComputeKernelTraits;
 
+#if defined( TARGET_PLATFORM_CPU )
+
+
 template<>
 struct SimpleComputeKernelTraits<Platform::CPU, DataType::Float32>
 {
@@ -95,7 +94,8 @@ struct SimpleComputeKernelTraits<Platform::CPU, DataType::Float16>
                                       SimpleComputeKernelBase<Llama2_70B_Chat>>;
 };
 
-#ifdef GLINTHAWK_CUDA_ENABLED
+#elif defined( TARGET_PLATFORM_CUDA )
+
 template<>
 struct SimpleComputeKernelTraits<Platform::CUDA, DataType::Float32>
 {
@@ -127,6 +127,7 @@ struct SimpleComputeKernelTraits<Platform::CUDA, DataType::Float16>
                                       SimpleComputeKernelBase<Llama2_13B_Chat>,
                                       SimpleComputeKernelBase<Llama2_70B_Chat>>;
 };
+
 #endif
 
 } // namespace

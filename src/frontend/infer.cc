@@ -5,7 +5,7 @@
 #include <glog/logging.h>
 
 #include "compute/simple.hh"
-#include "models/llama2/cpu/model.hh"
+#include "models/llama2/model.hh"
 #include "util/timer.hh"
 
 #define OOF_IMPL
@@ -118,6 +118,9 @@ int main( int argc, char* argv[] )
             input_states.emplace_back( state.serialize() );
             if ( state.prompt_id() == id_print )
               cout << vocabulary.get_word( state.token() ) << flush;
+          } else {
+            cout << oof::fg_color( { 255, 255, 0 } ) << oof::underline() << vocabulary.get_word( 2 )
+                  << oof::reset_formatting() << flush;
           }
         }
       } else {

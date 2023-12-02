@@ -4,8 +4,8 @@
 #include <random>
 #include <type_traits>
 
-#include "concept.hh"
-#include "models/common/ops/cpu.hh"
+#include "../common/ops.hh"
+#include "models/llama2/ops/concept.hh"
 #include "models/llama2/base.hh"
 #include "models/llama2/variants.hh"
 
@@ -15,6 +15,9 @@ template<typename Config, typename DType>
 requires ModelConfig<Config>
 class LlamaOperations : public common::cpu::Operations<DType>
 {
+public:
+  using common::cpu::Operations<DType>::DeviceUniquePtr;
+
 public:
   LlamaOperations( const Settings<Config>& ) {}
   ~LlamaOperations() {}
@@ -52,17 +55,28 @@ public:
   void convert_and_copy( DTypeDst* dst, const DTypeSrc* src, const uint64_t size, const CopyType );
 };
 
-static_assert( LlamaOperationsConcept<LlamaOperations<configs::Llama2_7B_Chat, float>,
-                                      float,
-                                      float,
-                                      _Float16,
-                                      Settings<configs::Llama2_7B_Chat>> );
+template<typename Config, typename DType>
+class Context : public InferenceContext<Config, DType>
+{
+private:
+  typename LlamaOperations<Config, DType>::DeviceUniquePtr storage_;
 
-static_assert( LlamaOperationsConcept<LlamaOperations<configs::Llama2_7B_Chat, _Float16>,
-                                      _Float16,
-                                      _Float16,
-                                      float,
-                                      Settings<configs::Llama2_7B_Chat>> );
+public:
+  Context( const Settings<Config>& settings );
+};
+
+static_assert(
+  LlamaOperationsConcept<LlamaOperations<configs::Stories_110M, float>, float, Settings<configs::Stories_110M>> );
+
+static_assert(
+  LlamaOperationsConcept<LlamaOperations<configs::Stories_110M, _Float16>, _Float16, Settings<configs::Stories_110M>> );
+
+template<typename Config, typename DType>
+Context<Config, DType>::Context( const Settings<Config>& settings )
+  : storage_( reinterpret_cast<DType*>( new uint8_t[Context<Config, DType>::context_size( settings )] ) )
+{
+  this->buffer_ = storage_.get();
+}
 
 // helper functions are in this anonymous namespace`
 namespace {

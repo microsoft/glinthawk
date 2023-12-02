@@ -34,8 +34,8 @@ private:
   {
   public:
     net::Address address;
+    core::MessageHandler<net::TCPSession> message_handler;
     std::vector<models::InferenceState> outgoing_states {};
-    core::MessageHandler<net::TCPSession> message_handler {};
 
     Peer( const net::Address& addr, net::TCPSocket&& socket )
       : address( addr )

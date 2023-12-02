@@ -7,12 +7,6 @@
 #include <string>
 #include <string_view>
 
-#ifdef GLINTHAWK_CUDA_ENABLED
-#include <cuda_fp16.h>
-#else
-#define __half uint16_t
-#endif
-
 #include "models/types.hh"
 #include "net/address.hh"
 #include "util/digest.hh"

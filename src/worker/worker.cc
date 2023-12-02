@@ -10,12 +10,9 @@
 #include "models/common/model.hh"
 #include "util/digest.hh"
 
-#include "glinthawk.pb.h"
+#include "models/llama2/model.hh"
 
-#include "models/llama2/cpu/model.cc"
-#ifdef GLINTHAWK_CUDA_ENABLED
-#include "models/llama2/cuda/model.cuh"
-#endif
+#include "glinthawk.pb.h"
 
 using namespace std;
 using namespace glinthawk;
@@ -464,21 +461,28 @@ Worker<Model>::~Worker()
 
 namespace glinthawk::core {
 
-template class Worker<models::llama2::cpu::Llama2_7B_Chat<_Float16>>;
-template class Worker<models::llama2::cpu::Llama2_13B_Chat<_Float16>>;
-template class Worker<models::llama2::cpu::Llama2_70B_Chat<_Float16>>;
-template class Worker<models::llama2::cpu::Stories_110M<_Float16>>;
+#if defined( TARGET_PLATFORM_CPU )
+namespace models = glinthawk::models::llama2::cpu;
 
-template class Worker<models::llama2::cpu::Llama2_7B_Chat<float>>;
-template class Worker<models::llama2::cpu::Llama2_13B_Chat<float>>;
-template class Worker<models::llama2::cpu::Llama2_70B_Chat<float>>;
-template class Worker<models::llama2::cpu::Stories_110M<float>>;
+template class Worker<models::Llama2_7B_Chat<_Float16>>;
+template class Worker<models::Llama2_13B_Chat<_Float16>>;
+template class Worker<models::Llama2_70B_Chat<_Float16>>;
+template class Worker<models::Stories_110M<_Float16>>;
+template class Worker<models::Llama2_7B_Chat<float>>;
+template class Worker<models::Llama2_13B_Chat<float>>;
+template class Worker<models::Llama2_70B_Chat<float>>;
+template class Worker<models::Stories_110M<float>>;
+#elif defined( TARGET_PLATFORM_CUDA )
+namespace models = glinthawk::models::llama2::cuda;
 
-#ifdef GLINTHAWK_CUDA_ENABLED
-template class Worker<models::llama2::cuda::Llama2_7B_Chat<__half>>;
-template class Worker<models::llama2::cuda::Llama2_13B_Chat<__half>>;
-template class Worker<models::llama2::cuda::Llama2_70B_Chat<__half>>;
-template class Worker<models::llama2::cuda::Stories_110M<__half>>;
+template class Worker<models::Llama2_7B_Chat<__half>>;
+template class Worker<models::Llama2_13B_Chat<__half>>;
+template class Worker<models::Llama2_70B_Chat<__half>>;
+template class Worker<models::Stories_110M<__half>>;
+template class Worker<models::Llama2_7B_Chat<float>>;
+template class Worker<models::Llama2_13B_Chat<float>>;
+template class Worker<models::Llama2_70B_Chat<float>>;
+template class Worker<models::Stories_110M<float>>;
 #endif
 
 } // namespace glinthawk::core

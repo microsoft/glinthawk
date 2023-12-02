@@ -5,7 +5,6 @@
 #include <glog/logging.h>
 
 #include "compute/simple.hh"
-#include "models/llama2/cpu/model.hh"
 #include "util/timer.hh"
 
 #define OOF_IMPL

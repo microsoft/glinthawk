@@ -85,7 +85,8 @@ InferenceState::InferenceState( const string_view serialized )
   dtype_ = static_cast<DataType>( _get_and_advance<underlying_type_t<DataType>>( ptr ) );
 
   const auto len_data = _get_and_advance<uint64_t>( ptr );
-  activations_ = DataBuffer { len_data, ptr };
+  activations_ = DataBuffer { len_data };
+  memcpy( activations_.data(), ptr, len_data );
   ptr += len_data;
 
   const auto num_workers = _get_and_advance<uint32_t>( ptr );

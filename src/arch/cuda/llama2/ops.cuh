@@ -1,8 +1,11 @@
 #pragma once
 
-#include "concept.hh"
-#include "models/common/ops/cuda.hh"
+#include <memory>
+#include <vector>
+
+#include "../common/ops.cuh"
 #include "models/llama2/base.hh"
+#include "models/llama2/ops/concept.hh"
 
 namespace glinthawk::models::llama2::cuda {
 
@@ -13,7 +16,7 @@ public:
   using common::cuda::Operations<DType>::DeviceUniquePtr;
 
 private:
-  std::unique_ptr<curandState, CUDADeleter<curandState>> rng_state { nullptr };
+  std::unique_ptr<curandState, models::common::cuda::CUDADeleter<curandState>> rng_state { nullptr };
   void setup_rng( unsigned long seed, const uint64_t size, const uint64_t batch_size );
 
 public:
@@ -53,8 +56,51 @@ public:
   void convert_and_copy( DTypeDst* dst, const DTypeSrc* src, const uint64_t size, const CopyType );
 };
 
-static_assert( LlamaOperationsConcept<LlamaOperations<float>, float, float, __half> );
-static_assert( LlamaOperationsConcept<LlamaOperations<__half>, __half, __half, float> );
+static_assert(
+  LlamaOperationsConcept<LlamaOperations<configs::Stories_110M, float>, float, Settings<configs::Stories_110M>> );
+
+static_assert(
+  LlamaOperationsConcept<LlamaOperations<configs::Stories_110M, _Float16>, _Float16, Settings<configs::Stories_110M>> );
+
+template<typename Config, typename DType>
+class Context : public InferenceContext<Config, DType>
+{
+private:
+  typename LlamaOperations<Config, DType>::DeviceUniquePtr storage_;
+
+public:
+  Context( const Settings<Config>& settings );
+};
+
+namespace {
+
+template<std::unsigned_integral T>
+constexpr T div_ceil( const T x, const T y )
+{
+  return x / y + ( x % y != 0 );
+}
+
+constexpr size_t TPB = 64;    /* threads per block */
+constexpr size_t NRBS = 32;   /* norm reduce block size */
+constexpr size_t AMRBS = 128; /* argmax reduce block size */
+
+}
+
+template<typename Config, typename DType>
+Context<Config, DType>::Context( const Settings<Config>& settings )
+  : storage_( [&]() -> decltype( storage_ ) {
+    DType* ptr;
+    const cudaError_t err = cudaMalloc( &ptr, Context<Config, DType>::context_size( settings ) );
+
+    if ( err == cudaSuccess ) {
+      return decltype( storage_ ) { ptr };
+    } else {
+      return decltype( storage_ ) { nullptr };
+    }
+  }() )
+{
+  this->buffer_ = storage_.get();
+}
 
 // all helper functions are defined in this anonymous namespace
 namespace {
@@ -159,7 +205,7 @@ __global__ void do_rope( const DType* freq_cis_real_row,
 namespace { // soft_sample
 
 template<typename DType, uint64_t vocab_size>
-__global__ void gumbel_fix( DType* array, float temp, curandState* rng_state )
+__global__ void gumbel_fix( DType* array, const float temp, curandState* rng_state )
 {
   const uint64_t i = threadIdx.x + blockIdx.x * TPB;
 
@@ -178,7 +224,7 @@ __global__ void gumbel_fix( DType* array, float temp, curandState* rng_state )
 
 namespace { // setup_rng
 
-__global__ void setup_kernel( curandState* state, unsigned long seed )
+__global__ void setup_rng_kernel( curandState* state, unsigned long seed )
 {
   int id = threadIdx.x + blockIdx.x * TPB;
   curand_init( seed, id, 0, &state[id] );
@@ -195,11 +241,11 @@ LlamaOperations<Config, DType>::LlamaOperations( const Settings<Config>& setting
   setup_rng( 1234ul, Config::vocab_size, settings.concurrency_limit );
 
   // Summary of Checks:
-  // (a) Config::n_heads must not exceed 1024.
-  // (b) Config::dim / Config::n_heads / 2 must not exceed 1024.
-  // (c) Config::n_heads must not exceed (1 << 16) - 1. RoPE has n_heads blocks, which cannot surpass 2^16.
-  // (d) Config::seq_len must not exceed (1 << 16) - 1. Attention softmax has seq_len blocks, which cannot surpass 2^16.
-  // (e) ops::TPB must not exceed 1024. Threads per block cannot surpass 1024.
+  // (a) TPB must not exceed 1024. Threads per block cannot surpass 1024.
+  // (b) Config::n_heads must not exceed 1024.
+  // (c) Config::dim / Config::n_heads / 2 must not exceed 1024.
+  // (d) Config::n_heads must not exceed (1 << 16) - 1. RoPE has n_heads blocks, which cannot surpass 2^16.
+  // (e) Config::seq_len must not exceed (1 << 16) - 1. Attention softmax has seq_len blocks, which cannot surpass 2^16.
   // (f) Accum blocks must not exceed (1 << 16) - 1.
   // (g) Silu blocks must not exceed (1 << 16) - 1.
   // (h) CuRAND blocks must not exceed (1 << 16) - 1.
@@ -207,28 +253,28 @@ LlamaOperations<Config, DType>::LlamaOperations( const Settings<Config>& setting
   // (j) RMS Norm scratch pad must have enough space for calculations.
   // (k) Argmax scratch pad must have enough space.
 
-  CHECK_GE( 1024, Config::n_heads );                                                                       // (a)
-  CHECK_GE( 1024, Config::dim / Config::n_heads / 2 );                                                     // (b)
-  CHECK_GE( ( 1 << 16 ) - 1, Config::n_heads );                                                            // (c)
-  CHECK_GE( ( 1 << 16 ) - 1, Config::seq_len );                                                            // (d)
-  CHECK_GE( 1024, ops::TPB );                                                                              // (e)
-  CHECK_GE( ( 1 << 16 ) - 1, ops::div_ceil( Config::dim * settings.concurrency_limit, ops::TPB ) );        // (f)
-  CHECK_GE( ( 1 << 16 ) - 1, ops::div_ceil( Config::hidden_dim * settings.concurrency_limit, ops::TPB ) ); // (g)
-  CHECK_GE( ( 1 << 16 ) - 1, ops::div_ceil( Config::vocab_size, ops::TPB ) );                              // (h)
-  CHECK_GE( ( 1 << 16 ) - 1, ops::div_ceil( Config::dim, ops::NRBS ) );                                    // (i)
+  CHECK_GE( 1024, TPB );                                                                         // (a)
+  CHECK_GE( 1024, Config::n_heads );                                                             // (b)
+  CHECK_GE( 1024, Config::dim / Config::n_heads / 2 );                                           // (c)
+  CHECK_GE( ( 1 << 16 ) - 1, Config::n_heads );                                                  // (d)
+  CHECK_GE( ( 1 << 16 ) - 1, Config::seq_len );                                                  // (e)
+  CHECK_GE( ( 1 << 16 ) - 1, div_ceil( Config::dim * settings.concurrency_limit, TPB ) );        // (f)
+  CHECK_GE( ( 1 << 16 ) - 1, div_ceil( Config::hidden_dim * settings.concurrency_limit, TPB ) ); // (g)
+  CHECK_GE( ( 1 << 16 ) - 1, div_ceil( Config::vocab_size, TPB ) );                              // (h)
+  CHECK_GE( ( 1 << 16 ) - 1, div_ceil( Config::dim, NRBS ) );                                    // (i)
 
-  CHECK_GE( sizeof( DType ) * Config::dim,
-            sizeof( float )
-              * ( ops::div_ceil( Config::dim, 2 * ops::NRBS )
-                  + ops::div_ceil( ops::div_ceil( Config::dim, 2 * ops::NRBS ), 2 * ops::NRBS ) + 1 ) ); // (j)
+  CHECK_GE(
+    sizeof( DType ) * Config::dim,
+    sizeof( float )
+      * ( div_ceil( Config::dim, 2 * NRBS ) + div_ceil( div_ceil( Config::dim, 2 * NRBS ), 2 * NRBS ) + 1 ) ); // (j)
 
   CHECK_GE( sizeof( DType ) * ( 4 * Config::dim + 2 * Config::hidden_dim ),
             sizeof( uint32_t )
-                * ( ops::div_ceil( Config::vocab_size, 2 * ops::AMRBS )
-                    + ops::div_ceil( ops::div_ceil( Config::vocab_size, 2 * ops::AMRBS ), 2 * ops::AMRBS ) + 1 )
+                * ( div_ceil( Config::vocab_size, 2 * AMRBS )
+                    + div_ceil( div_ceil( Config::vocab_size, 2 * AMRBS ), 2 * AMRBS ) + 1 )
               + sizeof( DType )
-                  * ( ops::div_ceil( Config::vocab_size, 2 * ops::AMRBS )
-                      + ops::div_ceil( ops::div_ceil( Config::vocab_size, 2 * ops::AMRBS ), 2 * ops::AMRBS ) ) ); // (k)
+                  * ( div_ceil( Config::vocab_size, 2 * AMRBS )
+                      + div_ceil( div_ceil( Config::vocab_size, 2 * AMRBS ), 2 * AMRBS ) ) ); // (k)
 }
 
 template<typename Config, typename DType>
@@ -238,8 +284,8 @@ void LlamaOperations<Config, DType>::attention_0_gemm( const DType* query,
                                                        const uint64_t batch_size,
                                                        const uint32_t* token_positions )
 {
-  constexpr cudaDataType_t cuda_arg_type = is_same_v<DType, __half> ? CUDA_R_16F : CUDA_R_32F;
-  constexpr float scale = 1.0f / sqrtf( Config::head_size );
+  constexpr cudaDataType_t cuda_arg_type = std::is_same_v<DType, __half> ? CUDA_R_16F : CUDA_R_32F;
+  const float scale = 1.0f / sqrtf( Config::head_size );
   constexpr uint64_t k = Config::head_size;
   constexpr uint64_t n = Config::gqa_size;
   constexpr uint64_t lda = Config::n_kv_heads * Config::head_size * 2;
@@ -254,29 +300,29 @@ void LlamaOperations<Config, DType>::attention_0_gemm( const DType* query,
 
   for ( size_t i = 0; i < batch_size; i++ ) {
     const uint64_t m = token_positions[i] + 1;
-    CHECK_CUBLAS( cublasGemmStridedBatchedEx( cublas_handle_array[i],
-                                              CUBLAS_OP_T,
-                                              CUBLAS_OP_N,
-                                              m,
-                                              n,
-                                              k,
-                                              &scale,
-                                              context_pointers[i],
-                                              cuda_arg_type,
-                                              lda,
-                                              strideA,
-                                              query + i * dim,
-                                              cuda_arg_type,
-                                              ldb,
-                                              strideB,
-                                              &beta,
-                                              att + i * att_dim,
-                                              cuda_arg_type,
-                                              ldc,
-                                              strideC,
-                                              gemm_batch_count,
-                                              computeType,
-                                              CUBLAS_GEMM_DEFAULT ) );
+    common::cuda::CHECK_CUBLAS( cublasGemmStridedBatchedEx( this->cublas_handle_array[i],
+                                                            CUBLAS_OP_T,
+                                                            CUBLAS_OP_N,
+                                                            m,
+                                                            n,
+                                                            k,
+                                                            &scale,
+                                                            context_pointers[i],
+                                                            cuda_arg_type,
+                                                            lda,
+                                                            strideA,
+                                                            query + i * dim,
+                                                            cuda_arg_type,
+                                                            ldb,
+                                                            strideB,
+                                                            &this->beta,
+                                                            att + i * att_dim,
+                                                            cuda_arg_type,
+                                                            ldc,
+                                                            strideC,
+                                                            gemm_batch_count,
+                                                            this->computeType,
+                                                            CUBLAS_GEMM_DEFAULT ) );
   }
 }
 
@@ -287,7 +333,7 @@ void LlamaOperations<Config, DType>::attention_2_gemm( const DType* att,
                                                        const uint64_t batch_size,
                                                        const uint32_t* token_positions )
 {
-  constexpr cudaDataType_t cuda_arg_type = is_same_v<DType, __half> ? CUDA_R_16F : CUDA_R_32F;
+  constexpr cudaDataType_t cuda_arg_type = std::is_same_v<DType, __half> ? CUDA_R_16F : CUDA_R_32F;
 
   constexpr uint64_t m = Config::head_size;
   constexpr uint64_t n = Config::gqa_size;
@@ -309,29 +355,29 @@ void LlamaOperations<Config, DType>::attention_2_gemm( const DType* att,
   for ( size_t i = 0; i < batch_size; i++ ) {
     const uint64_t k = token_positions[i] + 1;
 
-    CHECK_CUBLAS( cublasGemmStridedBatchedEx( cublas_handle_array[i],
-                                              CUBLAS_OP_N,
-                                              CUBLAS_OP_N,
-                                              m,
-                                              n,
-                                              k,
-                                              &alpha,
-                                              context_pointers[i] + kv_dim,
-                                              cuda_arg_type,
-                                              lda,
-                                              strideA,
-                                              att + i * att_dim,
-                                              cuda_arg_type,
-                                              ldb,
-                                              strideB,
-                                              &beta,
-                                              xb + i * dim,
-                                              cuda_arg_type,
-                                              ldc,
-                                              strideC,
-                                              gemm_batch_count,
-                                              computeType,
-                                              CUBLAS_GEMM_DEFAULT ) );
+    common::cuda::CHECK_CUBLAS( cublasGemmStridedBatchedEx( this->cublas_handle_array[i],
+                                                            CUBLAS_OP_N,
+                                                            CUBLAS_OP_N,
+                                                            m,
+                                                            n,
+                                                            k,
+                                                            &this->alpha,
+                                                            context_pointers[i] + kv_dim,
+                                                            cuda_arg_type,
+                                                            lda,
+                                                            strideA,
+                                                            att + i * att_dim,
+                                                            cuda_arg_type,
+                                                            ldb,
+                                                            strideB,
+                                                            &this->beta,
+                                                            xb + i * dim,
+                                                            cuda_arg_type,
+                                                            ldc,
+                                                            strideC,
+                                                            gemm_batch_count,
+                                                            this->computeType,
+                                                            CUBLAS_GEMM_DEFAULT ) );
   }
 }
 
@@ -346,19 +392,20 @@ void LlamaOperations<Config, DType>::attention_softmax( DType* att,
     DType* this_buff = temp_buffer + i * Config::n_heads;
 
     // (1) find the max value for each head (each row)
-    find_max_for_rows<<<1, Config::n_heads, 0, streams[i]>>>(
-      this_att, this_buff, token_positions[i], Config::seq_len );
+    find_max_for_rows<DType, Config::seq_len>
+      <<<1, Config::n_heads, 0, this->streams[i]>>>( this_att, this_buff, token_positions[i] );
 
     // (2) exp(att - max)
-    subtract_and_expf<<<token_positions[i] + 1, Config::n_heads, 0, streams[i]>>>(
-      this_buff, this_att, Config::seq_len );
+    subtract_and_expf<DType, Config::seq_len>
+      <<<token_positions[i] + 1, Config::n_heads, 0, this->streams[i]>>>( this_buff, this_att );
 
     // (3) sum each row
-    sum_rows<<<1, Config::n_heads, 0, streams[i]>>>( this_att, this_buff, token_positions[i], Config::seq_len );
+    sum_rows<DType, Config::seq_len>
+      <<<1, Config::n_heads, 0, this->streams[i]>>>( this_att, this_buff, token_positions[i] );
 
     // (4) normalize each row by its sum
-    normalize_by_sum<<<token_positions[i] + 1, Config::n_heads, 0, streams[i]>>>(
-      this_att, this_buff, Config::seq_len );
+    normalize_by_sum<DType, Config::seq_len>
+      <<<token_positions[i] + 1, Config::n_heads, 0, this->streams[i]>>>( this_att, this_buff );
   }
 }
 
@@ -371,30 +418,29 @@ void LlamaOperations<Config, DType>::apply_rope( const uint64_t curr_batch_size,
                                                  DType* context_pointers[] )
 {
   for ( uint64_t i = 0; i < curr_batch_size; i++ ) {
-    do_rope<<<Config::n_kv_heads, Config::head_size / 2, 0, streams[i]>>>(
-      Config::head_size,
-      Config::gqa_size,
-      freq_cis_real + token_positions[i] * Config::head_size / 2,
-      freq_cis_imag + token_positions[i] * Config::head_size / 2,
-      state_q + i * Config::n_kv_heads * Config::gqa_size * Config::head_size,
-      context_pointers[i] + token_positions[i] * Config::n_kv_heads * Config::head_size * 2 );
+    do_rope<DType, Config::head_size, Config::gqa_size>
+      <<<Config::n_kv_heads, Config::head_size / 2, 0, this->streams[i]>>>(
+        freq_cis_real + token_positions[i] * Config::head_size / 2,
+        freq_cis_imag + token_positions[i] * Config::head_size / 2,
+        state_q + i * Config::n_kv_heads * Config::gqa_size * Config::head_size,
+        context_pointers[i] + token_positions[i] * Config::n_kv_heads * Config::head_size * 2 );
   }
 }
 
-template<typename DType>
-template<uint64_t vocab_size>
-void Operations<DType>::soft_sample( DType* v, const std::vector<float>& temp_s, const uint64_t batch_size )
+template<typename Config, typename DType>
+void LlamaOperations<Config, DType>::soft_sample( DType* v,
+                                                  const std::vector<float>& temp_s,
+                                                  const uint64_t batch_size )
 {
   for ( uint64_t i = 0; i < batch_size; i++ ) {
     if ( temp_s[i] > 0 ) {
-      gumbel_fix<Config::vocab_size><<<div_ceil( Config::vocab_size, TPB ), TPB, 0, streams[i]>>>(
-        v + i * Config::vocab_size, temp_s[i], Config::vocab_size, rng_state + i * Config::vocab_size );
+      gumbel_fix<DType, Config::vocab_size><<<div_ceil( Config::vocab_size, TPB ), TPB, 0, this->streams[i]>>>(
+        v + i * Config::vocab_size, temp_s[i], rng_state.get() + i * Config::vocab_size );
     }
   }
 }
 
 template<typename Config, typename DType>
-template<uint64_t kv_dim>
 void LlamaOperations<Config, DType>::copy_kv_cache( DType* context_pointers[],
                                                     const DType* state_k,
                                                     const DType* state_v,
@@ -410,10 +456,10 @@ void LlamaOperations<Config, DType>::copy_kv_cache( DType* context_pointers[],
     DType* v_cache_pos = k_cache_pos + Config::kv_dim;
 
     // XXX why not just one memcpy?
-    CHECK_CUDA( cudaMemcpyAsync(
+    common::cuda::CHECK_CUDA( cudaMemcpyAsync(
       k_cache_pos, state_k + i * Config::kv_dim, Config::kv_dim * sizeof( DType ), cudaMemcpyDeviceToDevice ) );
 
-    CHECK_CUDA( cudaMemcpyAsync(
+    common::cuda::CHECK_CUDA( cudaMemcpyAsync(
       v_cache_pos, state_v + i * Config::kv_dim, Config::kv_dim * sizeof( DType ), cudaMemcpyDeviceToDevice ) );
   }
 }
@@ -428,42 +474,42 @@ void LlamaOperations<Config, DType>::convert_and_copy( DTypeDst* dst,
   switch ( type ) {
     case CopyType::DeviceToHost: {
       if constexpr ( std::is_same_v<DTypeSrc, DTypeDst> ) {
-        CHECK_CUDA( cudaMemcpy( dst_cuda, src_cpu, size * sizeof( DTypeSrc ), cudaMemcpyDeviceToHost ) );
+        common::cuda::CHECK_CUDA( cudaMemcpy( dst, src, size * sizeof( DTypeSrc ), cudaMemcpyDeviceToHost ) );
       } else {
-        std::unique_ptr<DTypeDst> dst_cpu { reinterpret_cast<DTypeDst*>( new uint8_t[sizeof( DTypeDst ) * size] ) };
+        std::unique_ptr<DTypeSrc> src_cpu { reinterpret_cast<DTypeSrc*>( new uint8_t[sizeof( DTypeSrc ) * size] ) };
+        common::cuda::CHECK_CUDA( cudaMemcpy( src_cpu.get(), src, size * sizeof( DTypeSrc ), cudaMemcpyDeviceToHost ) );
         for ( uint64_t i = 0; i < size; i++ ) {
-          dst_cpu[i] = static_cast<DTypeDst>( src_cpu[i] );
+          dst[i] = static_cast<DTypeDst>( src_cpu.get()[i] );
         }
-        CHECK_CUDA( cudaMemcpy( dst_cuda, dst_cpu, size * sizeof( DTypeDst ), cudaMemcpyDeviceToHost ) );
       }
       break;
     }
 
     case CopyType::HostToDevice: {
       if constexpr ( std::is_same_v<DTypeSrc, DTypeDst> ) {
-        CHECK_CUDA( cudaMemcpy( dst_cpu, src_cuda, size * sizeof( DTypeSrc ), cudaMemcpyHostToDevice ) );
+        common::cuda::CHECK_CUDA( cudaMemcpy( dst, src, size * sizeof( DTypeSrc ), cudaMemcpyHostToDevice ) );
       } else {
-        std::unique_ptr<DTypeSrc> src_cpu { reinterpret_cast<DTypeSrc*>( new uint8_t[sizeof( DTypeDst ) * size] ) };
-        CHECK_CUDA( cudaMemcpy( src_cpu, src_cuda, size * sizeof( DTypeSrc ), cudaMemcpyHostToDevice ) );
+        std::unique_ptr<DTypeSrc> dst_cpu { reinterpret_cast<DTypeSrc*>( new uint8_t[sizeof( DTypeDst ) * size] ) };
         for ( uint64_t i = 0; i < size; i++ ) {
-          dst_cpu[i] = static_cast<DTypeDst>( src_cpu[i] );
+          dst_cpu.get()[i] = static_cast<DTypeDst>( src[i] );
         }
+        common::cuda::CHECK_CUDA( cudaMemcpy( dst, dst_cpu.get(), size * sizeof( DTypeSrc ), cudaMemcpyHostToDevice ) );
       }
     } break;
   }
 
-  throw runtime_error( "convert_and_copy: Invalid copy type" );
+  LOG( FATAL ) << "Invalid copy type";
 }
 
 template<typename Config, typename DType>
-void Operations<DType>::setup_rng( unsigned long seed, const uint64_t size, const uint64_t batch_size )
+void LlamaOperations<Config, DType>::setup_rng( unsigned long seed, const uint64_t size, const uint64_t batch_size )
 {
   curandState* rng_state_ptr = nullptr;
-  CHECK_CUDA( cudaMalloc( &rng_state_ptr, size * batch_size * sizeof( curandState ) ) );
-  rng_state.reset( rng_state_ptr, CUDADeleter<curandState> {} );
+  common::cuda::CHECK_CUDA( cudaMalloc( &rng_state_ptr, size * batch_size * sizeof( curandState ) ) );
+  rng_state.reset( rng_state_ptr );
 
   for ( uint64_t i = 0; i < batch_size; i++ ) {
-    setup_rng_kernel<<<div_ceil( size, TPB ), TPB, 0, streams[i]>>>( rng_state_ptr + i * size, seed );
+    setup_rng_kernel<<<div_ceil( size, TPB ), TPB, 0, this->streams[i]>>>( rng_state_ptr + i * size, seed );
   }
 }
 

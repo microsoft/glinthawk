@@ -1,10 +1,6 @@
 #pragma once
 
-#include "concept.hh"
-
-#if !defined( GLINTHAWK_CUDA_ENABLED )
-#warning "CUDA is not enabled"
-#endif
+#include "models/common/ops/concept.hh"
 
 #include <glog/logging.h>
 #include <random>
@@ -13,13 +9,6 @@
 #include <cublas_v2.h>
 #include <curand.h>
 #include <curand_kernel.h>
-#include <thrust/device_ptr.h>
-#include <thrust/device_vector.h>
-#include <thrust/extrema.h>
-#include <thrust/functional.h>
-#include <thrust/transform_reduce.h>
-
-#include "models/llama2/base.hh"
 
 namespace glinthawk::models::common::cuda {
 
@@ -27,13 +16,28 @@ constexpr size_t TPB = 64;    /* threads per block */
 constexpr size_t NRBS = 32;   /* norm reduce block size */
 constexpr size_t AMRBS = 128; /* argmax reduce block size */
 
+void CHECK_CUBLAS( const cublasStatus_t err, const std::source_location l = std::source_location::current() );
+void CHECK_CUDA( const cudaError_t err, const std::source_location l = std::source_location::current() );
+
+template<typename PtrType>
+struct CUDADeleter
+{
+  void operator()( PtrType* ptr ) const
+  {
+    if ( ptr )
+      cudaFree( ptr );
+  }
+};
+
 template<typename DType>
 class Operations
 {
-protected:
-  void CHECK_CUBLAS( const cublasStatus_t err, const std::source_location location = std::source_location::current() );
-  void CHECK_CUDA( const cudaError_t err, const std::source_location location = std::source_location::current() );
+public:
+  using DeviceUniquePtr = std::unique_ptr<DType, CUDADeleter<DType>>;
+  using Float16 = __half;
+  using Float32 = float;
 
+protected:
   cudaStream_t* streams { nullptr };
   cublasHandle_t cublas_handle_default {};
   cublasHandle_t* cublas_handle_array { nullptr };
@@ -46,6 +50,11 @@ protected:
 public:
   Operations( const int num_streams );
   ~Operations();
+
+  Operations( const Operations& ) = delete;
+  Operations& operator=( const Operations& ) = delete;
+  Operations( Operations&& ) = default;
+  Operations& operator=( Operations&& ) = default;
 
   template<uint64_t size>
   void accum( DType* a, const DType* b, const uint64_t batch_size );
@@ -65,11 +74,9 @@ public:
   template<uint64_t vocab_size>
   void soft_sample( DType* v, const std::vector<float>& temp_s, const uint64_t batch_size );
 
-  void copy( DType* dst,
-             const DType* src,
-             const uint64_t batch_size,
-             const bool async = false,
-             const CopyType type = CopyType::HostToHost );
+  DeviceUniquePtr device_allocate( const uint64_t size_bytes );
+
+  void copy( DType* dst, const DType* l, const uint64_t batch_size, const CopyType type, const bool async = false );
 };
 
 static_assert( OperationsConcept<Operations<float>, float> );
@@ -117,8 +124,7 @@ __global__ void normalize_and_scale_half( __half* output, const __half* x, const
   }
 }
 
-template<uint64_t size>
-__global__ void reduce_norm_v2_square_batched( float* output, const __half* x )
+__global__ void reduce_norm_v2_square_batched( float* output, const __half* x, const uint64_t size )
 {
   extern __shared__ float s_out[];
 
@@ -150,8 +156,7 @@ __global__ void reduce_norm_v2_square_batched( float* output, const __half* x )
     output[blockIdx.y * gridDim.x + blockIdx.x] = s_out[0] + s_out[1];
 }
 
-template<uint64_t size>
-__global__ void reduce_norm_v2_sum_batched( float* output, const float* x )
+__global__ void reduce_norm_v2_sum_batched( float* output, const float* x, const uint64_t size )
 {
   extern __shared__ float s_out[];
 
@@ -181,8 +186,12 @@ __global__ void reduce_norm_v2_sum_batched( float* output, const float* x )
     output[blockIdx.y * gridDim.x + blockIdx.x] = s_out[0] + s_out[1];
 }
 
-template<uint64_t size>
-void square_reduce_step_2( float* output, const float* x, float* temp_1, float* temp_2, const uint64_t batch_size )
+void square_reduce_step_2( float* output,
+                           const float* x,
+                           float* temp_1,
+                           float* temp_2,
+                           const uint64_t size,
+                           const uint64_t batch_size )
 {
   const uint64_t max_elems_per_block = NRBS * 2;
   const uint64_t shmem_size = sizeof( float ) * max_elems_per_block;
@@ -191,29 +200,28 @@ void square_reduce_step_2( float* output, const float* x, float* temp_1, float* 
 
   dim3 grids( grid_size, batch_size );
   if ( grid_size == 1 ) {
-    reduce_norm_v2_sum_batched<size><<<grids, NRBS, shmem_size>>>( output, x, size );
+    reduce_norm_v2_sum_batched<<<grids, NRBS, shmem_size>>>( output, x, size );
   } else {
-    reduce_norm_v2_sum_batched<size><<<grids, NRBS, shmem_size>>>( temp_1, x, size );
-    square_reduce_step_2<size>( output, temp_1, temp_2, temp_1, grid_size, batch_size );
+    reduce_norm_v2_sum_batched<<<grids, NRBS, shmem_size>>>( temp_1, x, size );
+    square_reduce_step_2( output, temp_1, temp_2, temp_1, grid_size, batch_size );
   }
 }
 
 template<uint64_t size>
 void square_reduce_step_1( float* output, const __half* x, const uint64_t batch_size )
 {
-  const uint64_t max_elems_per_block = NRBS * 2;
-  const uint64_t shmem_size = sizeof( float ) * max_elems_per_block;
-
-  const uint64_t grid_size = div_ceil( size, max_elems_per_block );
+  constexpr uint64_t max_elems_per_block = NRBS * 2;
+  constexpr uint64_t shmem_size = sizeof( float ) * max_elems_per_block;
+  constexpr uint64_t grid_size = div_ceil( size, max_elems_per_block );
 
   dim3 grids( grid_size, batch_size );
   if ( grid_size == 1 ) {
-    reduce_norm_v2_square_batched<size><<<grids, NRBS, shmem_size>>>( output, x, size );
+    reduce_norm_v2_square_batched<<<grids, NRBS, shmem_size>>>( output, x, size );
   } else {
     float* temp_1 = output + batch_size;
     float* temp_2 = temp_1 + batch_size * grid_size;
-    reduce_norm_v2_square_batched<size><<<grids, NRBS, shmem_size>>>( temp_1, x, size );
-    square_reduce_step_2<size>( output, temp_1, temp_2, temp_1, grid_size, batch_size );
+    reduce_norm_v2_square_batched<<<grids, NRBS, shmem_size>>>( temp_1, x, size );
+    square_reduce_step_2( output, temp_1, temp_2, temp_1, grid_size, batch_size );
   }
 }
 
@@ -370,7 +378,8 @@ void argmax_step_1( uint32_t* output_arg, const DType* x, const uint64_t batch_s
     uint32_t* temp_1_arg = reinterpret_cast<uint32_t*>( temp_2 + batch_size * grid_size );
     uint32_t* temp_2_arg = temp_1_arg + batch_size * grid_size;
     argmax_batched_init<DType, size><<<grids, AMRBS, shmem_size>>>( temp_1_arg, temp_1, x );
-    argmax_step_2<grid_size>( output_arg, temp_1_arg, temp_1, temp_2_arg, temp_2, temp_1_arg, temp_1, batch_size );
+    argmax_step_2<DType, grid_size>(
+      output_arg, temp_1_arg, temp_1, temp_2_arg, temp_2, temp_1_arg, temp_1, batch_size );
   }
 }
 
@@ -394,16 +403,6 @@ __global__ void silu_direct( __half* _hb, const __half* _hb2, const uint64_t hid
     const __half x = _hb[i];
     _hb[i] = x / ( __half( 1.0f ) + hexp( -x ) ) * _hb2[i];
   }
-}
-
-}
-
-namespace { // rng_setup
-
-__global__ void setup_rng_kernel( curandState* state, unsigned long seed )
-{
-  int id = threadIdx.x + blockIdx.x * TPB;
-  curand_init( seed, id, 0, &state[id] );
 }
 
 }
@@ -461,7 +460,7 @@ void Operations<__half>::rmsnorm( __half* output,
 {
   square_reduce_step_1<size>( reinterpret_cast<float*>( temp ), x, batch_size );
 
-  dim3 grid { div_ceil( size, TPB ), batch_size };
+  dim3 grid { div_ceil( size, TPB ), static_cast<uint32_t>( batch_size ) };
   normalize_and_scale_half<size><<<grid, TPB>>>( output, x, weight, reinterpret_cast<float*>( temp ) );
 }
 
@@ -533,11 +532,19 @@ void Operations<DType>::matmul( DType* xout, const DType* x, const DType* W, con
 }
 
 template<typename DType>
+Operations<DType>::DeviceUniquePtr Operations<DType>::device_allocate( const uint64_t size_bytes )
+{
+  DType* ptr;
+  CHECK_CUDA( cudaMalloc( &ptr, size_bytes ) );
+  return DeviceUniquePtr { ptr };
+}
+
+template<typename DType>
 void Operations<DType>::copy( DType* dst,
-                              const DType* src,
+                              const DType* l,
                               const uint64_t batch_size,
-                              const bool async,
-                              const CopyType type )
+                              const CopyType type,
+                              const bool async )
 {
   auto convert_to_cuda = []( const CopyType type ) {
     switch ( type ) {
@@ -546,12 +553,14 @@ void Operations<DType>::copy( DType* dst,
       case CopyType::DeviceToHost: return cudaMemcpyDeviceToHost;
       case CopyType::DeviceToDevice: return cudaMemcpyDeviceToDevice;
     }
+
+    return cudaMemcpyDeviceToDevice;
   };
 
   if ( async ) {
-    CHECK_CUDA( cudaMemcpyAsync( dst, src, batch_size * sizeof( DType ), convert_to_cuda( type ) ) );
+    CHECK_CUDA( cudaMemcpyAsync( dst, l, batch_size * sizeof( DType ), convert_to_cuda( type ) ) );
   } else {
-    CHECK_CUDA( cudaMemcpy( dst, src, batch_size * sizeof( DType ), convert_to_cuda( type ) ) );
+    CHECK_CUDA( cudaMemcpy( dst, l, batch_size * sizeof( DType ), convert_to_cuda( type ) ) );
   }
 }
 

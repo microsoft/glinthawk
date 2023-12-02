@@ -17,6 +17,7 @@ enum class DataType : uint8_t
 
 size_t DataTypeSize( const DataType dtype );
 
+/* note: DataBuffer is always on the host */
 struct DataBuffer
 {
 private:
@@ -28,18 +29,28 @@ private:
 public:
   DataBuffer() = default;
 
+  DataBuffer( const DataBuffer& ) = delete;
+  DataBuffer& operator=( const DataBuffer& ) = delete;
+
+  DataBuffer( DataBuffer&& other )
+    : ptr_( std::move( other.ptr_ ) )
+    , len_( other.len_ )
+  {
+    other.len_ = 0;
+  }
+
+  DataBuffer& operator=( DataBuffer&& other )
+  {
+    ptr_ = std::move( other.ptr_ );
+    len_ = other.len_;
+    other.len_ = 0;
+    return *this;
+  }
+
   DataBuffer( const size_t n )
     : ptr_( std::make_unique<uint8_t[]>( n ) )
     , len_( n )
   {
-  }
-
-  template<typename T>
-  DataBuffer( const size_t n, const T* data )
-    : ptr_( std::make_unique<uint8_t[]>( n ) )
-    , len_( n )
-  {
-    memcpy( ptr_.get(), data, n );
   }
 
   DataBuffer( std::unique_ptr<uint8_t[]>&& other_ptr, const uint64_t other_len )

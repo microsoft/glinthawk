@@ -21,12 +21,16 @@ concept OperationsConcept = requires( T t,
                                       const float val_f,
                                       const bool flag,
                                       const CopyType cpt ) {
+  typename T::Float16;
+  typename T::Float32;
+  typename T::DeviceUniquePtr;
   { t.template accum<UI64>( ptr1, ptr2, size ) } -> std::same_as<void>;
   { t.template rmsnorm<UI64>( ptr1, ptr2, ptr1, ptr2, size ) } -> std::same_as<void>;
   { t.template argmax<UI64>( ptr_uint32, ptr2, ptr1, size ) } -> std::same_as<void>;
   { t.template silu<UI64>( ptr1, ptr1, size ) } -> std::same_as<void>;
   { t.template matmul<UI64, UI64>( ptr1, ptr2, ptr2, size ) } -> std::same_as<void>;
-  { t.copy( ptr1, ptr2, size, flag, cpt ) } -> std::same_as<void>;
+  { t.copy( ptr1, ptr2, size, cpt, flag ) } -> std::same_as<void>;
+  { t.device_allocate( size ) } -> std::same_as<typename T::DeviceUniquePtr>;
 };
 
 } // namespace glinthawk::models::common

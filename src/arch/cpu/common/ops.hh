@@ -1,8 +1,9 @@
 #pragma once
 
+#include <memory>
 #include <random>
 
-#include "concept.hh"
+#include "models/common/ops/concept.hh"
 
 namespace glinthawk::models::common::cpu {
 
@@ -10,8 +11,18 @@ template<typename DType>
 class Operations
 {
 public:
+  using DeviceUniquePtr = std::unique_ptr<DType>;
+  using Float16 = _Float16;
+  using Float32 = float;
+
+public:
   Operations() {}
   ~Operations() {}
+
+  Operations( const Operations& ) = delete;
+  Operations& operator=( const Operations& ) = delete;
+  Operations( Operations&& ) = default;
+  Operations& operator=( Operations&& ) = default;
 
   template<uint64_t size>
   void accum( DType* a, const DType* b, const uint64_t batch_size );
@@ -31,11 +42,9 @@ public:
   template<uint64_t vocab_size>
   void soft_sample( DType* v, const std::vector<float>& temp_s, const uint64_t batch_size );
 
-  void copy( DType* dst,
-             const DType* src,
-             const uint64_t len_bytes,
-             const bool async = false,
-             const CopyType type = CopyType::HostToHost );
+  DeviceUniquePtr device_allocate( const uint64_t size_bytes );
+
+  void copy( DType* dst, const DType* src, const uint64_t len_bytes, const CopyType type, const bool async = false );
 };
 
 static_assert( OperationsConcept<Operations<float>, float> );
@@ -172,7 +181,13 @@ void Operations<DType>::matmul( DType* xout, const DType* x, const DType* w, con
 }
 
 template<typename DType>
-void Operations<DType>::copy( DType* dst, const DType* src, const uint64_t len_bytes, const bool, const CopyType )
+Operations<DType>::DeviceUniquePtr Operations<DType>::device_allocate( const uint64_t size )
+{
+  return DeviceUniquePtr { reinterpret_cast<DType*>( new uint8_t[size] ) };
+}
+
+template<typename DType>
+void Operations<DType>::copy( DType* dst, const DType* src, const uint64_t len_bytes, const CopyType, const bool )
 {
   std::memcpy( dst, src, len_bytes );
 }
