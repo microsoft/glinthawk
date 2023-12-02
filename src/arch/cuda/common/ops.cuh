@@ -552,9 +552,8 @@ void Operations<DType>::copy( DType* dst,
       case CopyType::HostToDevice: return cudaMemcpyHostToDevice;
       case CopyType::DeviceToHost: return cudaMemcpyDeviceToHost;
       case CopyType::DeviceToDevice: return cudaMemcpyDeviceToDevice;
+      default: return cudaMemcpyDefault;
     }
-
-    return cudaMemcpyDeviceToDevice;
   };
 
   if ( async ) {

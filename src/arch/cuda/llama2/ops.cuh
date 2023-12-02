@@ -253,28 +253,28 @@ LlamaOperations<Config, DType>::LlamaOperations( const Settings<Config>& setting
   // (j) RMS Norm scratch pad must have enough space for calculations.
   // (k) Argmax scratch pad must have enough space.
 
-  CHECK_GE( 1024, TPB );                                                                         // (a)
-  CHECK_GE( 1024, Config::n_heads );                                                             // (b)
-  CHECK_GE( 1024, Config::dim / Config::n_heads / 2 );                                           // (c)
-  CHECK_GE( ( 1 << 16 ) - 1, Config::n_heads );                                                  // (d)
-  CHECK_GE( ( 1 << 16 ) - 1, Config::seq_len );                                                  // (e)
+  static_assert( 1024 >= TPB );                                                                  // (a)
+  static_assert( 1024 >= Config::n_heads );                                                      // (b)
+  static_assert( 1024 >= Config::dim / Config::n_heads / 2 );                                    // (c)
+  static_assert( ( 1 << 16 ) - 1 >= Config::n_heads );                                           // (d)
+  static_assert( ( 1 << 16 ) - 1 >= Config::seq_len );                                           // (e)
   CHECK_GE( ( 1 << 16 ) - 1, div_ceil( Config::dim * settings.concurrency_limit, TPB ) );        // (f)
   CHECK_GE( ( 1 << 16 ) - 1, div_ceil( Config::hidden_dim * settings.concurrency_limit, TPB ) ); // (g)
-  CHECK_GE( ( 1 << 16 ) - 1, div_ceil( Config::vocab_size, TPB ) );                              // (h)
-  CHECK_GE( ( 1 << 16 ) - 1, div_ceil( Config::dim, NRBS ) );                                    // (i)
+  static_assert( ( 1 << 16 ) - 1 >= div_ceil( Config::vocab_size, TPB ) );                       // (h)
+  static_assert( ( 1 << 16 ) - 1 >= div_ceil( Config::dim, NRBS ) );                             // (i)
 
-  CHECK_GE(
-    sizeof( DType ) * Config::dim,
-    sizeof( float )
-      * ( div_ceil( Config::dim, 2 * NRBS ) + div_ceil( div_ceil( Config::dim, 2 * NRBS ), 2 * NRBS ) + 1 ) ); // (j)
+  static_assert(
+    sizeof( DType ) * Config::dim
+    >= sizeof( float )
+         * ( div_ceil( Config::dim, 2 * NRBS ) + div_ceil( div_ceil( Config::dim, 2 * NRBS ), 2 * NRBS ) + 1 ) ); // (j)
 
-  CHECK_GE( sizeof( DType ) * ( 4 * Config::dim + 2 * Config::hidden_dim ),
-            sizeof( uint32_t )
-                * ( div_ceil( Config::vocab_size, 2 * AMRBS )
-                    + div_ceil( div_ceil( Config::vocab_size, 2 * AMRBS ), 2 * AMRBS ) + 1 )
-              + sizeof( DType )
-                  * ( div_ceil( Config::vocab_size, 2 * AMRBS )
-                      + div_ceil( div_ceil( Config::vocab_size, 2 * AMRBS ), 2 * AMRBS ) ) ); // (k)
+  static_assert( sizeof( DType ) * ( 4 * Config::dim + 2 * Config::hidden_dim )
+                 >= ( sizeof( uint32_t )
+                        * ( div_ceil( Config::vocab_size, 2 * AMRBS )
+                            + div_ceil( div_ceil( Config::vocab_size, 2 * AMRBS ), 2 * AMRBS ) + 1 )
+                      + sizeof( DType )
+                          * ( div_ceil( Config::vocab_size, 2 * AMRBS )
+                              + div_ceil( div_ceil( Config::vocab_size, 2 * AMRBS ), 2 * AMRBS ) ) ) ); // (k)
 }
 
 template<typename Config, typename DType>
