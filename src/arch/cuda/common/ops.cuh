@@ -542,7 +542,7 @@ Operations<DType>::DeviceUniquePtr Operations<DType>::device_allocate( const uin
 template<typename DType>
 void Operations<DType>::copy( DType* dst,
                               const DType* l,
-                              const uint64_t batch_size,
+                              const uint64_t size_bytes,
                               const CopyType type,
                               const bool async )
 {
@@ -558,9 +558,9 @@ void Operations<DType>::copy( DType* dst,
   };
 
   if ( async ) {
-    CHECK_CUDA( cudaMemcpyAsync( dst, l, batch_size * sizeof( DType ), convert_to_cuda( type ) ) );
+    CHECK_CUDA( cudaMemcpyAsync( dst, l, size_bytes, convert_to_cuda( type ) ) );
   } else {
-    CHECK_CUDA( cudaMemcpy( dst, l, batch_size * sizeof( DType ), convert_to_cuda( type ) ) );
+    CHECK_CUDA( cudaMemcpy( dst, l, size_bytes, convert_to_cuda( type ) ) );
   }
 }
 
