@@ -22,8 +22,7 @@ constexpr std::string dtype_str()
     return { "FP32" };
   } else if constexpr ( sizeof( DType ) == sizeof( _Float16 ) ) {
     return { "FP16" };
-  }
-  else {
+  } else {
     LOG( FATAL ) << "invalid dtype";
   }
 }
@@ -106,7 +105,6 @@ Llama2<Config, DType, LlamaOperations, Context>::Llama2( const std::filesystem::
     FileDescriptor base_fd { CHECK_SYSCALL( "open", open( base_path.c_str(), O_RDONLY ) ) };
     MMap_Region base_mmap { nullptr, base_size, PROT_READ, MAP_PRIVATE, base_fd.fd_num(), 0 };
 
-
     ops_.copy(
       base_weights_buffer_.get(), reinterpret_cast<DType*>( base_mmap.addr() ), base_size, CopyType::HostToDevice );
 
@@ -151,24 +149,24 @@ Llama2<Config, DType, LlamaOperations, Context>::Llama2( const std::filesystem::
 }
 
 template<typename Config, typename DType, typename LlamaOperations, typename Context>
-void Llama2<Config, DType, LlamaOperations, Context>::dummy_forward( InferenceState& inference_state )
+void Llama2<Config, DType, LlamaOperations, Context>::dummy_forward( InferenceState& state )
 {
-  CHECK_EQ( inference_state.next_layer(), settings_.start_layer_num );
+  CHECK_EQ( state.next_layer(), settings_.start_layer_num );
 
-  inference_state.erase_from_workers( settings_.start_layer_num );
+  state.erase_from_workers( settings_.start_layer_num );
   if ( settings_.end_layer_num == Config::n_layers - 1 ) {
-    inference_state.set_next_layer( 0 );
+    state.set_next_layer( 0 );
   } else {
-    inference_state.set_next_layer( settings_.end_layer_num + 1 );
+    state.set_next_layer( settings_.end_layer_num + 1 );
   }
 }
 
 template<typename Config, typename DType, typename LlamaOperations, typename Context>
-bool Llama2<Config, DType, LlamaOperations, Context>::is_finished( const InferenceState& inference_state )
+bool Llama2<Config, DType, LlamaOperations, Context>::is_finished( const InferenceState& state )
 {
-  CHECK_EQ( inference_state.next_layer(), settings_.start_layer_num );
-  return ( inference_state.next_layer() == 0 )
-         and ( inference_state.token() == 2 or inference_state.token_pos() >= Config::seq_len ); // EOS or out of length
+  CHECK_EQ( state.next_layer(), settings_.start_layer_num );
+  return ( state.next_layer() == 0 )
+         and ( state.token() == 2 or state.token_pos() >= Config::seq_len ); // EOS or out of length
 }
 
 template<typename Config, typename DType, typename LlamaOperations, typename Context>
@@ -334,7 +332,6 @@ void Llama2<Config, DType, LlamaOperations, Context>::forward_prelude(
     /* THE FIRST LAYER, just read the tokens */
     std::vector<uint32_t> token_vector( states.size() );
     std::transform( states.begin(), states.end(), token_vector.begin(), []( auto& state ) { return state.token(); } );
-
     pass_begin( token_vector );
   } else {
     /* NOT THE FIRST LAYER, load the activations */
@@ -342,7 +339,8 @@ void Llama2<Config, DType, LlamaOperations, Context>::forward_prelude(
       ops_.copy( this->state_.x + i * Config::dim,
                  reinterpret_cast<DType*>( states[i].activations().data() ),
                  Config::dim * sizeof( DType ),
-                 CopyType::HostToDevice );
+                 CopyType::HostToDevice,
+                 true );
     }
   }
 }
@@ -353,7 +351,7 @@ std::vector<InferenceState> Llama2<Config, DType, LlamaOperations, Context>::for
 {
   std::vector<InferenceState> output_states;
 
-  if ( states[0].next_layer() + 1 == Config::n_layers - 1 ) {
+  if ( this->settings_.end_layer_num == Config::n_layers - 1 ) {
     pass_end();
 
     std::vector<float> batch_temps;
@@ -371,7 +369,6 @@ std::vector<InferenceState> Llama2<Config, DType, LlamaOperations, Context>::for
       output_states.push_back( std::move( states[i] ) );
     }
   } else {
-
     for ( size_t i = 0; i < states.size(); i++ ) {
       DataBuffer activations { Config::dim * sizeof( DType ) };
 

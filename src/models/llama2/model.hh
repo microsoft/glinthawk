@@ -27,7 +27,7 @@ public:
   using SettingsType = Settings<Config>;
 
 protected:
-  Settings<Config> settings_;
+  const Settings<Config> settings_;
   Operations ops_ { settings_ };
 
   typename Operations::DeviceUniquePtr base_weights_buffer_;
