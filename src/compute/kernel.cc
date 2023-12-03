@@ -23,7 +23,6 @@ void ComputeKernel<Model>::execution_thread_func()
   vector<shared_ptr<typename Model::ContextType>> contexts;
 
   while ( running_ ) {
-    // TODO: possible move bug shenanigans
     input_states.clear();
     contexts.clear();
 
@@ -34,7 +33,6 @@ void ComputeKernel<Model>::execution_thread_func()
       for ( size_t j = 0; j < target_conc_size_; j++ ) {
         action = move( processing_.front() );
         processing_.pop();
-        // TODO: possible move bug shenanigans
         input_states.push_back( move( action.first ) );
         contexts.push_back( action.second );
       }
@@ -48,7 +46,6 @@ void ComputeKernel<Model>::execution_thread_func()
     {
       lock_guard lock( outgoing_mutex_ );
       for ( auto& state : results ) {
-        // TODO: possible move bug shenanigans
         outgoing_.emplace( move( state ) );
       }
     }

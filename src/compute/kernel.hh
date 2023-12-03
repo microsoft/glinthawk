@@ -175,7 +175,6 @@ public:
   {
     if ( model_->is_finished( state ) ) {
       state.set_finished();
-      // TODO: should we send the finished message back to the coordinator?
     }
   }
 

@@ -79,10 +79,6 @@ int main( int argc, char* argv[] )
 
         if ( start_slice == 0 ) {
           state.set_token( 5 );
-          models::DataBuffer activations { models::SerializedDataType::Type::Float32,
-                                           nullptr,
-                                           0 };
-          state.set_activations( move( activations ) );
         } else {
           DataBuffer activations { dim * DataTypeSize( DataType::_GLINTHAWK_DTYPE_NAME_ ) };
           state.set_activations( move( activations ) );

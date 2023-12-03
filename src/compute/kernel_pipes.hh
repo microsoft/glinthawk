@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <atomic>
 #include <condition_variable>
 #include <memory>
@@ -10,10 +11,23 @@
 
 #include "kernel.hh"
 #include "models/common/model.hh"
+#include "monitoring/measurement.hh"
 #include "prompt/prompt.hh"
 #include "util/eventfd.hh"
 
 namespace glinthawk::compute {
+
+enum class Platform
+{
+  CPU, // TODO rename to AMD64
+  CUDA
+};
+
+enum class DataType
+{
+  Float16,
+  Float32
+};
 
 template<typename Model>
 class ComputeKernelPiped
@@ -26,36 +40,32 @@ private:
   const uint64_t target_conc_att_size_;
   const uint64_t target_conc_post_size_;
 
+  const bool process_pre_;
+  const bool process_att_;
+  const bool process_post_;
+
+  const uint64_t start_layer_;
+  const uint64_t end_layer_;
   const uint64_t n_layers_;
 
   uint64_t released_;
 
   std::vector<std::queue<std::pair<glinthawk::models::InferenceState, std::shared_ptr<typename Model::ContextType>>>>
-    processing_pre_attention_, processing_attention_ {};
-  std::vector<std::queue<glinthawk::models::InferenceState>> waiting_attention_ {}, processing_post_attention_ {};
+    processing_pre_attention_ {};
+  std::vector<std::queue<glinthawk::models::InferenceState>> processing_post_attention_ {};
 
-  std::queue<glinthawk::models::InferenceState> incoming_, outgoing_ {};
+  std::queue<std::pair<glinthawk::models::InferenceState, std::shared_ptr<typename Model::ContextType>>>
+    processing_attention_ {};
+  std::queue<glinthawk::models::InferenceState> incoming_, waiting_attention_ {}, outgoing_ {};
 
-  std::vector<std::mutex> processing_pre_attention_mutex_ {};
-  std::vector<std::mutex> processing_attention_mutex_ {}, waiting_attention_mutex_ {};
-  std::vector<std::mutex> processing_post_attention_mutex_ {};
+  std::mutex ctx_mgr_mutex_ {}, outgoing_mutex_ {}, incoming_mutex_ {}, waiting_attention_mutex_ {},
+    processing_mutex_ {};
 
-  std::mutex ctx_mgr_mutex_ {}, outgoing_mutex_ {}, incoming_mutex_ {};
-
-  std::vector<std::condition_variable> incoming_pre_attention_cv_ {}, processing_pre_attention_cv_ {};
-  std::vector<std::condition_variable> processing_attention_cv_ {}, waiting_attention_cv_ {};
-
-  std::condition_variable incoming_cv_{}, processing_cv_ {};
+  std::condition_variable incoming_cv_ {}, processing_cv_ {}, waiting_attention_cv_ {};
 
   EventFD event_fd_ {};
 
   std::atomic<bool> running_ { true };
-
-  // TODO: how many threads do we need?
-  // TODO: how are we going to make locks works with these many queues
-  // TODO: how are we going to make CVs work?
-  // TODO: do we need many incomings?
-  // TODO: do we need many backlogs?
 
   void execution_thread_func();
   void bookkeeping_thread_func();
@@ -65,24 +75,37 @@ private:
   std::thread bookkeeping_thread_;
   std::thread backlog_thread_;
 
+  Measurement& __stats__ { global_measurement() };
+
 public:
   ComputeKernelPiped( std::unique_ptr<Model>&& model,
                       const uint64_t target_conc_pre_size,
                       const uint64_t target_conc_att_size,
                       const uint64_t target_conc_post_size,
-                      const uint64_t n_layers )
+                      const bool process_pre,
+                      const bool process_att,
+                      const bool process_post,
+                      const uint64_t start_layer,
+                      const uint64_t end_layer )
     : model_( std::move( model ) )
-    , context_manager_( model_->config() )
+    , context_manager_( model_->settings() )
     , target_conc_pre_size_( target_conc_pre_size )
     , target_conc_att_size_( target_conc_att_size )
     , target_conc_post_size_( target_conc_post_size )
-    , n_layers_( n_layers )
+    , process_pre_( process_pre )
+    , process_att_( process_att )
+    , process_post_( process_post )
+    , start_layer_( start_layer )
+    , end_layer_( end_layer )
+    , n_layers_( end_layer_ - start_layer_ + 1 )
     , released_( 0 )
     , running_( true )
     , execution_thread_( &ComputeKernelPiped::execution_thread_func, this )
     , bookkeeping_thread_( &ComputeKernelPiped::bookkeeping_thread_func, this )
     , backlog_thread_( &ComputeKernelPiped::backlog_thread_func, this )
   {
+    processing_pre_attention_.reserve( n_layers_ );
+    processing_post_attention_.reserve( n_layers_ );
   }
 
   void push( glinthawk::models::InferenceState&& state )
@@ -119,6 +142,7 @@ public:
 
   void push_finished( glinthawk::models::InferenceState&& state )
   {
+    // TODO: revise for multi-stage
     // Release the context
     bool released;
     {
@@ -141,7 +165,7 @@ public:
 
     if ( state.layer_workers().empty() ) {
       // drop release message as it has fully propagated
-      LOG( INFO ) << "Dropping empty (release) inference state: " << state.to_string();
+      DLOG( INFO ) << "Dropping empty (release) inference state: " << state.to_string();
     } else {
       // propagate the release message to the next worker
       {
@@ -157,7 +181,6 @@ public:
   {
     if ( model_->is_finished( state ) ) {
       state.set_finished();
-      // TODO: should we send the finished message back to the coordinator?
     }
   }
 

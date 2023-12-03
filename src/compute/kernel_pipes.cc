@@ -1,5 +1,6 @@
 #include "kernel_pipes.hh"
 
+#include <chrono>
 #include <glog/logging.h>
 
 #include "models/llama2/cpu/model.cc"
@@ -17,35 +18,118 @@ void ComputeKernelPiped<Model>::execution_thread_func()
 {
   LOG( INFO ) << "ComputeKernelPiped execution thread started.";
 
+  InferenceState action_post;
   pair<InferenceState, shared_ptr<typename Model::ContextType>> action;
   vector<InferenceState> input_states;
   vector<shared_ptr<typename Model::ContextType>> contexts;
 
+  InferenceState::Stage next_stage;
+
   while ( running_ ) {
-    // TODO: possible move bug shenanigans
     input_states.clear();
     contexts.clear();
 
     {
+      // hold lock until one queue has enough data for one batch
       unique_lock<mutex> lock( processing_mutex_ );
-      processing_cv_.wait( lock, [this] { return !( processing_.size() < target_conc_size_ ); } );
+      processing_cv_.wait( lock, [this] {
+        if ( processing_attention_.size() >= target_conc_att_size_ )
+          return true;
+        for ( size_t layer_idx = 0; layer_idx < n_layers_; layer_idx++ ) {
+          if ( processing_pre_attention_[layer_idx].size() >= target_conc_pre_size_ )
+            return true;
+          if ( processing_post_attention_[layer_idx].size() >= target_conc_post_size_ )
+            return true;
+        }
+        return false;
+      } );
 
-      for ( size_t j = 0; j < target_conc_size_; j++ ) {
-        action = move( processing_.front() );
-        processing_.pop();
-        // TODO: possible move bug shenanigans
-        input_states.push_back( move( action.first ) );
-        contexts.push_back( action.second );
+      // find the queue and pop the data to input_states and possibly contexts
+      if ( processing_attention_.size() >= target_conc_att_size_ ) {
+        for ( size_t j = 0; j < target_conc_att_size_; j++ ) {
+          action = move( processing_attention_.front() );
+          processing_attention_.pop();
+          input_states.push_back( move( action.first ) );
+          contexts.push_back( action.second );
+        }
+        next_stage = InferenceState::Stage::Attention
+      } else {
+        for ( size_t layer_idx = n_layers_ - 1; layer_idx >= 0; layer_idx-- ) {
+          if ( processing_pre_attention_[layer_idx].size() >= target_conc_pre_size_ ) {
+            for ( size_t j = 0; j < target_conc_pre_size_; j++ ) {
+              action = move( processing_pre_attention_[layer_idx].front() );
+              processing_pre_attention_[layer_idx].pop();
+              input_states.push_back( move( action.first ) );
+              contexts.push_back( action.second );
+            }
+            next_stage = InferenceState::Stage::PreAttention;
+            break;
+          }
+          if ( processing_post_attention_[layer_idx].size() >= target_conc_post_size_ ) {
+            for ( size_t j = 0; j < target_conc_post_size_; j++ ) {
+              action_post = move( processing_post_attention_[layer_idx].front() );
+              processing_post_attention_[layer_idx].pop();
+              input_states.push_back( move( action_post ) );
+            }
+            next_stage = InferenceState::Stage::PostAttention;
+            break;
+          }
+        }
       }
     }
 
-    auto results = model_->forward( move( input_states ), contexts );
+    const auto start = chrono::steady_clock::now();
+    std::vector<InferenceState> results;
+    switch ( next_stage ) {
+      case InferenceState::Stage::PreAttention:
+        results = model_->pre_attention_forward( move( input_states ), contexts );
+        break;
+      case InferenceState::Stage::Attention:
+        results = model_->attention_forward( move( input_states ), contexts );
+        break;
+      case InferenceState::Stage::PostAttention:
+        results = model_->post_attention_forward( move( input_states ) );
+        break;
+    }
+    const auto duration = chrono::duration_cast<chrono::microseconds>( chrono::steady_clock::now() - start );
+    // TODO: separate kernel forward times in stats
+    __stats__.add_point<IntDistributions::KernelForwardTime>( duration.count() );
 
     {
+      // TODO: massive lock issue here, we read from context_manager and write to processing and outgoing queues
       lock_guard lock( outgoing_mutex_ );
-      for ( auto& state : results ) {
-        // TODO: possible move bug shenanigans
-        outgoing_.emplace( move( state ) );
+      switch ( next_stage ) {
+        case InferenceState::Stage::PreAttention:
+          // the next stage is attention, so if we hold the context and serve attention, add it directly to processing
+          for ( size_t j = 0; j < target_conc_pre_size_; j++ ) {
+            if ( process_att_ and !contexts[j].get().empty() ) {
+              processing_attention_.emplace( move( results[j] ), contexts[j] )
+            } else {
+              outgoing_.emplace( move( results[j] ) );
+            }
+          }
+          break;
+        case InferenceState::Stage::Attention:
+          // the next stage is post-attention, so if we serve that specific layer, add it directly to processing
+          for ( size_t j = 0; j < target_conc_att_size_; j++ ) {
+            if ( process_post_ and results[j].next_layer() <= end_layer_ and results[j].next_layer() >= start_layer_ ) {
+              processing_post_attention_[results[j].next_layer() - start_layer_].emplace( move( results[j] ) )
+            } else {
+              outgoing_.emplace( move( results[j] ) );
+            }
+          }
+          break;
+        case InferenceState::Stage::PostAttention:
+          // the next stage is pre-attention, so if we serve that specific layer, get context and add it directly to processing
+          for ( size_t j = 0; j < target_conc_post_size_; j++ ) {
+            if ( process_pre_ and results[j].next_layer() <= end_layer_ and results[j].next_layer() >= start_layer_ ) {
+              processing_pre_attention_[results[j].next_layer() - start_layer_].emplace(
+                move( results[j] ), context_manager_.get_context( results[j].prompt_id() ) );
+            } else {
+              outgoing_.emplace( move( results[j] ) );
+            }
+          }
+          break;
       }
     }
 
@@ -69,30 +153,68 @@ void ComputeKernelPiped<Model>::bookkeeping_thread_func()
       action = move( incoming_.front() );
       incoming_.pop();
     }
-    {
-      // let's get the context for this action
-      lock_guard lock( ctx_mgr_mutex_ );
-      context = context_manager_.get_context( action.prompt_id() );
+    // make sure this action is for our serving layers
+    const uint32_t next_layer_index = action.next_layer() - start_layer_;
+    CHECK_LE( next_layer_index, n_layers_ )
+      << "InferenceState can not be processed in this machine, original next layer was: " << action.next_layer()
+      << ", but we host " << start_layer_ << " to " << end_layer_;
+    switch ( action.next_stage() ) {
+      case InferenceState::Stage::PreAttention: {
+        // for action in pre-attention stage, get (try to create) context and just push to compute.
+        CHECK_EQ( process_pre_, true ) << "This machine does not service the PreAttention pipeline";
+        {
+          // let's get the context for this action, but it doesn't matter if it's empty
+          lock_guard lock( ctx_mgr_mutex_ );
+          context = context_manager_.get_context( action.prompt_id() );
+        }
+        {
+          lock_guard lock( processing_mutex_ );
+          processing_pre_attention_[next_layer_index].emplace( move( action ), context );
+        }
 
-      //    if ( not context ) {
-      //      LOG( ERROR ) << "Could not get context for prompt_id=" << action.prompt_id().to_string();
-      //    }
-    }
-
-    if ( context ) {
-      {
-        lock_guard lock( processing_mutex_ );
-        processing_.emplace( move( action ), context );
+        processing_cv_.notify_one();
+        break;
       }
 
-      processing_cv_.notify_one();
-    } else {
-      {
-        lock_guard lock( waiting_mutex_ );
-        waiting_.emplace( move( action ) );
+      case InferenceState::Stage::Attention: {
+        // for action in attention stage, get non-empty context and just push to compute.
+        // if the context doesn't exist, just wait
+        CHECK_EQ( process_att_, true ) << "This machine does not service the Attention pipeline";
+        {
+          // let's get the context for this action
+          lock_guard lock( ctx_mgr_mutex_ );
+          context = context_manager_.get_context( action.prompt_id() );
+        }
+        if ( context ) {
+          {
+            lock_guard lock( processing_mutex_ );
+            processing_attention_.emplace( move( action ), context );
+          }
+
+          processing_cv_.notify_one();
+        } else {
+          {
+            lock_guard lock( waiting_attention_mutex_ );
+            waiting_attention_.emplace( move( action ) );
+          }
+
+          waiting_attention_cv_.notify_one();
+        }
+        break;
       }
 
-      waiting_cv_.notify_one();
+      case InferenceState::Stage::PostAttention: {
+        // for action in post-attention stage, push to compute without context
+        // if the context doesn't exist, just wait
+        CHECK_EQ( process_post_, true ) << "This machine does not service the PostAttention pipeline";
+        {
+          lock_guard lock( processing_mutex_ );
+          processing_post_attention_[next_layer_index].emplace( move( action ), context );
+        }
+
+        processing_cv_.notify_one();
+        break;
+      }
     }
   }
 }
@@ -106,13 +228,12 @@ void ComputeKernelPiped<Model>::backlog_thread_func()
   shared_ptr<typename Model::ContextType> context;
 
   while ( running_ ) {
-    // let's get an action from the incoming_
+    // let's get an action from the waiting_attention_
     {
-      unique_lock<mutex> lock( waiting_mutex_ );
-      while ( not( released_ > 0 && !waiting_.empty() ) )
-        waiting_cv_.wait( lock );
-      action = move( waiting_.front() );
-      waiting_.pop();
+      unique_lock<mutex> lock( waiting_attention_mutex_ );
+      waiting_attention_cv_.wait( lock, [this] { return released_ > 0 && !waiting_attention_.empty(); } );
+      action = move( waiting_attention_.front() );
+      waiting_attention_.pop();
       released_ -= 1;
     }
 
@@ -120,30 +241,41 @@ void ComputeKernelPiped<Model>::backlog_thread_func()
       // let's get the context for this action
       lock_guard lock( ctx_mgr_mutex_ );
       context = context_manager_.get_context( action.prompt_id() );
-
-      //    if ( not context ) {
-      //      LOG( ERROR ) << "Could not get context for prompt_id=" << action.prompt_id().to_string();
-      //    }
     }
 
-    if ( context ) {
+    if ( not context.get()->empty() ) {
       {
         lock_guard lock( processing_mutex_ );
-        processing_.emplace( move( action ), context );
+        processing_attention_.emplace( move( action ), context );
       }
 
       processing_cv_.notify_one();
     } else {
       {
-        lock_guard lock( waiting_mutex_ );
-        waiting_.emplace( move( action ) );
+        lock_guard lock( waiting_attention_mutex_ );
+        waiting_attention_.emplace( move( action ) );
       }
     }
   }
 }
 
+namespace glinthawk::compute {
+
+template class ComputeKernelPiped<models::llama2::cpu::Llama2_7B_Chat<float>>;
+template class ComputeKernelPiped<models::llama2::cpu::Llama2_13B_Chat<float>>;
+template class ComputeKernelPiped<models::llama2::cpu::Llama2_70B_Chat<float>>;
+template class ComputeKernelPiped<models::llama2::cpu::Stories_110M<float>>;
+
+template class ComputeKernelPiped<models::llama2::cpu::Llama2_7B_Chat<_Float16>>;
+template class ComputeKernelPiped<models::llama2::cpu::Llama2_13B_Chat<_Float16>>;
+template class ComputeKernelPiped<models::llama2::cpu::Llama2_70B_Chat<_Float16>>;
+template class ComputeKernelPiped<models::llama2::cpu::Stories_110M<_Float16>>;
+
 #ifdef GLINTHAWK_CUDA_ENABLED
-template class glinthawk::compute::ComputeKernelPiped<glinthawk::models::llama2::cuda::Llama2<__half>>;
+template class ComputeKernelPiped<models::llama2::cuda::Llama2_7B_Chat<__half>>;
+template class ComputeKernelPiped<models::llama2::cuda::Llama2_13B_Chat<__half>>;
+template class ComputeKernelPiped<models::llama2::cuda::Llama2_70B_Chat<__half>>;
+template class ComputeKernelPiped<models::llama2::cuda::Stories_110M<__half>>;
 #endif
-template class glinthawk::compute::ComputeKernelPiped<glinthawk::models::llama2::cpu::Llama2<_Float16>>;
-template class glinthawk::compute::ComputeKernelPiped<glinthawk::models::llama2::cpu::Llama2<float>>;
+
+} // namespace glinthawk::compute

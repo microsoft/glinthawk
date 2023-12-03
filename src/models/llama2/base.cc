@@ -193,7 +193,7 @@ LayerWeights<Config, DType>::LayerWeights( const DType* model )
 
 /* RUN STATE */
 
-// TODO: optimize run state memory usage
+// run-state memory usage is unoptimized, but too small to matter
 template<typename Config, typename DType>
 RunState<Config, DType>::RunState( const Settings<Config>& settings, DType* buffer )
   : buffer_( buffer )
@@ -302,6 +302,7 @@ void BaseLlama2<Config, DType, Context, StorageDeleter>::init( const Settings<Co
 template<typename Config, typename DType, typename Context, typename StorageDeleter>
 void BaseLlama2<Config, DType, Context, StorageDeleter>::dummy_forward( InferenceState& inference_state )
 {
+  // TODO: rewrite this for split pipes
   CHECK_EQ( inference_state.next_layer(), settings_.start_layer_num );
 
   inference_state.erase_from_workers( settings_.start_layer_num );
@@ -315,6 +316,7 @@ void BaseLlama2<Config, DType, Context, StorageDeleter>::dummy_forward( Inferenc
 template<typename Config, typename DType, typename Context, typename StorageDeleter>
 bool BaseLlama2<Config, DType, Context, StorageDeleter>::is_finished( const InferenceState& inference_state )
 {
+  // TODO: rewrite this for split pipes
   CHECK_EQ( inference_state.next_layer(), settings_.start_layer_num );
   return ( inference_state.next_layer() == 0 )
          and ( inference_state.token() == 2 or inference_state.token_pos() >= Config::seq_len ); // EOS or out of length

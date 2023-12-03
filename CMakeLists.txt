@@ -16,7 +16,7 @@ link_libraries ( OpenSSL::SSL )
 find_package ( Glog REQUIRED )
 link_libraries ( glog::glog )
 
-set ( Protobuf_USE_STATIC_LIBS ON )
+#set ( Protobuf_USE_STATIC_LIBS ON )
 find_package ( Protobuf REQUIRED )
 add_subdirectory ( src/message/protobuf )
 link_libraries ( protobuf::libprotobuf )
@@ -40,7 +40,7 @@ file ( GLOB SOURCE
 )
 
 # XXX not ready yet
-list ( REMOVE_ITEM SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/src/compute/kernel_pipes.cc" )
+#list ( REMOVE_ITEM SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/.../XXX" )
 
 file ( GLOB_RECURSE MODELS_SOURCE
   src/models/*.cc

@@ -44,6 +44,7 @@ private:
   DataType dtype_ { DataType::Float32 };
   DataBuffer activations_ {};
 
+  // TODO: revise mapping since we have stages
   // mapping from layer to worker address for this inference state
   std::map<uint32_t, glinthawk::net::Address> layer_workers_ {};
 
