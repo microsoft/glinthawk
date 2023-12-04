@@ -1,8 +1,8 @@
 #pragma once
 
-#if defined( TARGET_PLATFORM_CPU )
-#define _GLINTHAWK_ARCH_NS_ cpu
-#define _GLINTHAWK_PLATFORM_NAME_ CPU
+#if defined( TARGET_PLATFORM_AMD64 )
+#define _GLINTHAWK_ARCH_NS_ amd64
+#define _GLINTHAWK_PLATFORM_NAME_ AMD64
 #endif
 
 #if defined( TARGET_PLATFORM_CUDA )
@@ -12,9 +12,9 @@
 
 #if defined( TARGET_DTYPE_FLOAT16 )
 #define _GLINTHAWK_DTYPE_NAME_ Float16
-#if defined( TARGET_PLATFORM_CPU )
+#if defined( TARGET_PLATFORM_AMD64 )
 #define _GLINTHAWK_DTYPE_ _Float16
-#else
+#elif defined( TARGET_PLATFORM_CUDA )
 #define _GLINTHAWK_DTYPE_ __half
 #endif
 #endif

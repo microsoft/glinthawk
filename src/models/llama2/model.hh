@@ -4,8 +4,8 @@
 #include "ops/concept.hh"
 #include "variants.hh"
 
-#if defined( TARGET_PLATFORM_CPU )
-#include "arch/cpu/llama2/ops.hh"
+#if defined( TARGET_PLATFORM_AMD64 )
+#include "arch/amd64/llama2/ops.hh"
 #elif defined( TARGET_PLATFORM_CUDA )
 #include "arch/cuda/llama2/ops.cuh"
 #endif
@@ -83,12 +83,12 @@ public:
                             PLATFORM::LlamaOperations<configs::MODEL_NAME, DType>,                                     \
                             PLATFORM::Context<configs::MODEL_NAME, DType>>
 
-#if defined( TARGET_PLATFORM_CPU )
-namespace cpu {
-DECLARE_MODEL( cpu, Llama2_7B_Chat );
-DECLARE_MODEL( cpu, Llama2_13B_Chat );
-DECLARE_MODEL( cpu, Llama2_70B_Chat );
-DECLARE_MODEL( cpu, Stories_110M );
+#if defined( TARGET_PLATFORM_AMD64 )
+namespace amd64 {
+DECLARE_MODEL( amd64, Llama2_7B_Chat );
+DECLARE_MODEL( amd64, Llama2_13B_Chat );
+DECLARE_MODEL( amd64, Llama2_70B_Chat );
+DECLARE_MODEL( amd64, Stories_110M );
 }
 #elif defined( TARGET_PLATFORM_CUDA )
 namespace cuda {

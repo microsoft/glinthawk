@@ -20,7 +20,7 @@ namespace glinthawk::compute {
 
 enum class Platform
 {
-  CPU, // TODO rename to AMD64
+  AMD64,
   CUDA
 };
 

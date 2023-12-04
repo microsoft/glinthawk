@@ -5,18 +5,18 @@
 #include <type_traits>
 
 #include "../common/ops.hh"
-#include "models/llama2/ops/concept.hh"
 #include "models/llama2/base.hh"
+#include "models/llama2/ops/concept.hh"
 #include "models/llama2/variants.hh"
 
-namespace glinthawk::models::llama2::cpu {
+namespace glinthawk::models::llama2::amd64 {
 
 template<typename Config, typename DType>
 requires ModelConfig<Config>
-class LlamaOperations : public common::cpu::Operations<DType>
+class LlamaOperations : public common::amd64::Operations<DType>
 {
 public:
-  using common::cpu::Operations<DType>::DeviceUniquePtr;
+  using common::amd64::Operations<DType>::DeviceUniquePtr;
 
 public:
   LlamaOperations( const Settings<Config>& ) {}
@@ -268,7 +268,7 @@ void LlamaOperations<Config, DType>::attention_2_gemm( const DType* att,
 template<typename Config, typename DType>
 void LlamaOperations<Config, DType>::attention_softmax( DType* att,
                                                         const uint32_t* token_positions,
-                                                        DType*, /* CPU doesn't use the temp buffer */
+                                                        DType*,
                                                         const uint64_t batch_size )
 {
   uint64_t i;
@@ -365,4 +365,4 @@ void LlamaOperations<Config, DType>::convert_and_copy( DTypeDst* dst,
   }
 }
 
-} // namespace glinthawk::models::llama2::cpu
+} // namespace glinthawk::models::llama2::amd64

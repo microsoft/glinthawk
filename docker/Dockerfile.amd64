@@ -18,14 +18,14 @@ COPY . ./
 WORKDIR /app/build
 ENV CXX="g++-12" CC="gcc-12"
 RUN cmake -DCMAKE_BUILD_TYPE=MinSizeRel ../src
-RUN cmake --build . --target worker-cpu-fp16 worker-cpu-fp32 profile-cpu-fp16 profile-cpu-fp32 -j$(nproc)
+RUN cmake --build . --target worker-amd64-fp16 worker-amd64-fp32 profile-amd64-fp16 profile-amd64-fp32 -j$(nproc)
 
 FROM ubuntu:22.04
 RUN apt-get update -qq
 RUN apt-get install -y libprotobuf23 libssl3 libgoogle-glog0v5 libgomp1
 WORKDIR /app
-COPY --from=0 /app/build/cpu/worker-fp16 /app/worker-fp16
-COPY --from=0 /app/build/cpu/worker-fp32 /app/worker-fp32
-COPY --from=0 /app/build/cpu/profile-fp16 /app/profile-fp16
-COPY --from=0 /app/build/cpu/profile-fp32 /app/profile-fp32
+COPY --from=0 /app/build/amd64/worker-fp16 /app/worker-fp16
+COPY --from=0 /app/build/amd64/worker-fp32 /app/worker-fp32
+COPY --from=0 /app/build/amd64/profile-fp16 /app/profile-fp16
+COPY --from=0 /app/build/amd64/profile-fp32 /app/profile-fp32
 ENTRYPOINT ["/app/worker-fp16"]

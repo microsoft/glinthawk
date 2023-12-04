@@ -7,9 +7,6 @@ include ( etc/cflags.cmake )
 include ( etc/openmp.cmake )
 include ( etc/cuda.cmake )
 
-find_package ( GTest CONFIG REQUIRED )
-include ( GoogleTest )
-
 find_package ( OpenSSL REQUIRED )
 link_libraries ( OpenSSL::SSL )
 
@@ -49,7 +46,7 @@ list ( REMOVE_ITEM SOURCE_COMPUTE "${CMAKE_CURRENT_SOURCE_DIR}/src/compute/kerne
 add_library ( glinthawkcore OBJECT ${SOURCE_CORE} )
 link_libraries ( glinthawkcore )
 
-add_subdirectory ( targets/cpu cpu/ )
+add_subdirectory ( targets/amd64 amd64/ )
 
 if ( CUDA_ENABLED )
   add_subdirectory ( targets/cuda cuda/ )

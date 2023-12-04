@@ -476,10 +476,11 @@ void LlamaOperations<Config, DType>::convert_and_copy( DTypeDst* dst,
       if constexpr ( std::is_same_v<DTypeSrc, DTypeDst> ) {
         common::cuda::CHECK_CUDA( cudaMemcpy( dst, src, size * sizeof( DTypeSrc ), cudaMemcpyDeviceToHost ) );
       } else {
-        std::unique_ptr<DTypeSrc> src_cpu { reinterpret_cast<DTypeSrc*>( new uint8_t[sizeof( DTypeSrc ) * size] ) };
-        common::cuda::CHECK_CUDA( cudaMemcpy( src_cpu.get(), src, size * sizeof( DTypeSrc ), cudaMemcpyDeviceToHost ) );
+        std::unique_ptr<DTypeSrc> src_host { reinterpret_cast<DTypeSrc*>( new uint8_t[sizeof( DTypeSrc ) * size] ) };
+        common::cuda::CHECK_CUDA(
+          cudaMemcpy( src_host.get(), src, size * sizeof( DTypeSrc ), cudaMemcpyDeviceToHost ) );
         for ( uint64_t i = 0; i < size; i++ ) {
-          dst[i] = static_cast<DTypeDst>( src_cpu.get()[i] );
+          dst[i] = static_cast<DTypeDst>( src_host.get()[i] );
         }
       }
       break;
@@ -489,11 +490,12 @@ void LlamaOperations<Config, DType>::convert_and_copy( DTypeDst* dst,
       if constexpr ( std::is_same_v<DTypeSrc, DTypeDst> ) {
         common::cuda::CHECK_CUDA( cudaMemcpy( dst, src, size * sizeof( DTypeSrc ), cudaMemcpyHostToDevice ) );
       } else {
-        std::unique_ptr<DTypeSrc> dst_cpu { reinterpret_cast<DTypeSrc*>( new uint8_t[sizeof( DTypeDst ) * size] ) };
+        std::unique_ptr<DTypeSrc> dst_host { reinterpret_cast<DTypeSrc*>( new uint8_t[sizeof( DTypeDst ) * size] ) };
         for ( uint64_t i = 0; i < size; i++ ) {
-          dst_cpu.get()[i] = static_cast<DTypeDst>( src[i] );
+          dst_host.get()[i] = static_cast<DTypeDst>( src[i] );
         }
-        common::cuda::CHECK_CUDA( cudaMemcpy( dst, dst_cpu.get(), size * sizeof( DTypeSrc ), cudaMemcpyHostToDevice ) );
+        common::cuda::CHECK_CUDA(
+          cudaMemcpy( dst, dst_host.get(), size * sizeof( DTypeSrc ), cudaMemcpyHostToDevice ) );
       }
     } break;
   }

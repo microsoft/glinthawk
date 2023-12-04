@@ -59,18 +59,18 @@ public:
 template<Platform platform, DataType data_type>
 struct SimpleComputeKernelTraits;
 
-#if defined( TARGET_PLATFORM_CPU )
+#if defined( TARGET_PLATFORM_AMD64 )
 
 
 template<>
-struct SimpleComputeKernelTraits<Platform::CPU, DataType::Float32>
+struct SimpleComputeKernelTraits<Platform::AMD64, DataType::Float32>
 {
   using DType = float;
 
-  using Stories_110M = models::llama2::cpu::Stories_110M<DType>;
-  using Llama2_7B_Chat = models::llama2::cpu::Llama2_7B_Chat<DType>;
-  using Llama2_13B_Chat = models::llama2::cpu::Llama2_13B_Chat<DType>;
-  using Llama2_70B_Chat = models::llama2::cpu::Llama2_70B_Chat<DType>;
+  using Stories_110M = models::llama2::amd64::Stories_110M<DType>;
+  using Llama2_7B_Chat = models::llama2::amd64::Llama2_7B_Chat<DType>;
+  using Llama2_13B_Chat = models::llama2::amd64::Llama2_13B_Chat<DType>;
+  using Llama2_70B_Chat = models::llama2::amd64::Llama2_70B_Chat<DType>;
 
   using KernelVariantT = std::variant<SimpleComputeKernelBase<Stories_110M>,
                                       SimpleComputeKernelBase<Llama2_7B_Chat>,
@@ -79,14 +79,14 @@ struct SimpleComputeKernelTraits<Platform::CPU, DataType::Float32>
 };
 
 template<>
-struct SimpleComputeKernelTraits<Platform::CPU, DataType::Float16>
+struct SimpleComputeKernelTraits<Platform::AMD64, DataType::Float16>
 {
   using DType = _Float16;
 
-  using Stories_110M = models::llama2::cpu::Stories_110M<DType>;
-  using Llama2_7B_Chat = models::llama2::cpu::Llama2_7B_Chat<DType>;
-  using Llama2_13B_Chat = models::llama2::cpu::Llama2_13B_Chat<DType>;
-  using Llama2_70B_Chat = models::llama2::cpu::Llama2_70B_Chat<DType>;
+  using Stories_110M = models::llama2::amd64::Stories_110M<DType>;
+  using Llama2_7B_Chat = models::llama2::amd64::Llama2_7B_Chat<DType>;
+  using Llama2_13B_Chat = models::llama2::amd64::Llama2_13B_Chat<DType>;
+  using Llama2_70B_Chat = models::llama2::amd64::Llama2_70B_Chat<DType>;
 
   using KernelVariantT = std::variant<SimpleComputeKernelBase<Stories_110M>,
                                       SimpleComputeKernelBase<Llama2_7B_Chat>,

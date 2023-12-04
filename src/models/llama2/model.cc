@@ -21,7 +21,7 @@ std::string dtype_str()
   if constexpr ( std::is_same_v<DType, float> ) {
     return { "FP32" };
   }
-#if defined( TARGET_PLATFORM_CPU )
+#if defined( TARGET_PLATFORM_AMD64 )
   else if constexpr ( std::is_same_v<DType, _Float16> ) {
     return { "FP16" };
   }
@@ -41,7 +41,7 @@ void CHECK_DTYPE( const DataType dtype )
   if constexpr ( std::is_same_v<DType, float> ) {
     CHECK( dtype == DataType::Float32 );
   }
-#if defined( TARGET_PLATFORM_CPU )
+#if defined( TARGET_PLATFORM_AMD64 )
   else if constexpr ( std::is_same_v<DType, _Float16> ) {
     CHECK( dtype == DataType::Float16 );
   }
@@ -609,15 +609,15 @@ InferenceState Llama2<Config, DType, LlamaOperations, Context>::post_attention_f
                         PLATFORM::LlamaOperations<configs::MODEL, DTYPE>,                                              \
                         PLATFORM::Context<configs::MODEL, DTYPE>>;
 
-#if defined( TARGET_PLATFORM_CPU )
-INSTANTIATE_MODEL( cpu, Stories_110M, float );
-INSTANTIATE_MODEL( cpu, Llama2_7B_Chat, float );
-INSTANTIATE_MODEL( cpu, Llama2_13B_Chat, float );
-INSTANTIATE_MODEL( cpu, Llama2_70B_Chat, float );
-INSTANTIATE_MODEL( cpu, Stories_110M, _Float16 );
-INSTANTIATE_MODEL( cpu, Llama2_7B_Chat, _Float16 );
-INSTANTIATE_MODEL( cpu, Llama2_13B_Chat, _Float16 );
-INSTANTIATE_MODEL( cpu, Llama2_70B_Chat, _Float16 );
+#if defined( TARGET_PLATFORM_AMD64 )
+INSTANTIATE_MODEL( amd64, Stories_110M, float );
+INSTANTIATE_MODEL( amd64, Llama2_7B_Chat, float );
+INSTANTIATE_MODEL( amd64, Llama2_13B_Chat, float );
+INSTANTIATE_MODEL( amd64, Llama2_70B_Chat, float );
+INSTANTIATE_MODEL( amd64, Stories_110M, _Float16 );
+INSTANTIATE_MODEL( amd64, Llama2_7B_Chat, _Float16 );
+INSTANTIATE_MODEL( amd64, Llama2_13B_Chat, _Float16 );
+INSTANTIATE_MODEL( amd64, Llama2_70B_Chat, _Float16 );
 #elif defined( TARGET_PLATFORM_CUDA )
 INSTANTIATE_MODEL( cuda, Stories_110M, float );
 INSTANTIATE_MODEL( cuda, Llama2_7B_Chat, float );

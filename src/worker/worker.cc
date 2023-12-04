@@ -461,8 +461,8 @@ Worker<Model>::~Worker()
 
 namespace glinthawk::core {
 
-#if defined( TARGET_PLATFORM_CPU )
-namespace models = glinthawk::models::llama2::cpu;
+#if defined( TARGET_PLATFORM_AMD64 )
+namespace models = glinthawk::models::llama2::amd64;
 
 template class Worker<models::Llama2_7B_Chat<_Float16>>;
 template class Worker<models::Llama2_13B_Chat<_Float16>>;

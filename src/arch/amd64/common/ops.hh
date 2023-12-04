@@ -5,7 +5,7 @@
 
 #include "models/common/ops/concept.hh"
 
-namespace glinthawk::models::common::cpu {
+namespace glinthawk::models::common::amd64 {
 
 template<typename DType>
 class Operations
@@ -192,4 +192,4 @@ void Operations<DType>::copy( DType* dst, const DType* src, const uint64_t len_b
   std::memcpy( dst, src, len_bytes );
 }
 
-} // namespace glinthawk::models::common::cpu
+} // namespace glinthawk::models::common::amd64
