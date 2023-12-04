@@ -22,6 +22,7 @@ public:
   using ContextVector = std::vector<ContextPtr>;
   using Operations = LlamaOperations;
 
+  using ModelDataType = DType;
   using ContextType = Context;
   using ConfigType = Config;
   using SettingsType = Settings<Config>;

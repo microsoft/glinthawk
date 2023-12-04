@@ -21,6 +21,27 @@ using namespace glinthawk::net;
 
 using glinthawk::models::InferenceState;
 
+namespace {
+
+template<typename DType>
+DataType get_datatype()
+{
+  if constexpr ( std::is_same_v<DType, float> ) {
+    return DataType::Float32;
+  }
+#if defined( TARGET_PLATFORM_AMD64 )
+  else if constexpr ( std::is_same_v<DType, _Float16> ) {
+    return DataType::Float16;
+  }
+#elif defined( TARGET_PLATFORM_CUDA )
+  else if constexpr ( std::is_same_v<DType, __half> ) {
+    return DataType::Float16;
+  }
+#endif
+}
+
+}
+
 template<typename Model>
 void Worker<Model>::setup_stats_handler()
 {
@@ -211,7 +232,11 @@ bool Worker<Model>::handle_coordinator_message( core::Message&& msg )
     case Message::OpCode::PushDummyPrompts: {
       // create some random inference states and feed them into the system
       const size_t prompt_count = stoull( msg.payload() );
-      CHECK_LE( prompt_count, 2048 ) << "Too many dummy prompts requested.";
+
+      if ( prompt_count == 0 or prompt_count > 1 << 16 ) {
+        LOG( ERROR ) << "Invalid number of dummy prompts requested: " << prompt_count;
+        break;
+      }
 
       if ( current_route_.empty() ) {
         LOG( ERROR ) << "No route set; cannot push dummy prompts.";
@@ -225,13 +250,22 @@ bool Worker<Model>::handle_coordinator_message( core::Message&& msg )
       mt19937 temp_gen { rd() };
       uniform_real_distribution<float> temp_dist( 0.0f, 1.0f );
 
+      // get current time as uint64_t
+      uint64_t current_time
+        = chrono::duration_cast<chrono::nanoseconds>( chrono::system_clock::now().time_since_epoch() ).count();
+
+      char prompt_id_buf[sizeof( uint64_t ) * 2];
+      memcpy( prompt_id_buf, &current_time, sizeof( uint64_t ) );
+
       for ( size_t i = 0; i < prompt_count; i++ ) {
         PromptID prompt_id;
-        util::digest::sha256( { reinterpret_cast<const char*>( &i ), sizeof( i ) }, prompt_id );
+        memcpy( prompt_id_buf + sizeof( uint64_t ), &dummy_prompt_current_id_, sizeof( dummy_prompt_current_id_ ) );
+        util::digest::sha256( { prompt_id_buf, sizeof( prompt_id_buf ) }, prompt_id );
 
-        // generate a random number between 0 and 1
+        dummy_prompt_current_id_++;
 
-        InferenceState state {};
+        // generate a random number between 0 and 1 for temprature
+        InferenceState state { get_datatype<typename Model::ModelDataType>() };
         state.set_prompt_id( prompt_id );
         state.set_token( 1 /* BOS */ );
         state.set_token_pos( 0 );
@@ -244,6 +278,12 @@ bool Worker<Model>::handle_coordinator_message( core::Message&& msg )
       }
 
       this->compute_kernel_->push( move( states ) );
+
+      // also run the completion commiting thread
+      if ( not completion_commit_thread_.joinable() ) {
+        completion_commit_thread_ = thread( bind( &Worker<Model>::completion_commit_thread_func, this ) );
+      }
+
       break;
     }
 
@@ -359,7 +399,7 @@ bool Worker<Model>::handle_peer_message( core::Message&& msg )
           if ( state.finished() ) {
             __stats__.increment<Counters::PromptsCompleted>();
             __stats__.add_point<IntDistributions::PromptLength>( state.token_pos() );
-            completion.terminate();
+            completion_manager_->terminate( state.prompt_id() );
           }
         } else {
           /* we're still processing the prompt, load the next token */

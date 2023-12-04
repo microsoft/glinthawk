@@ -64,11 +64,26 @@ class CompletionManager
 private:
   std::shared_ptr<storage::BlobStore> blobstore_ {};
   std::unordered_map<PromptID, Completion> completions_ {};
+  std::unordered_map<PromptID, Completion> terminated_completions_ {};
+
+  std::mutex terminated_mutex_ {};
 
 public:
   CompletionManager( std::shared_ptr<storage::BlobStore> blobstore );
 
   Completion& get( const PromptID& prompt_id );
+
+  void terminate( const PromptID& prompt_id )
+  {
+    completions_.at( prompt_id ).terminate();
+
+    {
+      std::lock_guard<std::mutex> lock { terminated_mutex_ };
+      terminated_completions_.emplace( prompt_id, std::move( completions_.at( prompt_id ) ) );
+    }
+
+    completions_.erase( prompt_id );
+  }
 
   /// @brief Upload the completed terminated completions to the blobstore
   void commit();

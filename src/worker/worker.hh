@@ -85,6 +85,7 @@ private:
   Measurement& __stats__ { global_measurement() };
   std::unique_ptr<monitoring::TelegrafLogger> telegraf_logger_ { nullptr };
   TimerFD stats_timer_ { std::chrono::seconds { 5 } };
+  uint64_t dummy_prompt_current_id_ { 0 };
 
   void setup_peer( std::map<net::Address, Peer>::iterator peer_it );
   void setup_blobstore( const std::string& blobstore_uri );

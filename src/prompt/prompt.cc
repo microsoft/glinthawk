@@ -101,28 +101,36 @@ Completion& CompletionManager::get( const PromptID& prompt_id ) { return complet
 
 void CompletionManager::commit()
 {
-  vector<pair<string, string>> key_values;
-
-  for ( auto it = completions_.begin(); it != completions_.end(); ) {
-    if ( it->second.is_terminated() ) {
-      key_values.emplace_back( "completed/"s + it->first.base58digest() + ".ghc", it->second.serialize() );
-      it = completions_.erase( it );
-    } else {
-      it++;
-    }
-  }
-
-  if ( key_values.empty() ) {
-    // nothing to commit
+  if ( terminated_completions_.empty() ) {
     return;
   }
 
-  auto results = blobstore_->put( key_values );
-  CHECK( results.size() == key_values.size() ) << "Failed to commit all completions";
+  vector<pair<string, string>> key_values;
 
+  {
+    std::lock_guard<std::mutex> lock { terminated_mutex_ };
+
+    for ( auto& [id, completion] : terminated_completions_ ) {
+      if ( completion.is_terminated() ) {
+        key_values.emplace_back( "completed/"s + id.base58digest() + ".ghc", completion.serialize() );
+      } else {
+        LOG( ERROR ) << "Completion " << id.base58digest() << " is not terminated.";
+      }
+    }
+
+    terminated_completions_.clear();
+  }
+
+  auto results = blobstore_->put( key_values );
+  CHECK( results.size() == key_values.size() ) << "Failed to commit completions";
+
+  size_t failed = 0;
   for ( size_t i = 0; i < results.size(); i++ ) {
     if ( results[i] != storage::OpResult::OK ) {
-      LOG( FATAL ) << "Failed to commit completion " << key_values[i].first;
+      LOG( WARNING ) << "Failed to commit completion " << key_values[i].first;
+      failed++;
     }
   }
+
+  LOG( INFO ) << "Committed " << ( key_values.size() - failed ) << " completions";
 }
