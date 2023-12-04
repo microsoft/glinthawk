@@ -86,17 +86,20 @@ void ComputeKernelPiped<Model>::execution_thread_func()
     switch ( next_stage ) {
       case InferenceState::Stage::PreAttention:
         results = model_->pre_attention_forward( move( input_states ), contexts );
+        const auto duration = chrono::duration_cast<chrono::microseconds>( chrono::steady_clock::now() - start );
+        __stats__.add_point<IntDistributions::KernelPreAttentionForwardTime>( duration.count() );
         break;
       case InferenceState::Stage::Attention:
         results = model_->attention_forward( move( input_states ), contexts );
+        const auto duration = chrono::duration_cast<chrono::microseconds>( chrono::steady_clock::now() - start );
+        __stats__.add_point<IntDistributions::KernelAttentionForwardTime>( duration.count() );
         break;
       case InferenceState::Stage::PostAttention:
         results = model_->post_attention_forward( move( input_states ) );
+        const auto duration = chrono::duration_cast<chrono::microseconds>( chrono::steady_clock::now() - start );
+        __stats__.add_point<IntDistributions::KernelPostAttentionForwardTime>( duration.count() );
         break;
     }
-    const auto duration = chrono::duration_cast<chrono::microseconds>( chrono::steady_clock::now() - start );
-    // TODO: separate kernel forward times in stats
-    __stats__.add_point<IntDistributions::KernelForwardTime>( duration.count() );
 
     outgoing_states.clear();
     processing_states.clear();
