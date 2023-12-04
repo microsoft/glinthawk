@@ -17,18 +17,6 @@
 
 namespace glinthawk::compute {
 
-enum class Platform
-{
-  CPU, // TODO rename to AMD64
-  CUDA
-};
-
-enum class DataType
-{
-  Float16,
-  Float32
-};
-
 template<typename Model>
 class ComputeKernelPiped
 {
@@ -142,7 +130,6 @@ public:
 
   void push_finished( glinthawk::models::InferenceState&& state )
   {
-    // TODO: revise for multi-stage
     // Release the context
     bool released;
     {
