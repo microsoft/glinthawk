@@ -70,7 +70,7 @@ int main( int argc, char* argv[] )
     CREATE_AND_RUN_WORKER( "llama2-7b-chat", Llama2_7B_Chat )
     else CREATE_AND_RUN_WORKER( "llama2-13b-chat", Llama2_13B_Chat )
     else CREATE_AND_RUN_WORKER( "llama2-70b-chat", Llama2_70B_Chat )
-    else CREATE_AND_RUN_WORKER( "stories-100m", Stories_110M )
+    else CREATE_AND_RUN_WORKER( "stories-110m", Stories_110M )
     else LOG( FATAL ) << "Unknown model name: " << model_name;
     // clang-format on
 
