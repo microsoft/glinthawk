@@ -36,7 +36,7 @@ void ComputeKernelPiped<Model>::execution_thread_func()
     {
       // hold lock until one queue has enough data for one batch
       unique_lock<mutex> lock( processing_mutex_ );
-      processing_cv_.wait( lock, [this] {
+      processing_cv_.wait( lock, [this, &next_stage, &next_layer_idx] {
         if ( processing_attention_.size() >= target_conc_att_size_ ) {
           next_stage = InferenceState::Stage::Attention;
           next_layer_idx = -1;
