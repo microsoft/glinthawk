@@ -23,6 +23,9 @@ void ComputeKernelPiped<Model>::execution_thread_func()
   vector<InferenceState> input_states;
   vector<shared_ptr<typename Model::ContextType>> contexts;
 
+  vector<InferenceState> outgoing_states;
+  vector<pair<InferenceState, shared_ptr<typename Model::ContextType>>> processing_states;
+
   InferenceState::Stage next_stage;
 
   while ( running_ ) {
@@ -95,45 +98,73 @@ void ComputeKernelPiped<Model>::execution_thread_func()
     // TODO: separate kernel forward times in stats
     __stats__.add_point<IntDistributions::KernelForwardTime>( duration.count() );
 
+    outgoing_states.clear();
+    processing_states.clear();
+    switch ( next_stage ) {
+      case InferenceState::Stage::PreAttention:
+        // the next stage is attention, so if we hold the context and serve attention, add it directly to processing
+        for ( size_t j = 0; j < target_conc_pre_size_; j++ ) {
+          if ( process_att_ and !contexts[j].get().empty() ) {
+            processing_states.emplace( move( results[j] ), contexts[j] )
+          } else {
+            outgoing_states.emplace( move( results[j] ) );
+          }
+        }
+        break;
+      case InferenceState::Stage::Attention:
+        // the next stage is post-attention, so if we serve that specific layer, add it directly to processing
+        for ( size_t j = 0; j < target_conc_att_size_; j++ ) {
+          if ( process_post_ and results[j].next_layer() <= end_layer_ and results[j].next_layer() >= start_layer_ ) {
+            processing_states.emplace( move( results[j] ), contexts[j] )
+          } else {
+            outgoing_states.emplace( move( results[j] ) );
+          }
+        }
+        break;
+      case InferenceState::Stage::PostAttention:
+        // the next stage is pre-attention, so if we serve that specific layer, get context and add it directly to processing
+        for ( size_t j = 0; j < target_conc_post_size_; j++ ) {
+          if ( process_pre_ and results[j].next_layer() <= end_layer_ and results[j].next_layer() >= start_layer_ ) {
+            lock_guard lock( ctx_mgr_mutex_ );
+            processing_states.emplace(move( results[j] ), context_manager_.get_context( results[j].prompt_id() ) );
+          } else {
+            outgoing_states.emplace( move( results[j] ) );
+          }
+        }
+        break;
+    }
+
     {
-      // TODO: massive lock issue here, we read from context_manager and write to processing and outgoing queues
       lock_guard lock( outgoing_mutex_ );
+      for ( auto& state : outgoing_states ) {
+        outgoing_.emplace( move( state ) );
+      }
+    }
+
+    if (outgoing_states.size() > 0) {
+      event_fd_.write_event();
+    }
+
+    {
+      lock_guard lock( processing_mutex_ );
       switch ( next_stage ) {
         case InferenceState::Stage::PreAttention:
-          // the next stage is attention, so if we hold the context and serve attention, add it directly to processing
-          for ( size_t j = 0; j < target_conc_pre_size_; j++ ) {
-            if ( process_att_ and !contexts[j].get().empty() ) {
-              processing_attention_.emplace( move( results[j] ), contexts[j] )
-            } else {
-              outgoing_.emplace( move( results[j] ) );
-            }
+          for ( auto& action : processing_states ) {
+            processing_attention_.emplace( move( action.first ), action.second )
           }
           break;
         case InferenceState::Stage::Attention:
-          // the next stage is post-attention, so if we serve that specific layer, add it directly to processing
-          for ( size_t j = 0; j < target_conc_att_size_; j++ ) {
-            if ( process_post_ and results[j].next_layer() <= end_layer_ and results[j].next_layer() >= start_layer_ ) {
-              processing_post_attention_[results[j].next_layer() - start_layer_].emplace( move( results[j] ) )
-            } else {
-              outgoing_.emplace( move( results[j] ) );
-            }
+          for ( auto& action : processing_states ) {
+            processing_post_attention_[action.first.next_layer() - start_layer_].emplace( move( action.first ) )
           }
           break;
         case InferenceState::Stage::PostAttention:
-          // the next stage is pre-attention, so if we serve that specific layer, get context and add it directly to processing
-          for ( size_t j = 0; j < target_conc_post_size_; j++ ) {
-            if ( process_pre_ and results[j].next_layer() <= end_layer_ and results[j].next_layer() >= start_layer_ ) {
-              processing_pre_attention_[results[j].next_layer() - start_layer_].emplace(
-                move( results[j] ), context_manager_.get_context( results[j].prompt_id() ) );
-            } else {
-              outgoing_.emplace( move( results[j] ) );
-            }
+          for ( auto& action : processing_states ) {
+            processing_pre_attention_[action.first.next_layer() - start_layer_].emplace( move( action.first ), action.second )
           }
           break;
       }
     }
-
-    event_fd_.write_event();
   }
 }
 
