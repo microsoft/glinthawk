@@ -89,23 +89,26 @@ InferenceState::InferenceState( const string_view serialized )
   ptr += len_data;
 
   const auto num_workers = _get_and_advance<uint32_t>( ptr );
-
   for ( uint32_t i = 0; i < num_workers; i++ ) {
     const auto layer = _get_and_advance<uint32_t>( ptr );
+    const auto stage = _get_and_advance<Stage>( ptr );
     const auto ipv4_numeric = _get_and_advance<uint32_t>( ptr );
     const auto port = _get_and_advance<uint16_t>( ptr );
-    layer_workers_.emplace( layer, net::Address::from_ipv4_numeric( ipv4_numeric, port ) );
+    layer_workers_.emplace( std::pair<layer, stage>, net::Address::from_ipv4_numeric( ipv4_numeric, port ) );
   }
 }
 
 net::Address InferenceState::next_worker() const
 {
-  auto it = layer_workers_.find( next_layer_ );
-  CHECK( it != layer_workers_.end() ) << "No worker found for layer " << next_layer_;
+  auto it = layer_workers_.find( std::pair<next_layer_, next_stage_> );
+  CHECK( it != layer_workers_.end() ) << "No worker found for layer " << next_layer_ << ", stage " << next_stage_;
   return it->second;
 }
 
-void InferenceState::erase_from_workers( const uint32_t next_layer ) { layer_workers_.erase( next_layer ); }
+void InferenceState::erase_from_workers( const uint32_t next_layer, const Stage next_stage )
+{
+  layer_workers_.erase( std::pair<next_layer, next_stage> );
+}
 
 string InferenceState::serialize() const
 {
@@ -130,9 +133,9 @@ string InferenceState::serialize() const
   ptr += activations_.len();
 
   _put_and_advance( ptr, static_cast<uint32_t>( layer_workers_.size() ) );
-
-  for ( auto& [layer, address] : layer_workers_ ) {
-    _put_and_advance( ptr, layer );
+  for ( auto& [layer_stage, address] : layer_workers_ ) {
+    _put_and_advance( ptr, layer_stage.first );
+    _put_and_advance( ptr, layer_stage.second );
     _put_and_advance( ptr, address.ipv4_numeric() );
     _put_and_advance( ptr, address.port() );
   }
@@ -143,14 +146,20 @@ string InferenceState::serialize() const
 string InferenceState::to_string() const
 {
   ostringstream oss;
-  oss << "InferenceState(" << "prompt_id=" << prompt_id_.base58digest().substr( 0, 8 ) << ", " << "token=" << token_
-      << ", " << "token_pos=" << token_pos_ << ", " << "next_layer=" << next_layer_ << ", "
-      << "next_stage=" << next_stage_ << ", " << "prompt_len=" << prompt_length_ << ", "
-      << "temperature=" << temperature_ << ", " << "finished=" << finished_ << ", " << "dtype=" << dtype_ << ", "
-      << "activations.len=" << activations_ << ", " << "peers={";
-
-  for ( auto& [layer, address] : layer_workers_ ) {
-    oss << " (" << layer << " -> " << address.to_string() << ")";
+  oss << "InferenceState("
+      << "prompt_id=" << prompt_id_.base58digest().substr( 0, 8 ) << ", "
+      << "token=" << token_ << ", "
+      << "token_pos=" << token_pos_ << ", "
+      << "next_layer=" << next_layer_ << ", "
+      << "next_stage=" << next_stage_ << ", "
+      << "prompt_len=" << prompt_length_ << ", "
+      << "temperature=" << temperature_ << ", "
+      << "finished=" << finished_ << ", "
+      << "dtype=" << dtype_ << ", "
+      << "activations.len=" << activations_ << ", "
+      << "peers={";
+  for ( auto& [layer_stage, address] : layer_workers_ ) {
+    oss << " (" << layer_stage.first << "-" << layer_stage.second << " -> " << address.to_string() << ")";
   }
 
   oss << " })";
@@ -160,20 +169,21 @@ string InferenceState::to_string() const
 
 size_t InferenceState::serialized_size() const
 {
-  return sizeof( PromptID )                                                         /* prompt_id_ */
-         + sizeof( ModelID )                                                        /* model_id_ */
-         + sizeof( token_ )                                                         /* token_ */
-         + sizeof( token_pos_ )                                                     /* token_pos_ */
-         + sizeof( next_layer_ )                                                    /* next_layer_ */
-         + sizeof( next_stage_ )                                                    /* next_stage_ */
-         + sizeof( prompt_length_ )                                                 /* prompt_length_ */
-         + sizeof( temperature_ )                                                   /* temperature_ */
-         + sizeof( finished_ )                                                      /* finished_ */
-         + sizeof( DataType )                                                       /* dtype_ */
-         + sizeof( uint64_t /* activations_.len() */ )                              /* activations_.len */
-         + activations_.len()                                                       /* activations_ data */
-         + sizeof( uint32_t )                                                       /* layer_workers_.size() */
-         + layer_workers_.size() * ( 2 * sizeof( uint32_t ) + sizeof( uint16_t ) ); /* layer_workers_ */
+  return sizeof( PromptID )                            /* prompt_id_ */
+         + sizeof( ModelID )                           /* model_id_ */
+         + sizeof( token_ )                            /* token_ */
+         + sizeof( token_pos_ )                        /* token_pos_ */
+         + sizeof( next_layer_ )                       /* next_layer_ */
+         + sizeof( next_stage_ )                       /* next_stage_ */
+         + sizeof( prompt_length_ )                    /* prompt_length_ */
+         + sizeof( temperature_ )                      /* temperature_ */
+         + sizeof( finished_ )                         /* finished_ */
+         + sizeof( DataType )                          /* dtype_ */
+         + sizeof( uint64_t /* activations_.len() */ ) /* activations_.len */
+         + activations_.len()                          /* activations_ data */
+         + sizeof( uint32_t )                          /* layer_workers_.size() */
+         + layer_workers_.size()
+             * ( 2 * sizeof( uint32_t ) + sizeof( Stage ) + sizeof( uint16_t ) ); /* layer_workers_ */
 }
 
 }

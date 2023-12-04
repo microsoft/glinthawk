@@ -44,9 +44,8 @@ private:
   DataType dtype_ { DataType::Float32 };
   DataBuffer activations_ {};
 
-  // TODO: revise mapping since we have stages
   // mapping from layer to worker address for this inference state
-  std::map<uint32_t, glinthawk::net::Address> layer_workers_ {};
+  std::map<std::pair<uint32_t, Stage>, glinthawk::net::Address> layer_workers_ {};
 
   size_t serialized_size() const;
 
@@ -98,7 +97,7 @@ public:
   void set_finished() { finished_ = true; }
 
   glinthawk::net::Address next_worker() const;
-  void erase_from_workers( const uint32_t next_layer );
+  void erase_from_workers( const uint32_t next_layer, const Stage next_stage );
 };
 
 template<typename Context>
