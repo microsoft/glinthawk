@@ -27,6 +27,7 @@ void ComputeKernelPiped<Model>::execution_thread_func()
   vector<pair<InferenceState, shared_ptr<typename Model::ContextType>>> processing_states;
 
   InferenceState::Stage next_stage;
+  uint32_t next_layer_idx;
 
   while ( running_ ) {
     input_states.clear();
@@ -36,47 +37,53 @@ void ComputeKernelPiped<Model>::execution_thread_func()
       // hold lock until one queue has enough data for one batch
       unique_lock<mutex> lock( processing_mutex_ );
       processing_cv_.wait( lock, [this] {
-        if ( processing_attention_.size() >= target_conc_att_size_ )
+        if ( processing_attention_.size() >= target_conc_att_size_ ) {
+          next_stage = InferenceState::Stage::Attention;
+          next_layer_idx = -1;
           return true;
-        for ( size_t layer_idx = 0; layer_idx < n_layers_; layer_idx++ ) {
-          if ( processing_pre_attention_[layer_idx].size() >= target_conc_pre_size_ )
+        }
+        for ( int layer_idx = static_cast<int>( n_layers_ - 1 ); layer_idx >= 0; layer_idx-- ) {
+          if ( processing_pre_attention_[layer_idx].size() >= target_conc_pre_size_ ) {
+            next_stage = InferenceState::Stage::PreAttention;
+            next_layer_idx = static_cast<uint32_t>( layer_idx );
             return true;
-          if ( processing_post_attention_[layer_idx].size() >= target_conc_post_size_ )
+          }
+          if ( processing_post_attention_[layer_idx].size() >= target_conc_post_size_ ) {
+            next_stage = InferenceState::Stage::PostAttention;
+            next_layer_idx = static_cast<uint32_t>( layer_idx );
             return true;
+          }
         }
         return false;
       } );
 
       // find the queue and pop the data to input_states and possibly contexts
-      if ( processing_attention_.size() >= target_conc_att_size_ ) {
-        for ( size_t j = 0; j < target_conc_att_size_; j++ ) {
-          action = move( processing_attention_.front() );
-          processing_attention_.pop();
-          input_states.push_back( move( action.first ) );
-          contexts.push_back( action.second );
+      switch ( next_stage ) {
+        case InferenceState::Stage::PreAttention: {
+          for ( size_t j = 0; j < target_conc_att_size_; j++ ) {
+            action = move( processing_attention_.front() );
+            processing_attention_.pop();
+            input_states.push_back( move( action.first ) );
+            contexts.push_back( action.second );
+          }
+          break;
         }
-        next_stage = InferenceState::Stage::Attention
-      } else {
-        for ( size_t layer_idx = n_layers_ - 1; layer_idx >= 0; layer_idx-- ) {
-          if ( processing_pre_attention_[layer_idx].size() >= target_conc_pre_size_ ) {
-            for ( size_t j = 0; j < target_conc_pre_size_; j++ ) {
-              action = move( processing_pre_attention_[layer_idx].front() );
-              processing_pre_attention_[layer_idx].pop();
-              input_states.push_back( move( action.first ) );
-              contexts.push_back( action.second );
-            }
-            next_stage = InferenceState::Stage::PreAttention;
-            break;
+        case InferenceState::Stage::Attention: {
+          for ( size_t j = 0; j < target_conc_pre_size_; j++ ) {
+            action = move( processing_pre_attention_[next_layer_idx].front() );
+            processing_pre_attention_[next_layer_idx].pop();
+            input_states.push_back( move( action.first ) );
+            contexts.push_back( action.second );
           }
-          if ( processing_post_attention_[layer_idx].size() >= target_conc_post_size_ ) {
-            for ( size_t j = 0; j < target_conc_post_size_; j++ ) {
-              action_post = move( processing_post_attention_[layer_idx].front() );
-              processing_post_attention_[layer_idx].pop();
-              input_states.push_back( move( action_post ) );
-            }
-            next_stage = InferenceState::Stage::PostAttention;
-            break;
+          break;
+        }
+        case InferenceState::Stage::PostAttention: {
+          for ( size_t j = 0; j < target_conc_post_size_; j++ ) {
+            action_post = move( processing_post_attention_[next_layer_idx].front() );
+            processing_post_attention_[next_layer_idx].pop();
+            input_states.push_back( move( action_post ) );
           }
+          break;
         }
       }
     }
@@ -84,21 +91,21 @@ void ComputeKernelPiped<Model>::execution_thread_func()
     const auto start = chrono::steady_clock::now();
     std::vector<InferenceState> results;
     switch ( next_stage ) {
-      case InferenceState::Stage::PreAttention:
+      case InferenceState::Stage::PreAttention: {
         results = model_->pre_attention_forward( move( input_states ), contexts );
         const auto duration = chrono::duration_cast<chrono::microseconds>( chrono::steady_clock::now() - start );
         __stats__.add_point<IntDistributions::KernelPreAttentionForwardTime>( duration.count() );
-        break;
-      case InferenceState::Stage::Attention:
+      } break;
+      case InferenceState::Stage::Attention: {
         results = model_->attention_forward( move( input_states ), contexts );
         const auto duration = chrono::duration_cast<chrono::microseconds>( chrono::steady_clock::now() - start );
         __stats__.add_point<IntDistributions::KernelAttentionForwardTime>( duration.count() );
-        break;
-      case InferenceState::Stage::PostAttention:
+      } break;
+      case InferenceState::Stage::PostAttention: {
         results = model_->post_attention_forward( move( input_states ) );
         const auto duration = chrono::duration_cast<chrono::microseconds>( chrono::steady_clock::now() - start );
         __stats__.add_point<IntDistributions::KernelPostAttentionForwardTime>( duration.count() );
-        break;
+      } break;
     }
 
     outgoing_states.clear();
@@ -107,10 +114,10 @@ void ComputeKernelPiped<Model>::execution_thread_func()
       case InferenceState::Stage::PreAttention:
         // the next stage is attention, so if we hold the context and serve attention, add it directly to processing
         for ( size_t j = 0; j < target_conc_pre_size_; j++ ) {
-          if ( process_att_ and !contexts[j].get().empty() ) {
-            processing_states.emplace( move( results[j] ), contexts[j] )
+          if ( process_att_ and !contexts[j].get()->empty() ) {
+            processing_states.emplace_back( move( results[j] ), contexts[j] );
           } else {
-            outgoing_states.emplace( move( results[j] ) );
+            outgoing_states.emplace_back( move( results[j] ) );
           }
         }
         break;
@@ -118,20 +125,22 @@ void ComputeKernelPiped<Model>::execution_thread_func()
         // the next stage is post-attention, so if we serve that specific layer, add it directly to processing
         for ( size_t j = 0; j < target_conc_att_size_; j++ ) {
           if ( process_post_ and results[j].next_layer() <= end_layer_ and results[j].next_layer() >= start_layer_ ) {
-            processing_states.emplace( move( results[j] ), contexts[j] )
+            processing_states.emplace_back( move( results[j] ), contexts[j] );
           } else {
-            outgoing_states.emplace( move( results[j] ) );
+            outgoing_states.emplace_back( move( results[j] ) );
           }
         }
         break;
       case InferenceState::Stage::PostAttention:
-        // the next stage is pre-attention, so if we serve that specific layer, get context and add it directly to processing
+        // the next stage is pre-attention, so if we serve that specific layer, get context and add it directly to
+        // processing
         for ( size_t j = 0; j < target_conc_post_size_; j++ ) {
           if ( process_pre_ and results[j].next_layer() <= end_layer_ and results[j].next_layer() >= start_layer_ ) {
             lock_guard lock( ctx_mgr_mutex_ );
-            processing_states.emplace(move( results[j] ), context_manager_.get_context( results[j].prompt_id() ) );
+            processing_states.emplace_back( move( results[j] ),
+                                            context_manager_.get_context( results[j].prompt_id() ) );
           } else {
-            outgoing_states.emplace( move( results[j] ) );
+            outgoing_states.emplace_back( move( results[j] ) );
           }
         }
         break;
@@ -144,7 +153,7 @@ void ComputeKernelPiped<Model>::execution_thread_func()
       }
     }
 
-    if (outgoing_states.size() > 0) {
+    if ( outgoing_states.size() > 0 ) {
       event_fd_.write_event();
     }
 
@@ -152,18 +161,20 @@ void ComputeKernelPiped<Model>::execution_thread_func()
       lock_guard lock( processing_mutex_ );
       switch ( next_stage ) {
         case InferenceState::Stage::PreAttention:
-          for ( auto& action : processing_states ) {
-            processing_attention_.emplace( move( action.first ), action.second )
+          for ( auto& action_loop : processing_states ) {
+            processing_attention_.emplace( move( action_loop.first ), action_loop.second );
           }
           break;
         case InferenceState::Stage::Attention:
-          for ( auto& action : processing_states ) {
-            processing_post_attention_[action.first.next_layer() - start_layer_].emplace( move( action.first ) )
+          for ( auto& action_loop : processing_states ) {
+            processing_post_attention_[action_loop.first.next_layer() - start_layer_].emplace(
+              move( action_loop.first ) );
           }
           break;
         case InferenceState::Stage::PostAttention:
-          for ( auto& action : processing_states ) {
-            processing_pre_attention_[action.first.next_layer() - start_layer_].emplace( move( action.first ), action.second )
+          for ( auto& action_loop : processing_states ) {
+            processing_pre_attention_[action_loop.first.next_layer() - start_layer_].emplace( move( action_loop.first ),
+                                                                                              action_loop.second );
           }
           break;
       }
@@ -189,7 +200,7 @@ void ComputeKernelPiped<Model>::bookkeeping_thread_func()
     }
     // make sure this action is for our serving layers
     const uint32_t next_layer_index = action.next_layer() - start_layer_;
-    CHECK_LE( next_layer_index, n_layers_ )
+    CHECK_LT( next_layer_index, n_layers_ )
       << "InferenceState can not be processed in this machine, original next layer was: " << action.next_layer()
       << ", but we host " << start_layer_ << " to " << end_layer_;
     switch ( action.next_stage() ) {
@@ -243,7 +254,7 @@ void ComputeKernelPiped<Model>::bookkeeping_thread_func()
         CHECK_EQ( process_post_, true ) << "This machine does not service the PostAttention pipeline";
         {
           lock_guard lock( processing_mutex_ );
-          processing_post_attention_[next_layer_index].emplace( move( action ), context );
+          processing_post_attention_[next_layer_index].emplace( move( action ) );
         }
 
         processing_cv_.notify_one();

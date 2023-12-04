@@ -39,8 +39,8 @@ private:
   uint64_t released_;
 
   std::vector<std::queue<std::pair<glinthawk::models::InferenceState, std::shared_ptr<typename Model::ContextType>>>>
-    processing_pre_attention_ {};
-  std::vector<std::queue<glinthawk::models::InferenceState>> processing_post_attention_ {};
+    processing_pre_attention_;
+  std::vector<std::queue<glinthawk::models::InferenceState>> processing_post_attention_;
 
   std::queue<std::pair<glinthawk::models::InferenceState, std::shared_ptr<typename Model::ContextType>>>
     processing_attention_ {};
@@ -84,16 +84,13 @@ public:
     , end_layer_( end_layer )
     , n_layers_( end_layer_ - start_layer_ + 1 )
     , released_( 0 )
+    , processing_pre_attention_( n_layers_ )
+    , processing_post_attention_( n_layers_ )
     , running_( true )
     , execution_thread_( &ComputeKernelPiped::execution_thread_func, this )
     , bookkeeping_thread_( &ComputeKernelPiped::bookkeeping_thread_func, this )
     , backlog_thread_( &ComputeKernelPiped::backlog_thread_func, this )
   {
-    // TODO: something might be wrong here
-    for ( size_t i = 0; i < n_layers_; i++ ) {
-      processing_post_attention_.emplace_back( 0 );
-      processing_pre_attention_.emplace_back( 0 );
-    }
   }
 
   void push( glinthawk::models::InferenceState&& state )

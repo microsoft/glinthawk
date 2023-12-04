@@ -39,9 +39,6 @@ file ( GLOB SOURCE
   src/prompt/*.cc
 )
 
-# XXX not ready yet
-#list ( REMOVE_ITEM SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/.../XXX" )
-
 file ( GLOB_RECURSE MODELS_SOURCE
   src/models/*.cc
   src/models/*.cu
