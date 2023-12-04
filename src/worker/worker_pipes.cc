@@ -53,10 +53,11 @@ void WorkerPiped<Model>::setup_stats_handler()
 template<typename Model>
 void WorkerPiped<Model>::setup_peer( std::map<net::Address, Peer>::iterator peer_it )
 {
-  peer_it->second.message_handler.install_rules( this->event_loop_,
-                                                 this->rule_categories_,
-                                                 bind( &WorkerPiped<Model>::handle_peer_message, this, placeholders::_1 ),
-                                                 [] { LOG( INFO ) << "Connection to peer closed."; } );
+  peer_it->second.message_handler.install_rules(
+    this->event_loop_,
+    this->rule_categories_,
+    bind( &WorkerPiped<Model>::handle_peer_message, this, placeholders::_1 ),
+    [] { LOG( INFO ) << "Connection to peer closed."; } );
 
   event_loop_.add_rule(
     "Outgoing message",
@@ -95,7 +96,11 @@ void WorkerPiped<Model>::setup_compute_kernel( const filesystem::path& model_roo
   CHECK_LE( start_layer, end_layer ) << "start_layer must be less than or equal to end_layer";
 
   compute_kernel_ = make_unique<compute::ComputeKernelPiped<Model>>(
-    make_unique<Model>( model_root, start_layer, end_layer, concurrency_size ),
+    make_unique<Model>(
+      model_root,
+      start_layer,
+      end_layer,
+      std::max( { concurrency_size_pre_attention, concurrency_size_attention, concurrency_size_post_attention } ) ),
     concurrency_size_pre_attention,
     concurrency_size_attention,
     concurrency_size_post_attention,
@@ -191,7 +196,6 @@ bool WorkerPiped<Model>::handle_coordinator_message( core::Message&& msg )
       setup_compute_kernel( model_root_,
                             proto.start_layer(),
                             proto.end_layer(),
-                            proto.concurrency_size(),
                             proto.concurrency_pre_att_size(),
                             proto.concurrency_att_size(),
                             proto.concurrency_post_att_size() );
@@ -217,7 +221,22 @@ bool WorkerPiped<Model>::handle_coordinator_message( core::Message&& msg )
 
       for ( int i = 0; i < proto.layer_to_address_size(); i++ ) {
         const auto& route = proto.layer_to_address( i );
-        current_route_.emplace( route.layer_num(), Address { route.ip(), static_cast<uint16_t>( route.port() ) } );
+
+        InferenceState::Stage next_stage;
+        switch ( route.stage() ) {
+            // TODO (pouya): figure out why protobuf enums have weird scoping! If I include
+            // protobuf::SetRoute::LayerToAddress::ProtoStage::PreAttention, this won't compile
+          case protobuf::SetRoute::LayerToAddress::PreAttention:
+            next_stage = InferenceState::Stage::PreAttention;
+            break;
+          case protobuf::SetRoute::LayerToAddress::Attention: next_stage = InferenceState::Stage::Attention; break;
+          case protobuf::SetRoute::LayerToAddress::PostAttention:
+            next_stage = InferenceState::Stage::PostAttention;
+            break;
+          default: throw std::runtime_error( "invalid stage" );
+        }
+        current_route_.emplace( std::make_pair( route.layer_num(), next_stage ),
+                                Address { route.ip(), static_cast<uint16_t>( route.port() ) } );
       }
 
       LOG( INFO ) << "Route set; will be used for future prompts.";

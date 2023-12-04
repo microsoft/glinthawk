@@ -44,7 +44,7 @@ private:
 
   std::queue<std::pair<glinthawk::models::InferenceState, std::shared_ptr<typename Model::ContextType>>>
     processing_attention_ {};
-  std::queue<glinthawk::models::InferenceState> incoming_, waiting_attention_ {}, outgoing_ {};
+  std::queue<glinthawk::models::InferenceState> incoming_ {}, waiting_attention_ {}, outgoing_ {};
 
   std::mutex ctx_mgr_mutex_ {}, outgoing_mutex_ {}, incoming_mutex_ {}, waiting_attention_mutex_ {},
     processing_mutex_ {};
@@ -89,8 +89,11 @@ public:
     , bookkeeping_thread_( &ComputeKernelPiped::bookkeeping_thread_func, this )
     , backlog_thread_( &ComputeKernelPiped::backlog_thread_func, this )
   {
-    processing_pre_attention_.reserve( n_layers_ );
-    processing_post_attention_.reserve( n_layers_ );
+    // TODO: something might be wrong here
+    for ( size_t i = 0; i < n_layers_; i++ ) {
+      processing_post_attention_.emplace_back( 0 );
+      processing_pre_attention_.emplace_back( 0 );
+    }
   }
 
   void push( glinthawk::models::InferenceState&& state )
@@ -137,11 +140,11 @@ public:
     // if released, notify waiting prompts
     if ( released ) {
       {
-        std::lock_guard lock( waiting_mutex_ );
+        std::lock_guard lock( waiting_attention_mutex_ );
         released_ += 1;
       }
 
-      waiting_cv_.notify_one();
+      waiting_attention_cv_.notify_one();
     }
 
     // do a "fake" forward: remove self from propagation list and set next worker

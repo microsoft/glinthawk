@@ -62,7 +62,7 @@ private:
   std::unique_ptr<glinthawk::prompt::PromptManager> prompt_manager_ { nullptr };
   std::unique_ptr<glinthawk::prompt::CompletionManager> completion_manager_ { nullptr };
 
-  std::map<uint32_t, net::Address> current_route_ {};
+  std::map<std::pair<uint32_t, models::InferenceState::Stage>, net::Address> current_route_ {};
 
   core::MessageHandler<net::TCPSession>::RuleCategories rule_categories_ {
     .session = event_loop_.add_category( "Worker session" ),
@@ -111,11 +111,11 @@ public:
   /// \param worker_address The address of the worker
   /// \param coordinator_address The address of the coordinator
   /// \param model_root The root directory of the model
-  Worker( const net::Address& worker_address,
-          const net::Address& coordinator_address,
-          const std::filesystem::path& model_root );
+  WorkerPiped( const net::Address& worker_address,
+               const net::Address& coordinator_address,
+               const std::filesystem::path& model_root );
 
-  ~Worker();
+  ~WorkerPiped();
 
   void run();
 };

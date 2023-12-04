@@ -94,21 +94,20 @@ InferenceState::InferenceState( const string_view serialized )
     const auto stage = _get_and_advance<Stage>( ptr );
     const auto ipv4_numeric = _get_and_advance<uint32_t>( ptr );
     const auto port = _get_and_advance<uint16_t>( ptr );
-    layer_workers_.emplace( std::pair<layer, stage>, net::Address::from_ipv4_numeric( ipv4_numeric, port ) );
+    layer_workers_.emplace( std::make_pair( layer, stage ), net::Address::from_ipv4_numeric( ipv4_numeric, port ) );
   }
 }
 
 net::Address InferenceState::next_worker() const
 {
-  auto it = layer_workers_.find( std::pair<next_layer_, next_stage_> );
+  auto it = layer_workers_.find( { next_layer_, next_stage_ } );
   CHECK( it != layer_workers_.end() ) << "No worker found for layer " << next_layer_ << ", stage " << next_stage_;
   return it->second;
 }
 
 void InferenceState::loop_till_next_worker( const uint32_t n_layers )
 {
-  while ( layer_workers_.find( std::pair<next_layer_, next_stage_> ) == layer_workers_.end()
-          or layer_workers.size() == 0 ) {
+  while ( layer_workers_.find( { next_layer_, next_stage_ } ) == layer_workers_.end() or layer_workers_.size() == 0 ) {
     switch ( next_stage_ ) {
       case InferenceState::Stage::PreAttention: next_stage_ = InferenceState::Stage::Attention; break;
       case InferenceState::Stage::Attention: next_stage_ = InferenceState::Stage::PostAttention; break;
@@ -124,7 +123,7 @@ void InferenceState::loop_till_next_worker( const uint32_t n_layers )
 
 void InferenceState::erase_from_workers( const uint32_t next_layer, const Stage next_stage )
 {
-  layer_workers_.erase( std::pair<next_layer, next_stage> );
+  layer_workers_.erase( { next_layer, next_stage } );
 }
 
 string InferenceState::serialize() const

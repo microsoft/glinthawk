@@ -22,9 +22,16 @@ message SetRoute
 {
   message LayerToAddress
   {
+    enum ProtoStage
+      {
+        PreAttention = 0;
+        Attention = 1;
+        PostAttention = 2;
+      }
     uint32 layer_num = 1;
-    string ip = 2;
-    uint32 port = 3;
+    ProtoStage stage = 2;
+    string ip = 3;
+    uint32 port = 4;
   }
 
   repeated LayerToAddress layer_to_address = 1;

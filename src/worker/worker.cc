@@ -38,7 +38,8 @@ void Worker<Model>::setup_stats_handler()
     return;
   }
 
-  telegraf_logger_->install_rules( event_loop_, telegraf_rule_categories_, []( auto&& ) { return true; }, [] {} );
+  telegraf_logger_->install_rules(
+    event_loop_, telegraf_rule_categories_, []( auto&& ) { return true; }, [] {} );
 
   event_loop_.add_rule(
     "Stats timer",
@@ -203,7 +204,21 @@ bool Worker<Model>::handle_coordinator_message( core::Message&& msg )
 
       for ( int i = 0; i < proto.layer_to_address_size(); i++ ) {
         const auto& route = proto.layer_to_address( i );
-        current_route_.emplace( route.layer_num(), Address { route.ip(), static_cast<uint16_t>( route.port() ) } );
+        InferenceState::Stage next_stage;
+        switch ( route.stage() ) {
+            // TODO (pouya): figure out why protobuf enums have weird scoping! If I include
+            // protobuf::SetRoute::LayerToAddress::ProtoStage::PreAttention, this won't compile
+          case protobuf::SetRoute::LayerToAddress::PreAttention:
+            next_stage = InferenceState::Stage::PreAttention;
+            break;
+          case protobuf::SetRoute::LayerToAddress::Attention: next_stage = InferenceState::Stage::Attention; break;
+          case protobuf::SetRoute::LayerToAddress::PostAttention:
+            next_stage = InferenceState::Stage::PostAttention;
+            break;
+          default: throw std::runtime_error( "invalid stage" );
+        }
+        current_route_.emplace( std::make_pair( route.layer_num(), next_stage ),
+                                Address { route.ip(), static_cast<uint16_t>( route.port() ) } );
       }
 
       LOG( INFO ) << "Route set; will be used for future prompts.";
