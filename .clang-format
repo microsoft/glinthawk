@@ -9,7 +9,7 @@ SpaceBeforeCpp11BracedList: true
 BreakBeforeBinaryOperators: All
 AllowShortFunctionsOnASingleLine: All
 AllowShortCaseLabelsOnASingleLine: true
-AllowShortBlocksOnASingleLine: true
+AllowShortBlocksOnASingleLine: Always
 RequiresClausePosition: OwnLine
 IndentRequiresClause: false
 AllowShortCompoundRequirementOnASingleLine: true
