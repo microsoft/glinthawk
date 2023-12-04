@@ -70,9 +70,6 @@ public:
                       const uint64_t target_conc_pre_size,
                       const uint64_t target_conc_att_size,
                       const uint64_t target_conc_post_size,
-                      const bool process_pre,
-                      const bool process_att,
-                      const bool process_post,
                       const uint64_t start_layer,
                       const uint64_t end_layer )
     : model_( std::move( model ) )
@@ -80,9 +77,9 @@ public:
     , target_conc_pre_size_( target_conc_pre_size )
     , target_conc_att_size_( target_conc_att_size )
     , target_conc_post_size_( target_conc_post_size )
-    , process_pre_( process_pre )
-    , process_att_( process_att )
-    , process_post_( process_post )
+    , process_pre_( target_conc_pre_size > 0 )
+    , process_att_( target_conc_att_size > 0 )
+    , process_post_( target_conc_post_size > 0 )
     , start_layer_( start_layer )
     , end_layer_( end_layer )
     , n_layers_( end_layer_ - start_layer_ + 1 )
