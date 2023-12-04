@@ -105,6 +105,23 @@ net::Address InferenceState::next_worker() const
   return it->second;
 }
 
+void InferenceState::loop_till_next_worker( const uint32_t n_layers )
+{
+  while ( layer_workers_.find( std::pair<next_layer_, next_stage_> ) == layer_workers_.end()
+          or layer_workers.size() == 0 ) {
+    switch ( next_stage_ ) {
+      case InferenceState::Stage::PreAttention: next_stage_ = InferenceState::Stage::Attention; break;
+      case InferenceState::Stage::Attention: next_stage_ = InferenceState::Stage::PostAttention; break;
+      case InferenceState::Stage::PostAttention:
+        next_stage_ = InferenceState::Stage::PreAttention;
+        next_layer_++;
+        if ( next_layer_ == n_layers )
+          next_layer_ = 0;
+        break;
+    }
+  }
+}
+
 void InferenceState::erase_from_workers( const uint32_t next_layer, const Stage next_stage )
 {
   layer_workers_.erase( std::pair<next_layer, next_stage> );

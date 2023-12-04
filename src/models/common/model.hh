@@ -97,6 +97,7 @@ public:
   void set_finished() { finished_ = true; }
 
   glinthawk::net::Address next_worker() const;
+  void loop_till_next_worker( const uint32_t n_layers );
   void erase_from_workers( const uint32_t next_layer, const Stage next_stage );
 };
 

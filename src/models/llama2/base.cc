@@ -302,15 +302,10 @@ void BaseLlama2<Config, DType, Context, StorageDeleter>::init( const Settings<Co
 template<typename Config, typename DType, typename Context, typename StorageDeleter>
 void BaseLlama2<Config, DType, Context, StorageDeleter>::dummy_forward( InferenceState& inference_state )
 {
-  // TODO: rewrite this for split pipes
-  CHECK_EQ( inference_state.next_layer(), settings_.start_layer_num );
-
-  inference_state.erase_from_workers( settings_.start_layer_num );
-  if ( settings_.end_layer_num == Config::n_layers - 1 ) {
-    inference_state.set_next_layer( 0 );
-  } else {
-    inference_state.set_next_layer( settings_.end_layer_num + 1 );
-  }
+  CHECK_GE( inference_state.next_layer(), settings_.start_layer_num );
+  CHECK_LE( inference_state.next_layer(), settings_.end_layer_num );
+  inference_state.erase_from_workers( inference_state.next_layer(), inference_state.next_stage() );
+  inference_state.loop_till_next_worker( Config::n_layers );
 }
 
 template<typename Config, typename DType, typename Context, typename StorageDeleter>
