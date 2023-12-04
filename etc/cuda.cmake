@@ -2,10 +2,11 @@ include ( CheckLanguage )
 check_language ( CUDA )
 
 cmake_policy ( SET CMP0074 NEW )
-find_package ( CUDAToolkit REQUIRED )
+find_package ( CUDAToolkit )
 
 if ( CMAKE_CUDA_COMPILER )
   message ( NOTICE "CMAKE_CUDA_COMPILER: ${CMAKE_CUDA_COMPILER}" )
+  enable_language( CUDA )
 
   set ( CMAKE_CUDA_ARCHITECTURES 75 )
   set ( CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS}" )

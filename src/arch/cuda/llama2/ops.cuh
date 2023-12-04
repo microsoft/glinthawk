@@ -60,7 +60,7 @@ static_assert(
   LlamaOperationsConcept<LlamaOperations<configs::Stories_110M, float>, float, Settings<configs::Stories_110M>> );
 
 static_assert(
-  LlamaOperationsConcept<LlamaOperations<configs::Stories_110M, _Float16>, _Float16, Settings<configs::Stories_110M>> );
+  LlamaOperationsConcept<LlamaOperations<configs::Stories_110M, __half>, __half, Settings<configs::Stories_110M>> );
 
 template<typename Config, typename DType>
 class Context : public InferenceContext<Config, DType>

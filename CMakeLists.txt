@@ -1,7 +1,7 @@
 cmake_minimum_required ( VERSION 3.18.0 )
 cmake_policy ( SET CMP0135 NEW )
 
-project ( Glinthawk VERSION 1.0.0 LANGUAGES CXX CUDA )
+project ( Glinthawk VERSION 1.0.0 LANGUAGES CXX )
 
 include ( etc/cflags.cmake )
 include ( etc/openmp.cmake )

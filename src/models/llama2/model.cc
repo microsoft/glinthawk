@@ -16,13 +16,21 @@ namespace glinthawk::models::llama2 {
 namespace {
 
 template<typename DType>
-constexpr std::string dtype_str()
+std::string dtype_str()
 {
-  if constexpr ( sizeof( DType ) == sizeof( float ) ) {
+  if constexpr ( std::is_same_v<DType, float> ) {
     return { "FP32" };
-  } else if constexpr ( sizeof( DType ) == sizeof( _Float16 ) ) {
+  }
+#if defined( TARGET_PLATFORM_CPU )
+  else if constexpr ( std::is_same_v<DType, _Float16> ) {
     return { "FP16" };
-  } else {
+  }
+#elif defined( TARGET_PLATFORM_CUDA )
+  else if constexpr ( std::is_same_v<DType, __half> ) {
+    return { "FP16" };
+  }
+#endif
+  else {
     LOG( FATAL ) << "invalid dtype";
   }
 }
@@ -30,12 +38,14 @@ constexpr std::string dtype_str()
 template<typename DType>
 void CHECK_DTYPE( const DataType dtype )
 {
-  if constexpr ( std::is_same_v<DType, _Float16> ) {
-    CHECK( dtype == DataType::Float16 );
-  } else if constexpr ( std::is_same_v<DType, float> ) {
+  if constexpr ( std::is_same_v<DType, float> ) {
     CHECK( dtype == DataType::Float32 );
   }
-#ifdef TARGET_PLATFORM_CUDA
+#if defined( TARGET_PLATFORM_CPU )
+  else if constexpr ( std::is_same_v<DType, _Float16> ) {
+    CHECK( dtype == DataType::Float16 );
+  }
+#elif defined( TARGET_PLATFORM_CUDA )
   else if constexpr ( std::is_same_v<DType, __half> ) {
     CHECK( dtype == DataType::Float16 );
   }
