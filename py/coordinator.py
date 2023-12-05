@@ -24,7 +24,11 @@ from dataclasses import dataclass, field
 from common.message import Message
 from protobuf import glinthawk_pb2 as glinthawk_pb
 
-from coordinator.ui import CoordinatorUI
+from rich.logging import RichHandler
+
+logging.basicConfig(
+    level=logging.NOTSET, format="%(message)s", datefmt="[%X]", handlers=[RichHandler()]
+)
 
 
 @dataclass
@@ -36,40 +40,13 @@ class ModelInfo:
 
 @dataclass
 class WorkerStats:
-    states_sent: int = 0
-    states_received: int = 0
-    states_processed: int = 0
-
-    tokens_processed: int = 0
-    tokens_generated: int = 0
-    prompts_completed: int = 0
-
-    bytes_sent: int = 0
-    bytes_received: int = 0
+    # no stats for now
 
     def __add__(self, other):
-        return WorkerStats(
-            states_sent=self.states_sent + other.states_sent,
-            states_received=self.states_received + other.states_received,
-            states_processed=self.states_processed + other.states_processed,
-            tokens_processed=self.tokens_processed + other.tokens_processed,
-            tokens_generated=self.tokens_generated + other.tokens_generated,
-            prompts_completed=self.prompts_completed + other.prompts_completed,
-            bytes_sent=self.bytes_sent + other.bytes_sent,
-            bytes_received=self.bytes_received + other.bytes_received,
-        )
+        pass
 
     def combine_max(self, other):
-        return WorkerStats(
-            states_sent=max(self.states_sent, other.states_sent),
-            states_received=max(self.states_received, other.states_received),
-            states_processed=max(self.states_processed, other.states_processed),
-            tokens_processed=max(self.tokens_processed, other.tokens_processed),
-            tokens_generated=max(self.tokens_generated, other.tokens_generated),
-            prompts_completed=max(self.prompts_completed, other.prompts_completed),
-            bytes_sent=max(self.bytes_sent, other.bytes_sent),
-            bytes_received=max(self.bytes_received, other.bytes_received),
-        )
+        pass
 
 
 @dataclass
@@ -94,24 +71,7 @@ class Worker:
     last_stats_time: datetime.datetime = None
 
     def work_rate(self):
-        if self.current_stats_time is None or self.last_stats_time is None:
-            return WorkerStats()
-
-        elapsed_time = (self.current_stats_time - self.last_stats_time).total_seconds()
-
-        if elapsed_time == 0:
-            return WorkerStats()
-
-        return WorkerStats(
-            states_sent=(self.current_stats.states_sent) / elapsed_time,
-            states_received=(self.current_stats.states_received) / elapsed_time,
-            states_processed=(self.current_stats.states_processed) / elapsed_time,
-            tokens_processed=(self.current_stats.tokens_processed) / elapsed_time,
-            tokens_generated=(self.current_stats.tokens_generated) / elapsed_time,
-            prompts_completed=(self.current_stats.prompts_completed) / elapsed_time,
-            bytes_sent=(self.current_stats.bytes_sent) / elapsed_time,
-            bytes_received=(self.current_stats.bytes_received) / elapsed_time,
-        )
+        pass
 
 
 class Coordinator:
@@ -126,20 +86,14 @@ class Coordinator:
             layers_per_worker=kwargs.get("layers_per_worker", 6),
         )
 
-        self.aggregate_stats = WorkerStats()
-        self.max_rates = WorkerStats()
-
         self.concurrency_size = kwargs.get("concurrency_size", 16)
-        self.dummy_prompt_count = kwargs.get("dummy_count", 0)
+        self.initial_dummy_count = kwargs.get("dummy_count", 0)
+
+        self.generated_dummies = 0
+        self.completed_dummies = 0
 
         self.logger = logging.getLogger("coordinator")
         self.logger.setLevel(logging.INFO)
-
-        if kwargs.get("ui", False):
-            self.ui = CoordinatorUI(self, self.logger)
-        else:
-            self.ui = None
-            self.logger.addHandler(logging.StreamHandler(sys.stderr))
 
     def create_routing_message(self):
         message = glinthawk_pb.SetRoute()
@@ -235,54 +189,57 @@ class Coordinator:
                     )
 
                     # telling the first worker to generate dummy prompts
-                    if self.dummy_prompt_count:
+                    if self.initial_dummy_count:
                         self.outgoing_messages.put_nowait(
                             [
                                 self.layer_workers[0],
                                 Message(
                                     Message.OpCode.PushDummyPrompts,
-                                    str(self.dummy_prompt_count).encode(),
+                                    str(self.initial_dummy_count).encode(),
                                 ),
                             ]
                         )
+
+                        self.generated_dummies += self.initial_dummy_count
+                        asyncio.create_task(self.maybe_generate_dummies())
 
             elif message.opcode == Message.OpCode.InferenceState:
                 self.logger.error("Received InferenceState message from a worker.")
 
             elif message.opcode == Message.OpCode.PromptCompleted:
-                proto = glinthawk_pb.PromptCompleted()
-                proto.ParseFromString(message.payload)
-                for id in proto.prompt_ids:
-                    self.logger.info(f"Prompt {id[:8]} completed.")
+                count = int(message.payload.decode())
+                self.logger.info(f"Worker {worker.id} completed {count} prompts.")
+                self.completed_dummies += count
 
             elif message.opcode == Message.OpCode.WorkerStats:
-                proto = glinthawk_pb.WorkerStats()
-                proto.ParseFromString(message.payload)
+                pass
 
-                stats = WorkerStats()
-                stats.states_sent = proto.states_sent
-                stats.states_received = proto.states_received
-                stats.states_processed = proto.states_processed
-                stats.tokens_processed = proto.tokens_processed
-                stats.tokens_generated = proto.tokens_generated
-                stats.prompts_completed = proto.prompts_completed
-                stats.bytes_sent = proto.bytes_sent
-                stats.bytes_received = proto.bytes_received
+    async def maybe_generate_dummies(self):
+        while True:
+            if (
+                self.generated_dummies - self.completed_dummies
+                < self.initial_dummy_count // 2
+            ):
+                gen_count = (self.initial_dummy_count // 2) - (
+                    self.generated_dummies - self.completed_dummies
+                )
+                if gen_count <= 0:
+                    continue
 
-                worker.current_stats = stats
-                worker.last_stats_time = worker.current_stats_time
-                worker.current_stats_time = datetime.datetime.now()
+                self.logger.warning(f"Generating {gen_count} dummy prompts.")
+                self.outgoing_messages.put_nowait(
+                    [
+                        self.layer_workers[0],
+                        Message(
+                            Message.OpCode.PushDummyPrompts,
+                            str(gen_count).encode(),
+                        ),
+                    ]
+                )
 
-                self.aggregate_stats += stats
+                self.generated_dummies += gen_count
 
-    def aggregate_rates(self):
-        agg_rate = WorkerStats()
-
-        for worker in self.workers:
-            agg_rate += worker.work_rate()
-
-        self.max_rates = agg_rate.combine_max(self.max_rates)
-        return agg_rate
+            await asyncio.sleep(30)
 
     async def main(self, listen_address, listen_port):
         server = await asyncio.start_server(
@@ -292,10 +249,6 @@ class Coordinator:
         async with server:
             asyncio.create_task(self.message_processor())
             asyncio.create_task(self.handle_outgoing_messages())
-
-            if self.ui:
-                asyncio.create_task(self.ui.render_ui())
-
             await server.serve_forever()
 
 
@@ -313,7 +266,6 @@ class Coordinator:
     default=0,
 )
 @click.option("--concurrency-size", "-C", type=click.INT, default=1)
-@click.option("--ui/--no-ui", default=False)
 def main(listen_address, listen_port, **kwargs):
     coordinator = Coordinator(**kwargs)
     asyncio.run(coordinator.main(listen_address, listen_port))
