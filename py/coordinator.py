@@ -188,6 +188,10 @@ class Coordinator:
                         ]
                     )
 
+                    self.logger.info(
+                        f"Layer 0 is being served at {socket.inet_ntoa(self.layer_workers[0].ip)}:{self.layer_workers[0].port}; completions can be found there."
+                    )
+
                     # telling the first worker to generate dummy prompts
                     if self.initial_dummy_count:
                         self.outgoing_messages.put_nowait(
