@@ -51,12 +51,10 @@ void Worker<Model>::setup_stats_handler()
   if ( filesystem::is_socket( telegraf_socket, err ) ) {
     LOG( INFO ) << "Telegraf socket found at " << telegraf_socket.string();
     telegraf_logger_ = make_unique<monitoring::TelegrafLogger>( telegraf_socket );
+    telegraf_logger_->install_rules( event_loop_, telegraf_rule_categories_, []( auto&& ) { return true; }, [] {} );
   } else {
     LOG( WARNING ) << "Telegraf socket not found at " << telegraf_socket.string();
-    return;
   }
-
-  telegraf_logger_->install_rules( event_loop_, telegraf_rule_categories_, []( auto&& ) { return true; }, [] {} );
 
   event_loop_.add_rule(
     "Stats timer",
@@ -233,7 +231,7 @@ bool Worker<Model>::handle_coordinator_message( core::Message&& msg )
       // create some random inference states and feed them into the system
       const size_t prompt_count = stoull( msg.payload() );
 
-      if ( prompt_count == 0 or prompt_count > 1 << 16 ) {
+      if ( prompt_count == 0 or prompt_count > ( 1 << 16 ) ) {
         LOG( ERROR ) << "Invalid number of dummy prompts requested: " << prompt_count;
         break;
       }
@@ -429,8 +427,15 @@ template<typename Model>
 void Worker<Model>::handle_stats()
 {
   stats_timer_.read_event();
+  if ( telegraf_logger_ != nullptr ) {
+    telegraf_logger_->push_measurement( __stats__ );
+  }
 
-  telegraf_logger_->push_measurement( __stats__ );
+  if ( const auto completed_prompts = __stats__.get<Counters::PromptsCompleted>(); completed_prompts > 0 ) {
+    Message msg { Message::OpCode::PromptCompleted, to_string( completed_prompts ) };
+    this->coordinator_.message_handler.push_message( move( msg ) );
+  }
+
   __stats__.zero_out();
 }
 

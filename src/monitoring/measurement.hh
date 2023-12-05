@@ -108,6 +108,12 @@ public:
     fields_counters_[static_cast<size_t>( counter )] += value;
   }
 
+  template<Counters counter>
+  size_t get() const
+  {
+    return fields_counters_[static_cast<size_t>( counter )];
+  }
+
   template<IntDistributions distribution>
   void add_point( const uint64_t value )
   {
