@@ -9,10 +9,18 @@ import multiprocessing as mp
 from common.tokenizer import Tokenizer
 from common.serdes import serialize
 
-logging.basicConfig(level=logging.INFO)
+from rich.logging import RichHandler
 
+logging.basicConfig(
+    level=logging.NOTSET, format="%(message)s", datefmt="[%X]", handlers=[RichHandler()]
+)
 
 def postprocess_file(tokenizer, input_file, output_dir):
+    output_file = os.path.join(output_dir, os.path.basename(input_file) + ".txt")
+
+    if os.path.exists(output_file):
+        return
+
     tokens = []
 
     with open(input_file, "rb") as f:
@@ -24,7 +32,7 @@ def postprocess_file(tokenizer, input_file, output_dir):
 
     tokens = tokenizer.decode(tokens)
 
-    with open(os.path.join(output_dir, os.path.basename(input_file) + ".txt"), "w") as f:
+    with open(output_file, "w") as f:
         f.write("".join(tokens))
 
 
@@ -37,13 +45,15 @@ def main(tokenizer_path, input_dir, output_dir):
     if len(files) == 0:
         return
 
+    logging.info("Postprocessing {} files...".format(len(files)))
+
     os.makedirs(output_dir, exist_ok=True)
 
     with mp.Pool() as pool:
         pool.starmap(
             postprocess_file,
             [(tokenizer, x, output_dir) for x in files],
-            chunksize=1,
+            chunksize=32,
         )
 
 
