@@ -49,11 +49,12 @@ public:
 
     auto context = std::make_shared<typename Model::ContextType>( settings_ );
 
-    if ( not context.get()->empty() or emplace_empty ) {
+    if ( context.get()->empty() ) {
+      return nullptr;
+    } else {
       contexts_.emplace( prompt_id, context );
+      return context;
     }
-
-    return context;
   }
 
   bool release( const glinthawk::PromptID& prompt_id ) { return contexts_.erase( prompt_id ) > 0; }
@@ -270,6 +271,11 @@ void ComputeKernel<Model>::bookkeeping_thread_func()
       {
         std::lock_guard lock( waiting_mutex_ );
         waiting_.emplace( std::move( action ) );
+
+        while ( not incoming_.empty() ) {
+          waiting_.emplace( std::move( incoming_.front() ) );
+          incoming_.pop();
+        }
       }
 
       waiting_cv_.notify_one();
