@@ -40,7 +40,7 @@ public:
   }
 
   std::shared_ptr<typename Model::ContextType> get_context( const glinthawk::PromptID& prompt_id,
-                                                            bool emplace_empty = false )
+                                                            bool = false )
   {
     auto it = contexts_.find( prompt_id );
     if ( it != contexts_.end() ) {

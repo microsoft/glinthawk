@@ -2,14 +2,13 @@
 #include <filesystem>
 #include <iostream>
 
-#include "models/common/cuda/ops.cuh"
-#include "util/timer.hh"
 #include <cuda_fp16.h>
 #include <glog/logging.h>
 
+#include "util/timer.hh"
+
 using namespace std;
 using namespace glinthawk;
-using namespace glinthawk::models::common::cuda;
 
 static void signal_handler( int )
 {
@@ -41,18 +40,18 @@ int main( int argc, char* argv[] )
     const size_t dim = atoi( argv[2] );
 
     uint8_t* cuda_pointer;
-    ops::CHECK_CUDA( cudaMalloc( reinterpret_cast<void**>( &cuda_pointer ), dim * num_tries * sizeof( uint8_t ) ) );
+    cudaMalloc( reinterpret_cast<void**>( &cuda_pointer ), dim * num_tries * sizeof( uint8_t ) );
 
     uint8_t* cpu_pointer;
-    ops::CHECK_CUDA( cudaMallocHost( reinterpret_cast<void**>( &cpu_pointer ), dim * num_tries * sizeof( uint8_t ) ) );
+    cudaMallocHost( reinterpret_cast<void**>( &cpu_pointer ), dim * num_tries * sizeof( uint8_t ) );
 
     for ( size_t i = 0; i < num_tries * dim; i++ )
       cpu_pointer[i] = i;
 
     for ( size_t i = 0; i < num_tries; i++ ) {
       GlobalScopeTimer<Timer::Category::CopyToGPU> _;
-      ops::CHECK_CUDA(
-        cudaMemcpy( cuda_pointer + i * dim, cpu_pointer + i * dim, dim * sizeof( uint8_t ), cudaMemcpyHostToDevice ) );
+
+      cudaMemcpy( cuda_pointer + i * dim, cpu_pointer + i * dim, dim * sizeof( uint8_t ), cudaMemcpyHostToDevice );
     }
 
     for ( size_t i = 0; i < num_tries * dim; i++ )
@@ -60,32 +59,32 @@ int main( int argc, char* argv[] )
 
     for ( size_t i = 0; i < num_tries; i++ ) {
       GlobalScopeTimer<Timer::Category::CopyFromGPU> _;
-      ops::CHECK_CUDA(
-        cudaMemcpy( cpu_pointer + i * dim, cuda_pointer + i * dim, dim * sizeof( uint8_t ), cudaMemcpyDeviceToHost ) );
+
+      cudaMemcpy( cpu_pointer + i * dim, cuda_pointer + i * dim, dim * sizeof( uint8_t ), cudaMemcpyDeviceToHost );
     }
 
     for ( size_t i = 0; i < num_tries * dim; i++ )
       CHECK_EQ( cpu_pointer[i], static_cast<uint8_t>( i ) ) << "Copying was unsuccessful.";
 
     cudaStream_t stream_up;
-    ops::CHECK_CUDA( cudaStreamCreate( &stream_up ) );
+    cudaStreamCreate( &stream_up );
     cudaStream_t stream_down;
-    ops::CHECK_CUDA( cudaStreamCreate( &stream_down ) );
+    cudaStreamCreate( &stream_down );
 
     for ( size_t i = 0; i < num_tries; i++ ) {
       GlobalScopeTimer<Timer::Category::ConcurrentCopyGPU> _;
-      ops::CHECK_CUDA( cudaMemcpyAsync(
-        cuda_pointer + i * dim, cpu_pointer + i * dim, dim * sizeof( uint8_t ), cudaMemcpyHostToDevice, stream_up ) );
-      ops::CHECK_CUDA( cudaMemcpyAsync( cpu_pointer + ( i + 1 ) % num_tries * dim,
-                                        cuda_pointer + ( i + 1 ) % num_tries * dim,
-                                        dim * sizeof( uint8_t ),
-                                        cudaMemcpyDeviceToHost,
-                                        stream_down ) );
+      cudaMemcpyAsync(
+        cuda_pointer + i * dim, cpu_pointer + i * dim, dim * sizeof( uint8_t ), cudaMemcpyHostToDevice, stream_up );
+      cudaMemcpyAsync( cpu_pointer + ( i + 1 ) % num_tries * dim,
+                       cuda_pointer + ( i + 1 ) % num_tries * dim,
+                       dim * sizeof( uint8_t ),
+                       cudaMemcpyDeviceToHost,
+                       stream_down );
       cudaDeviceSynchronize();
     }
 
-    ops::CHECK_CUDA( cudaStreamDestroy( stream_up ) );
-    ops::CHECK_CUDA( cudaStreamDestroy( stream_down ) );
+    cudaStreamDestroy( stream_up );
+    cudaStreamDestroy( stream_down );
     cudaFree( cuda_pointer );
     cudaFreeHost( cpu_pointer );
 
