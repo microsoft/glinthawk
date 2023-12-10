@@ -358,7 +358,11 @@ std::vector<InferenceState> Llama2<Config, DType>::pre_attention_forward(
   std::vector<InferenceState> output_states;
 
   for ( size_t i = 0; i < inference_states.size(); i++ ) {
-    DataBuffer activations { ( Config::dim + 2 * Config::kv_dim ) * sizeof( DType ) };
+    size_t len_activation = Config::dim;
+    if ( contexts[i]->empty() ) {
+      len_activation += 2 * Config::kv_dim;
+    }
+    DataBuffer activations { len_activation * sizeof( DType ) };
     memcpy( activations.data(), this->state_.q + i * Config::dim, Config::dim * sizeof( DType ) );
 
     if ( contexts[i]->empty() ) {
@@ -372,7 +376,6 @@ std::vector<InferenceState> Llama2<Config, DType>::pre_attention_forward(
     }
 
     inference_states[i].set_next_stage( InferenceState::Stage::Attention );
-    inference_states[i].set_next_layer( this->settings_.end_layer_num + 1 );
     inference_states[i].set_activations( std::move( activations ) );
     output_states.push_back( std::move( inference_states[i] ) );
   }
@@ -447,7 +450,6 @@ std::vector<InferenceState> Llama2<Config, DType>::attention_forward(
     }
 
     inference_states[i].set_next_stage( InferenceState::Stage::PostAttention );
-    inference_states[i].set_next_layer( this->settings_.end_layer_num + 1 );
     inference_states[i].set_activations( std::move( activations ) );
     output_states.push_back( std::move( inference_states[i] ) );
   }
@@ -497,7 +499,7 @@ std::vector<InferenceState> Llama2<Config, DType>::post_attention_forward(
   for ( size_t i = 0; i < inference_states.size(); i++ ) {
     DataBuffer activations { Config::dim * sizeof( DType ), this->state_.x + i * Config::dim };
     inference_states[i].set_next_stage( InferenceState::Stage::PreAttention );
-    inference_states[i].set_next_layer( this->settings_.end_layer_num + 1 );
+    inference_states[i].set_next_layer( next_layer_batch + 1 );
     inference_states[i].set_activations( std::move( activations ) );
     output_states.push_back( std::move( inference_states[i] ) );
   }

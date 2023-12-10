@@ -130,3 +130,4 @@ public:
 std::ostream& operator<<( std::ostream& os, const glinthawk::DataType& v );
 std::ostream& operator<<( std::ostream& os, const glinthawk::DataBuffer& v );
 std::ostream& operator<<( std::ostream& os, const glinthawk::models::InferenceState::Stage& v );
+std::ostream& operator<<( std::ostream& os, const glinthawk::models::InferenceState& v );

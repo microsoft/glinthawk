@@ -10,7 +10,8 @@ class Message:
     HEADER_LENGTH = 5
 
     class OpCode(enum.Enum):
-        Hey = 0x1
+        HeyCPU = 0x1
+        HeyGPU = enum.auto()
         Ping = enum.auto()
         Bye = enum.auto()
 

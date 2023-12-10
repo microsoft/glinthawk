@@ -37,18 +37,18 @@ void ComputeKernelPiped<Model>::execution_thread_func()
       // hold lock until one queue has enough data for one batch
       unique_lock<mutex> lock( processing_mutex_ );
       processing_cv_.wait( lock, [this, &next_stage, &next_layer_idx] {
-        if ( processing_attention_.size() >= target_conc_att_size_ ) {
+        if ( processing_attention_.size() >= target_conc_att_size_ and process_att_ ) {
           next_stage = InferenceState::Stage::Attention;
           next_layer_idx = -1;
           return true;
         }
         for ( int layer_idx = static_cast<int>( n_layers_ - 1 ); layer_idx >= 0; layer_idx-- ) {
-          if ( processing_pre_attention_[layer_idx].size() >= target_conc_pre_size_ ) {
+          if ( processing_pre_attention_[layer_idx].size() >= target_conc_pre_size_ and process_pre_ ) {
             next_stage = InferenceState::Stage::PreAttention;
             next_layer_idx = static_cast<uint32_t>( layer_idx );
             return true;
           }
-          if ( processing_post_attention_[layer_idx].size() >= target_conc_post_size_ ) {
+          if ( processing_post_attention_[layer_idx].size() >= target_conc_post_size_ and process_post_ ) {
             next_stage = InferenceState::Stage::PostAttention;
             next_layer_idx = static_cast<uint32_t>( layer_idx );
             return true;
@@ -57,21 +57,32 @@ void ComputeKernelPiped<Model>::execution_thread_func()
         return false;
       } );
 
+      // TODO: With splitting KV cache to in-context and out-context, will we be memed by batch size?
+      // TODO: Right now we reserve GPU memory for all of the layers we host. Is that a good way, if we want to use a smaller subset of these layers?
+      // TODO: Right now the attention cpu machines do not need to know about layers for reserving context. Will they work that way right now?
+      // TODO: any reason we shouldn't always use max batch size?
+
+      // TODO: OOM issue
+      // TODO: save prompts
+      // TODO: memory is not freed after completion
+
       // find the queue and pop the data to input_states and possibly contexts
       switch ( next_stage ) {
         case InferenceState::Stage::PreAttention: {
-          for ( size_t j = 0; j < target_conc_att_size_; j++ ) {
-            action = move( processing_attention_.front() );
-            processing_attention_.pop();
+          for ( size_t j = 0; j < target_conc_pre_size_; j++ ) {
+            action = move( processing_pre_attention_[next_layer_idx].front() );
+//            LOG (INFO) << "got this in processing: " << action.first;
+            processing_pre_attention_[next_layer_idx].pop();
             input_states.push_back( move( action.first ) );
             contexts.push_back( action.second );
           }
           break;
         }
         case InferenceState::Stage::Attention: {
-          for ( size_t j = 0; j < target_conc_pre_size_; j++ ) {
-            action = move( processing_pre_attention_[next_layer_idx].front() );
-            processing_pre_attention_[next_layer_idx].pop();
+          for ( size_t j = 0; j < target_conc_att_size_; j++ ) {
+            action = move( processing_attention_.front() );
+//            LOG (INFO) << "got this in processing: " << action.first;
+            processing_attention_.pop();
             input_states.push_back( move( action.first ) );
             contexts.push_back( action.second );
           }
@@ -80,6 +91,7 @@ void ComputeKernelPiped<Model>::execution_thread_func()
         case InferenceState::Stage::PostAttention: {
           for ( size_t j = 0; j < target_conc_post_size_; j++ ) {
             action_post = move( processing_post_attention_[next_layer_idx].front() );
+//            LOG (INFO) << "got this in processing: " << action_post;
             processing_post_attention_[next_layer_idx].pop();
             input_states.push_back( move( action_post ) );
           }
@@ -198,6 +210,8 @@ void ComputeKernelPiped<Model>::bookkeeping_thread_func()
       action = move( incoming_.front() );
       incoming_.pop();
     }
+
+//    LOG (INFO) << "got this in incoming: " << action;
     // make sure this action is for our serving layers
     const uint32_t next_layer_index = action.next_layer() - start_layer_;
     CHECK_LT( next_layer_index, n_layers_ )
@@ -210,7 +224,7 @@ void ComputeKernelPiped<Model>::bookkeeping_thread_func()
         {
           // let's get the context for this action, but it doesn't matter if it's empty
           lock_guard lock( ctx_mgr_mutex_ );
-          context = context_manager_.get_context( action.prompt_id() );
+          context = context_manager_.get_context( action.prompt_id(), true );
         }
         {
           lock_guard lock( processing_mutex_ );
@@ -230,7 +244,7 @@ void ComputeKernelPiped<Model>::bookkeeping_thread_func()
           lock_guard lock( ctx_mgr_mutex_ );
           context = context_manager_.get_context( action.prompt_id() );
         }
-        if ( context ) {
+        if ( not context.get()->empty() ) {
           {
             lock_guard lock( processing_mutex_ );
             processing_attention_.emplace( move( action ), context );
@@ -281,6 +295,8 @@ void ComputeKernelPiped<Model>::backlog_thread_func()
       waiting_attention_.pop();
       released_ -= 1;
     }
+
+//    LOG (INFO) << "got this in waiting: " << action;
 
     {
       // let's get the context for this action

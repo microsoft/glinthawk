@@ -34,6 +34,12 @@ ostream& operator<<( ostream& os, const glinthawk::models::InferenceState::Stage
   return os;
 }
 
+ostream& operator<<( ostream& os, const glinthawk::models::InferenceState& v )
+{
+  os << v.to_string();
+  return os;
+}
+
 namespace glinthawk {
 
 size_t DataTypeSize( const DataType dtype )

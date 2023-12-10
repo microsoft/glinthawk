@@ -808,13 +808,13 @@ template<typename DType_dst, typename DType_src>
 void cvt_and_copy_to_cuda( DType_dst* dst_cuda, const DType_src* src_cpu, const uint64_t size )
 {
   if constexpr ( is_same_v<DType_src, DType_dst> ) {
-    ops::CHECK_CUDA( cudaMemcpy( dst_cuda, src_cpu, size * sizeof( DType_src ), cudaMemcpyDeviceToHost ) );
+    ops::CHECK_CUDA( cudaMemcpy( dst_cuda, src_cpu, size * sizeof( DType_src ), cudaMemcpyHostToDevice ) );
   } else {
     DType_dst* dst_cpu = reinterpret_cast<DType_dst*>( malloc( sizeof( DType_dst ) * size ) );
     for ( uint64_t i = 0; i < size; i++ ) {
       dst_cpu[i] = static_cast<DType_dst>( src_cpu[i] );
     }
-    ops::CHECK_CUDA( cudaMemcpy( dst_cuda, dst_cpu, size * sizeof( DType_dst ), cudaMemcpyDeviceToHost ) );
+    ops::CHECK_CUDA( cudaMemcpy( dst_cuda, dst_cpu, size * sizeof( DType_dst ), cudaMemcpyHostToDevice ) );
     free( dst_cpu );
   }
 }
@@ -823,10 +823,10 @@ template<typename DType_dst, typename DType_src>
 void cvt_and_copy_from_cuda( DType_dst* dst_cpu, const DType_src* src_cuda, const uint64_t size )
 {
   if constexpr ( is_same_v<DType_src, DType_dst> ) {
-    ops::CHECK_CUDA( cudaMemcpy( dst_cpu, src_cuda, size * sizeof( DType_src ), cudaMemcpyHostToDevice ) );
+    ops::CHECK_CUDA( cudaMemcpy( dst_cpu, src_cuda, size * sizeof( DType_src ), cudaMemcpyDeviceToHost ) );
   } else {
     DType_src* src_cpu = reinterpret_cast<DType_src*>( malloc( sizeof( DType_src ) * size ) );
-    ops::CHECK_CUDA( cudaMemcpy( src_cpu, src_cuda, size * sizeof( DType_src ), cudaMemcpyHostToDevice ) );
+    ops::CHECK_CUDA( cudaMemcpy( src_cpu, src_cuda, size * sizeof( DType_src ), cudaMemcpyDeviceToHost ) );
     for ( uint64_t i = 0; i < size; i++ ) {
       dst_cpu[i] = static_cast<DType_dst>( src_cpu[i] );
     }

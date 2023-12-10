@@ -63,13 +63,23 @@ int main( int argc, char* argv[] )
     net::Address listen_addr { listen_ip, listen_port };
     net::Address coordinator_addr { coordinator_ip, coordinator_port };
 
+#if defined( TARGET_PLATFORM_CPU )
 #define CREATE_AND_RUN_WORKER( MODEL_NAME, CLASS_NAME )                                                                \
   if ( model_name == MODEL_NAME ) {                                                                                    \
-    core::WorkerPiped<_GLINTHAWK_ARCH_NS_::CLASS_NAME<_GLINTHAWK_DTYPE_>> worker { listen_addr,                        \
-                                                                                   coordinator_addr,                   \
-                                                                                   model_path };                       \
+    core::WorkerPiped<_GLINTHAWK_ARCH_NS_::CLASS_NAME<_GLINTHAWK_DTYPE_>> worker {                                     \
+      listen_addr, coordinator_addr, model_path, true                                                                  \
+    };                                                                                                                 \
     worker.run();                                                                                                      \
   }
+#else
+#define CREATE_AND_RUN_WORKER( MODEL_NAME, CLASS_NAME )                                                                \
+  if ( model_name == MODEL_NAME ) {                                                                                    \
+    core::WorkerPiped<_GLINTHAWK_ARCH_NS_::CLASS_NAME<_GLINTHAWK_DTYPE_>> worker {                                     \
+      listen_addr, coordinator_addr, model_path, false                                                                 \
+    };                                                                                                                 \
+    worker.run();                                                                                                      \
+  }
+#endif
 
     // clang-format off
     CREATE_AND_RUN_WORKER( "llama2-7b-chat", Llama2_7B_Chat )

@@ -146,7 +146,7 @@ Worker<Model>::Worker( const Address& worker_address,
     [] { LOG( ERROR ) << "Worker stopped listening."; } );
 
   // Send "HEY" to coordinator
-  Message hey_message { Message::OpCode::Hey, this->listen_address_.to_string() };
+  Message hey_message { Message::OpCode::HeyCPU, this->listen_address_.to_string() };
   coordinator_.message_handler.push_message( move( hey_message ) );
 
   setup_stats_handler();
@@ -206,8 +206,6 @@ bool Worker<Model>::handle_coordinator_message( core::Message&& msg )
         const auto& route = proto.layer_to_address( i );
         InferenceState::Stage next_stage;
         switch ( route.stage() ) {
-            // TODO (pouya): figure out why protobuf enums have weird scoping! If I include
-            // protobuf::SetRoute::LayerToAddress::ProtoStage::PreAttention, this won't compile
           case protobuf::SetRoute::LayerToAddress::PreAttention:
             next_stage = InferenceState::Stage::PreAttention;
             break;
@@ -249,11 +247,13 @@ bool Worker<Model>::handle_coordinator_message( core::Message&& msg )
 
         // generate a random number between 0 and 1
 
-        InferenceState state {};
+        // XXX(pouya): fast and dirty workaround for dtype mismatch
+        InferenceState state { glinthawk::DataType::Float16 };
         state.set_prompt_id( prompt_id );
         state.set_token( 1 /* BOS */ );
         state.set_token_pos( 0 );
         state.set_next_layer( 0 );
+        state.set_next_stage( InferenceState::Stage::PreAttention );
         state.set_prompt_length( 1 );
         state.set_temperature( temp_dist( temp_gen ) );
         state.set_layer_workers( current_route_ );
@@ -320,10 +320,6 @@ void Worker<Model>::handle_compute_kernel_event()
     __stats__.increment<Counters::StatesProcessed>();
 
     DLOG( INFO ) << "Got state from compute kernel: " << state.to_string();
-
-    // little hack to test pull queue on one GPU without running out of memory.
-    // if (state.next_layer() == 10)
-    //   state.set_next_layer( 22 );
 
     const auto& next_worker = state.next_worker();
     auto peer_it = peers_.find( next_worker );
@@ -430,11 +426,13 @@ void Worker<Model>::prompt_preparation_thread_func()
 
       auto prompt = prompt_manager_->get( prompt_id );
 
-      InferenceState state {};
+      // XXX(pouya): fast and dirty workaround for dtype mismatch
+      InferenceState state { glinthawk::DataType::Float16 };
       state.set_prompt_id( prompt_id );
       state.set_token( prompt.token( 0 ) );
       state.set_token_pos( 0 );
       state.set_next_layer( 0 );
+      state.set_next_stage( InferenceState::Stage::PreAttention );
       state.set_prompt_length( prompt.token_count() );
       state.set_temperature( 0.0f );
       state.set_layer_workers( current_route_ );

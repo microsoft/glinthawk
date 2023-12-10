@@ -91,7 +91,8 @@ void WorkerPiped<Model>::setup_compute_kernel( const filesystem::path& model_roo
                                                const int end_layer,
                                                const int concurrency_size_pre_attention,
                                                const int concurrency_size_attention,
-                                               const int concurrency_size_post_attention )
+                                               const int concurrency_size_post_attention,
+                                               const bool randomize )
 {
   CHECK_LE( start_layer, end_layer ) << "start_layer must be less than or equal to end_layer";
 
@@ -100,7 +101,8 @@ void WorkerPiped<Model>::setup_compute_kernel( const filesystem::path& model_roo
       model_root,
       start_layer,
       end_layer,
-      std::max( { concurrency_size_pre_attention, concurrency_size_attention, concurrency_size_post_attention } ) ),
+      std::max( { concurrency_size_pre_attention, concurrency_size_attention, concurrency_size_post_attention } ),
+      randomize ),
     concurrency_size_pre_attention,
     concurrency_size_attention,
     concurrency_size_post_attention,
@@ -117,7 +119,8 @@ void WorkerPiped<Model>::setup_compute_kernel( const filesystem::path& model_roo
 template<typename Model>
 WorkerPiped<Model>::WorkerPiped( const Address& worker_address,
                                  const Address& coordinator_address,
-                                 const std::filesystem::path& model_root )
+                                 const std::filesystem::path& model_root,
+                                 const bool is_cpu )
   : listen_address_( worker_address )
   , listen_socket_( [this]() -> TCPSocket {
     TCPSocket socket;
@@ -158,8 +161,13 @@ WorkerPiped<Model>::WorkerPiped( const Address& worker_address,
     [] { LOG( ERROR ) << "Worker stopped listening."; } );
 
   // Send "HEY" to coordinator
-  Message hey_message { Message::OpCode::Hey, this->listen_address_.to_string() };
-  coordinator_.message_handler.push_message( move( hey_message ) );
+  if ( is_cpu ) {
+    Message hey_message { Message::OpCode::HeyCPU, this->listen_address_.to_string() };
+    coordinator_.message_handler.push_message( move( hey_message ) );
+  } else {
+    Message hey_message { Message::OpCode::HeyGPU, this->listen_address_.to_string() };
+    coordinator_.message_handler.push_message( move( hey_message ) );
+  }
 
   setup_stats_handler();
 }
@@ -198,7 +206,8 @@ bool WorkerPiped<Model>::handle_coordinator_message( core::Message&& msg )
                             proto.end_layer(),
                             proto.concurrency_pre_att_size(),
                             proto.concurrency_att_size(),
-                            proto.concurrency_post_att_size() );
+                            proto.concurrency_post_att_size(),
+                            proto.randomize() );
       setup_blobstore( proto.blobstore_uri() );
 
       LOG( INFO ) << "Worker initialized.";
@@ -224,8 +233,6 @@ bool WorkerPiped<Model>::handle_coordinator_message( core::Message&& msg )
 
         InferenceState::Stage next_stage;
         switch ( route.stage() ) {
-            // TODO (pouya): figure out why protobuf enums have weird scoping! If I include
-            // protobuf::SetRoute::LayerToAddress::ProtoStage::PreAttention, this won't compile
           case protobuf::SetRoute::LayerToAddress::PreAttention:
             next_stage = InferenceState::Stage::PreAttention;
             break;
@@ -267,7 +274,8 @@ bool WorkerPiped<Model>::handle_coordinator_message( core::Message&& msg )
 
         // generate a random number between 0 and 1
 
-        InferenceState state {};
+        // XXX(pouya): fast and dirty workaround for dtype mismatch
+        InferenceState state { glinthawk::DataType::Float16 };
         state.set_prompt_id( prompt_id );
         state.set_token( 1 /* BOS */ );
         state.set_token_pos( 0 );
@@ -374,8 +382,8 @@ bool WorkerPiped<Model>::handle_peer_message( core::Message&& msg )
 
       this->compute_kernel_->check_finished( state );
 
-      if ( state.next_layer() == 0 ) {
-        // We are the first layer: if this inference state contains a generated token, we should save it.
+      if ( state.next_layer() == 0 and state.next_stage() == models::InferenceState::Stage::PreAttention ) {
+        // We are the first layer and stage: if this inference state contains a generated token, we should save it.
         // otherwise, we load the next token from the prompt.
 
         if ( state.token_pos() > 0 ) {
@@ -445,7 +453,8 @@ void WorkerPiped<Model>::prompt_preparation_thread_func()
 
       auto prompt = prompt_manager_->get( prompt_id );
 
-      InferenceState state {};
+      // XXX(pouya): fast and dirty workaround for dtype mismatch
+      InferenceState state { glinthawk::DataType::Float16 };
       state.set_prompt_id( prompt_id );
       state.set_token( prompt.token( 0 ) );
       state.set_token_pos( 0 );

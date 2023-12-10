@@ -11,7 +11,8 @@ message InitializeWorker
   uint32 concurrency_pre_att_size = 5;
   uint32 concurrency_att_size = 6;
   uint32 concurrency_post_att_size = 7;
-  string blobstore_uri = 8;
+  bool randomize = 8;
+  string blobstore_uri = 9;
 }
 
 message ProcessPrompts { repeated string prompt_ids = 1; }

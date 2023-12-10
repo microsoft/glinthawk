@@ -74,13 +74,9 @@ void ComputeKernel<Model>::bookkeeping_thread_func()
       // let's get the context for this action
       lock_guard lock( ctx_mgr_mutex_ );
       context = context_manager_.get_context( action.prompt_id() );
-
-      //    if ( not context ) {
-      //      LOG( ERROR ) << "Could not get context for prompt_id=" << action.prompt_id().to_string();
-      //    }
     }
 
-    if ( context ) {
+    if ( not context.get()->empty() ) {
       {
         lock_guard lock( processing_mutex_ );
         processing_.emplace( move( action ), context );
@@ -121,13 +117,9 @@ void ComputeKernel<Model>::backlog_thread_func()
       // let's get the context for this action
       lock_guard lock( ctx_mgr_mutex_ );
       context = context_manager_.get_context( action.prompt_id() );
-
-      //    if ( not context ) {
-      //      LOG( ERROR ) << "Could not get context for prompt_id=" << action.prompt_id().to_string();
-      //    }
     }
 
-    if ( context ) {
+    if ( not context.get()->empty() ) {
       {
         lock_guard lock( processing_mutex_ );
         processing_.emplace( move( action ), context );

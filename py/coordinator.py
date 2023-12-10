@@ -1,30 +1,32 @@
 #!/usr/bin/env python3
 
-import settings
-
 import sys
+
+import settings
 
 if sys.version_info < (3, 10):
     sys.exit("Python 3.10 or newer is required to run this program.")
 
-import io
 import enum
-import json
 import click
 import socket
-import signal
 import asyncio
 import logging
 import datetime
 import itertools
-import functools
-
+from enum import Enum
 from dataclasses import dataclass, field
 
 from common.message import Message
 from protobuf import glinthawk_pb2 as glinthawk_pb
 
 from coordinator.ui import CoordinatorUI
+
+
+class Stage(Enum):
+    PREATT = 0
+    ATT = 1
+    POSTATT = 2
 
 
 @dataclass
@@ -86,8 +88,12 @@ class Worker:
     writer: asyncio.StreamWriter = None
     model_name: str = ""
     start_layer: int = 0
+    start_stage: Stage = Stage.PREATT
     end_layer: int = 0
-    max_concurrency_size: int = 16
+    end_stage: Stage = Stage.POSTATT
+    max_concurrency_size_pre: int = 16
+    max_concurrency_size_att: int = 16
+    max_concurrency_size_posy: int = 16
 
     current_stats: WorkerStats = field(default_factory=WorkerStats)
     current_stats_time: datetime.datetime = None
@@ -117,19 +123,22 @@ class Worker:
 class Coordinator:
     def __init__(self, **kwargs):
         self.workers = []
-        self.layer_workers = {}
+        self.layer_gpu_workers = {}
+        self.layer_cpu_workers = {}
         self.incoming_messages = asyncio.Queue()
         self.outgoing_messages = asyncio.Queue()
         self.model = ModelInfo(
-            name="stories-110M-glint",
-            n_layers=kwargs.get("n_layers", 12),
+            name="llama2-7b-chat",
+            n_layers=kwargs.get("n_layers", 32),
             layers_per_worker=kwargs.get("layers_per_worker", 6),
         )
 
         self.aggregate_stats = WorkerStats()
         self.max_rates = WorkerStats()
 
-        self.concurrency_size = kwargs.get("concurrency_size", 16)
+        self.concurrency_size_pre = kwargs.get("concurrency_size_pre", 16)
+        self.concurrency_size_att = kwargs.get("concurrency_size_att", 16)
+        self.concurrency_size_post = kwargs.get("concurrency_size_post", 16)
         self.dummy_prompt_count = kwargs.get("dummy_count", 0)
 
         self.logger = logging.getLogger("coordinator")
@@ -143,11 +152,28 @@ class Coordinator:
 
     def create_routing_message(self):
         message = glinthawk_pb.SetRoute()
-        for layer, worker in self.layer_workers.items():
+        for newest_layer in range(self.model.n_layers):
+            layer = max([i for i in self.layer_cpu_workers.keys() if i <= newest_layer])
+            # Pre Attention
             sub_msg = glinthawk_pb.SetRoute.LayerToAddress()
-            sub_msg.layer_num = layer
-            sub_msg.ip = socket.inet_ntoa(worker.ip)
-            sub_msg.port = worker.port
+            sub_msg.layer_num = newest_layer
+            sub_msg.stage = glinthawk_pb.SetRoute.LayerToAddress.ProtoStage.PreAttention
+            sub_msg.ip = socket.inet_ntoa(self.layer_gpu_workers[layer].ip)
+            sub_msg.port = self.layer_gpu_workers[layer].port
+            message.layer_to_address.append(sub_msg)
+            # Attention
+            sub_msg = glinthawk_pb.SetRoute.LayerToAddress()
+            sub_msg.layer_num = newest_layer
+            sub_msg.stage = glinthawk_pb.SetRoute.LayerToAddress.ProtoStage.Attention
+            sub_msg.ip = socket.inet_ntoa(self.layer_cpu_workers[layer].ip)
+            sub_msg.port = self.layer_cpu_workers[layer].port
+            message.layer_to_address.append(sub_msg)
+            # Post Attention
+            sub_msg = glinthawk_pb.SetRoute.LayerToAddress()
+            sub_msg.layer_num = newest_layer
+            sub_msg.stage = glinthawk_pb.SetRoute.LayerToAddress.ProtoStage.PostAttention
+            sub_msg.ip = socket.inet_ntoa(self.layer_gpu_workers[layer].ip)
+            sub_msg.port = self.layer_gpu_workers[layer].port
             message.layer_to_address.append(sub_msg)
 
         return message
@@ -186,23 +212,35 @@ class Coordinator:
             worker, message = await self.incoming_messages.get()
             # self.logger.info(f'Received "{message!r}" from {worker.id}.')
 
-            if message.opcode == Message.OpCode.Hey:
+            if message.opcode in [Message.OpCode.HeyCPU, Message.OpCode.HeyGPU]:
                 address = message.payload.decode()
                 ip, port = address.split(":")
                 worker.ip = socket.inet_aton(ip)
                 worker.port = int(port)
-                self.logger.info(f"Worker {worker.id} is at {ip}:{port}.")
+                self.logger.info(f"Worker {worker.id} is at {ip}:{port}, and sent {message.opcode}.")
 
-                # assinging layers to this worker
-                worker.start_layer = worker.id * self.model.layers_per_worker
-                worker.end_layer = (worker.id + 1) * self.model.layers_per_worker - 1
-                worker.max_concurrency_size = self.concurrency_size
+                # assigning layers to this worker
+                if message.opcode == Message.OpCode.HeyCPU:
+                    worker.start_layer = len(self.layer_cpu_workers) * self.model.layers_per_worker
+                    worker.end_layer = (len(self.layer_cpu_workers) + 1) * self.model.layers_per_worker - 1
+                    worker.max_concurrency_size_pre = 0
+                    worker.max_concurrency_size_att = self.concurrency_size_att
+                    worker.max_concurrency_size_post = 0
+                else:
+                    worker.start_layer = len(self.layer_gpu_workers) * self.model.layers_per_worker
+                    worker.end_layer = (len(self.layer_gpu_workers) + 1) * self.model.layers_per_worker - 1
+                    worker.max_concurrency_size_pre = self.concurrency_size_pre
+                    worker.max_concurrency_size_att = self.concurrency_size_att
+                    worker.max_concurrency_size_post = self.concurrency_size_post
 
                 initialization_message = glinthawk_pb.InitializeWorker(
                     model_name=self.model.name,
                     start_layer=worker.start_layer,
                     end_layer=worker.end_layer,
-                    concurrency_size=worker.max_concurrency_size,
+                    concurrency_pre_att_size=worker.max_concurrency_size_pre,
+                    concurrency_att_size=worker.max_concurrency_size_att,
+                    concurrency_post_att_size=worker.max_concurrency_size_post,
+                    randomize=message.opcode == Message.OpCode.HeyCPU,
                     blobstore_uri=settings.GLINTHAWK_PROMPT_BLOBSTORE,
                 )
 
@@ -216,17 +254,18 @@ class Coordinator:
                     ]
                 )
 
-                self.layer_workers[worker.start_layer] = worker
+                if message.opcode == Message.OpCode.HeyCPU:
+                    self.layer_cpu_workers[worker.start_layer] = worker
+                else:
+                    self.layer_gpu_workers[worker.start_layer] = worker
 
-                if (
-                    len(self.layer_workers)
-                    == self.model.n_layers / self.model.layers_per_worker
-                ):
+                if (len(self.layer_cpu_workers) == self.model.n_layers / self.model.layers_per_worker and len(
+                        self.layer_gpu_workers) == len(self.layer_cpu_workers)):
                     # all layers have been assigned
                     # setting the route for the first worker
                     self.outgoing_messages.put_nowait(
                         [
-                            self.layer_workers[0],
+                            self.layer_gpu_workers[0],
                             Message(
                                 Message.OpCode.SetRoute,
                                 self.create_routing_message().SerializeToString(),
@@ -238,7 +277,7 @@ class Coordinator:
                     if self.dummy_prompt_count:
                         self.outgoing_messages.put_nowait(
                             [
-                                self.layer_workers[0],
+                                self.layer_gpu_workers[0],
                                 Message(
                                     Message.OpCode.PushDummyPrompts,
                                     str(self.dummy_prompt_count).encode(),
@@ -312,7 +351,9 @@ class Coordinator:
     type=click.INT,
     default=0,
 )
-@click.option("--concurrency-size", "-C", type=click.INT, default=1)
+@click.option("--concurrency-size-pre", "-C1", type=click.INT, default=1)
+@click.option("--concurrency-size-att", "-C2", type=click.INT, default=1)
+@click.option("--concurrency-size-post", "-C3", type=click.INT, default=1)
 @click.option("--ui/--no-ui", default=False)
 def main(listen_address, listen_port, **kwargs):
     coordinator = Coordinator(**kwargs)

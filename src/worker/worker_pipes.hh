@@ -93,7 +93,8 @@ private:
                              const int end_layer,
                              const int concurrency_size_pre_attention,
                              const int concurrency_size_attention,
-                             const int concurrency_size_post_attention );
+                             const int concurrency_size_post_attention,
+                             const bool randomize );
   void setup_stats_handler();
 
   void listen_callback();
@@ -113,7 +114,9 @@ public:
   /// \param model_root The root directory of the model
   WorkerPiped( const net::Address& worker_address,
                const net::Address& coordinator_address,
-               const std::filesystem::path& model_root );
+               const std::filesystem::path& model_root,
+               // XXX(pouya): should get rid of this after merging
+               const bool is_cpu );
 
   ~WorkerPiped();
 

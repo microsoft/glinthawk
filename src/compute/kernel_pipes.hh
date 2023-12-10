@@ -55,6 +55,8 @@ private:
 
   std::atomic<bool> running_ { true };
 
+  Measurement& __stats__ { global_measurement() };
+
   void execution_thread_func();
   void bookkeeping_thread_func();
   void backlog_thread_func();
@@ -62,8 +64,6 @@ private:
   std::thread execution_thread_;
   std::thread bookkeeping_thread_;
   std::thread backlog_thread_;
-
-  Measurement& __stats__ { global_measurement() };
 
 public:
   ComputeKernelPiped( std::unique_ptr<Model>&& model,

@@ -15,7 +15,8 @@ class Message
 public:
   enum class OpCode : uint8_t
   {
-    Hey = 0x1,
+    HeyCPU = 0x1,
+    HeyGPU,
     Ping,
     Bye,
 
@@ -32,7 +33,8 @@ public:
 
   static constexpr char const* OPCODE_NAMES[static_cast<int>( OpCode::__COUNT )] = {
     "",
-    "Hey",
+    "HeyCPU",
+    "HeyGPU",
     "Ping",
     "Bye",
 
@@ -49,7 +51,7 @@ public:
 
 private:
   uint32_t payload_length_ { 0 };
-  OpCode opcode_ { OpCode::Hey };
+  OpCode opcode_ { OpCode::HeyCPU };
   std::string payload_ {};
 
 public:
