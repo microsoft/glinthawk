@@ -53,12 +53,19 @@ public:
 
     if ( not context.get()->empty() or emplace_empty ) {
       contexts_.emplace( prompt_id, context );
+      DLOG (INFO) << "(size: " << contexts_.size() << ") Added context for " << prompt_id;
     }
 
     return context;
   }
 
-  bool release( const glinthawk::PromptID& prompt_id ) { return contexts_.erase( prompt_id ) > 0; }
+  bool release( const glinthawk::PromptID& prompt_id ) {
+    bool released = contexts_.erase( prompt_id ) > 0;
+    if ( released ) {
+      DLOG (INFO) << "(size: " << contexts_.size() << ") Released context for " << prompt_id;
+    }
+    return released;
+  }
 };
 
 template<typename Model>

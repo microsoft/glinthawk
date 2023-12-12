@@ -156,46 +156,46 @@ void Llama2<Config, DType>::pre_attention_ops( const int32_t layer_num )
 template<typename Config, typename DType>
 void Llama2<Config, DType>::attention_ops()
 {
-//  const uint64_t curr_conc_lvl = this->state_.curr_concurrency_size;
-//
-//  ops::apply_rope( Config::head_size,
-//                   Config::n_kv_heads,
-//                   Config::gqa_size,
-//                   curr_conc_lvl,
-//                   this->state_.batch_token_positions,
-//                   this->base_weights_.freq_cis_real,
-//                   this->base_weights_.freq_cis_imag,
-//                   this->state_.q,
-//                   this->state_.batch_context_pointers );
-//
-//  // <multihead attention> for each head and for each token up to and including the current one
-//  ops::attention_0_gemm_fast( this->state_.q,
-//                              this->state_.batch_context_pointers,
-//                              this->state_.att,
-//                              Config::seq_len,
-//                              Config::head_size,
-//                              Config::n_kv_heads,
-//                              Config::gqa_size,
-//                              curr_conc_lvl,
-//                              this->state_.batch_token_positions );
-//
-//  // softmax
-//  ops::attention_softmax( this->state_.att,
-//                          this->state_.batch_token_positions,
-//                          Config::seq_len,
-//                          Config::n_heads,
-//                          this->state_.temp_softmax,
-//                          curr_conc_lvl );
-//
-//  ops::attention_2_gemm_fast( this->state_.att,
-//                              this->state_.batch_context_pointers,
-//                              this->state_.xb,
-//                              Config::seq_len,
-//                              Config::head_size,
-//                              Config::n_kv_heads,
-//                              Config::gqa_size,
-//                              curr_conc_lvl,
-//                              this->state_.batch_token_positions );
+  const uint64_t curr_conc_lvl = this->state_.curr_concurrency_size;
+
+  ops::apply_rope( Config::head_size,
+                   Config::n_kv_heads,
+                   Config::gqa_size,
+                   curr_conc_lvl,
+                   this->state_.batch_token_positions,
+                   this->base_weights_.freq_cis_real,
+                   this->base_weights_.freq_cis_imag,
+                   this->state_.q,
+                   this->state_.batch_context_pointers );
+
+  // <multihead attention> for each head and for each token up to and including the current one
+  ops::attention_0_gemm_fast( this->state_.q,
+                              this->state_.batch_context_pointers,
+                              this->state_.att,
+                              Config::seq_len,
+                              Config::head_size,
+                              Config::n_kv_heads,
+                              Config::gqa_size,
+                              curr_conc_lvl,
+                              this->state_.batch_token_positions );
+
+  // softmax
+  ops::attention_softmax( this->state_.att,
+                          this->state_.batch_token_positions,
+                          Config::seq_len,
+                          Config::n_heads,
+                          this->state_.temp_softmax,
+                          curr_conc_lvl );
+
+  ops::attention_2_gemm_fast( this->state_.att,
+                              this->state_.batch_context_pointers,
+                              this->state_.xb,
+                              Config::seq_len,
+                              Config::head_size,
+                              Config::n_kv_heads,
+                              Config::gqa_size,
+                              curr_conc_lvl,
+                              this->state_.batch_token_positions );
   // </multihead attention>
 }
 
@@ -475,7 +475,7 @@ std::vector<InferenceState> Llama2<Config, DType>::post_attention_forward(
 
   std::vector<InferenceState> output_states;
 
-  if ( next_layer_batch + 1 == Config::n_layers - 1 ) {
+  if ( next_layer_batch == Config::n_layers - 1 ) {
     pass_end();
 
     std::vector<float> batch_temps;

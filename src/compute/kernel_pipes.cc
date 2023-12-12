@@ -18,21 +18,11 @@ void ComputeKernelPiped<Model>::execution_thread_func()
 {
   LOG( INFO ) << "ComputeKernelPiped execution thread started.";
 
-  InferenceState action_post;
-  pair<InferenceState, shared_ptr<typename Model::ContextType>> action;
-  vector<InferenceState> input_states;
-  vector<shared_ptr<typename Model::ContextType>> contexts;
-
-  vector<InferenceState> outgoing_states;
-  vector<pair<InferenceState, shared_ptr<typename Model::ContextType>>> processing_states;
-
-  InferenceState::Stage next_stage;
-  uint32_t next_layer_idx;
-
   while ( running_ ) {
-    input_states.clear();
-    contexts.clear();
-
+    vector<InferenceState> input_states;
+    vector<shared_ptr<typename Model::ContextType>> contexts;
+    InferenceState::Stage next_stage;
+    uint32_t next_layer_idx;
     {
       // hold lock until one queue has enough data for one batch
       unique_lock<mutex> lock( processing_mutex_ );
@@ -58,22 +48,24 @@ void ComputeKernelPiped<Model>::execution_thread_func()
       } );
 
       // TODO: With splitting KV cache to in-context and out-context, will we be memed by batch size?
-      // TODO: Right now we reserve GPU memory for all of the layers we host. Is that a good way, if we want to use a smaller subset of these layers?
-      // TODO: Right now the attention cpu machines do not need to know about layers for reserving context. Will they work that way right now?
+      // TODO: Right now we reserve GPU memory for all of the layers we host. Is that a good way, if we want to use a
+      // TODO: smaller subset of these layers?
+      // TODO: Right now the attention cpu machines do not need to know about layers for reserving context. Will they
+      // TODO: work that way right now?
       // TODO: any reason we shouldn't always use max batch size?
 
       // TODO: OOM issue
-      // TODO: save prompts
-      // TODO: memory is not freed after completion
-      // TODO: why slow? -> no ML seems to be slow too -> queue to queue speed? -> CPU -> GPU path seems to include 44ms of latency, but GPU -> CPU is only 0.14ms
-      // TODO: why no check_finished on layer 31?
+      // TODO: how to save prompts?
+
+      // TODO: why slow? -> inter-proc comm seems to be high-latency
 
       // find the queue and pop the data to input_states and possibly contexts
       switch ( next_stage ) {
         case InferenceState::Stage::PreAttention: {
           for ( size_t j = 0; j < target_conc_pre_size_; j++ ) {
-            action = move( processing_pre_attention_[next_layer_idx].front() );
-            LOG (INFO) << "got this in processing: " << action.first;
+            pair<InferenceState, shared_ptr<typename Model::ContextType>> action
+              = move( processing_pre_attention_[next_layer_idx].front() );
+//            LOG( INFO ) << "got this in processing: " << action.first;
             processing_pre_attention_[next_layer_idx].pop();
             input_states.push_back( move( action.first ) );
             contexts.push_back( action.second );
@@ -82,8 +74,9 @@ void ComputeKernelPiped<Model>::execution_thread_func()
         }
         case InferenceState::Stage::Attention: {
           for ( size_t j = 0; j < target_conc_att_size_; j++ ) {
-            action = move( processing_attention_.front() );
-            LOG (INFO) << "got this in processing: " << action.first;
+            pair<InferenceState, shared_ptr<typename Model::ContextType>> action
+              = move( processing_attention_.front() );
+//            LOG( INFO ) << "got this in processing: " << action.first;
             processing_attention_.pop();
             input_states.push_back( move( action.first ) );
             contexts.push_back( action.second );
@@ -92,8 +85,8 @@ void ComputeKernelPiped<Model>::execution_thread_func()
         }
         case InferenceState::Stage::PostAttention: {
           for ( size_t j = 0; j < target_conc_post_size_; j++ ) {
-            action_post = move( processing_post_attention_[next_layer_idx].front() );
-            LOG (INFO) << "got this in processing: " << action_post;
+            InferenceState action_post = move( processing_post_attention_[next_layer_idx].front() );
+//            LOG( INFO ) << "got this in processing: " << action_post;
             processing_post_attention_[next_layer_idx].pop();
             input_states.push_back( move( action_post ) );
           }
@@ -122,10 +115,8 @@ void ComputeKernelPiped<Model>::execution_thread_func()
       } break;
     }
 
-    LOG (INFO) << "processing is done: ";
-
-    outgoing_states.clear();
-    processing_states.clear();
+    vector<InferenceState> outgoing_states;
+    vector<pair<InferenceState, shared_ptr<typename Model::ContextType>>> processing_states;
     switch ( next_stage ) {
       case InferenceState::Stage::PreAttention:
         // the next stage is attention, so if we hold the context and serve attention, add it directly to processing
@@ -151,7 +142,9 @@ void ComputeKernelPiped<Model>::execution_thread_func()
         // the next stage is pre-attention, so if we serve that specific layer, get context and add it directly to
         // processing
         for ( size_t j = 0; j < target_conc_post_size_; j++ ) {
-          if ( process_pre_ and results[j].next_layer() <= end_layer_ and results[j].next_layer() >= start_layer_ ) {
+          check_finished( results[j] );
+          if ( process_pre_ and results[j].next_layer() <= end_layer_ and results[j].next_layer() >= start_layer_
+               and !results[j].finished() ) {
             lock_guard lock( ctx_mgr_mutex_ );
             processing_states.emplace_back( move( results[j] ),
                                             context_manager_.get_context( results[j].prompt_id() ) );
@@ -203,10 +196,8 @@ void ComputeKernelPiped<Model>::bookkeeping_thread_func()
 {
   LOG( INFO ) << "ComputeKernelPiped bookkeeping thread started.";
 
-  InferenceState action;
-  shared_ptr<typename Model::ContextType> context;
-
   while ( running_ ) {
+    InferenceState action;
     // let's get an action from the incoming_
     {
       unique_lock<mutex> lock( incoming_mutex_ );
@@ -215,12 +206,14 @@ void ComputeKernelPiped<Model>::bookkeeping_thread_func()
       incoming_.pop();
     }
 
-//    LOG (INFO) << "got this in incoming: " << action;
+    //    LOG (INFO) << "got this in incoming: " << action;
     // make sure this action is for our serving layers
     const uint32_t next_layer_index = action.next_layer() - start_layer_;
     CHECK_LT( next_layer_index, n_layers_ )
       << "InferenceState can not be processed in this machine, original next layer was: " << action.next_layer()
       << ", but we host " << start_layer_ << " to " << end_layer_;
+
+    shared_ptr<typename Model::ContextType> context;
     switch ( action.next_stage() ) {
       case InferenceState::Stage::PreAttention: {
         // for action in pre-attention stage, get (try to create) context and just push to compute.
@@ -287,10 +280,8 @@ void ComputeKernelPiped<Model>::backlog_thread_func()
 {
   LOG( INFO ) << "ComputeKernelPiped backlog thread started.";
 
-  InferenceState action;
-  shared_ptr<typename Model::ContextType> context;
-
   while ( running_ ) {
+    InferenceState action;
     // let's get an action from the waiting_attention_
     {
       unique_lock<mutex> lock( waiting_attention_mutex_ );
@@ -300,8 +291,9 @@ void ComputeKernelPiped<Model>::backlog_thread_func()
       released_ -= 1;
     }
 
-//    LOG (INFO) << "got this in waiting: " << action;
+    //    LOG (INFO) << "got this in waiting: " << action;
 
+    shared_ptr<typename Model::ContextType> context;
     {
       // let's get the context for this action
       lock_guard lock( ctx_mgr_mutex_ );

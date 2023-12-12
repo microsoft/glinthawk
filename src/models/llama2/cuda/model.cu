@@ -202,124 +202,124 @@ void Llama2<Config, DType>::pass_begin( const std::vector<uint32_t>& token )
 }
 
 template<typename Config, typename DType>
-void Llama2<Config, DType>::pre_attention_ops( [[maybe_unused]] const int32_t layer_num )
+void Llama2<Config, DType>::pre_attention_ops( const int32_t layer_num )
 {
-//  const uint64_t curr_conc_lvl = this->state_.curr_concurrency_size;
-//  const auto& layer_weights = this->layer_weights_[layer_num];
+  const uint64_t curr_conc_lvl = this->state_.curr_concurrency_size;
+  const auto& layer_weights = this->layer_weights_[layer_num];
 
   // attention rmsnorm
-//  ops::rmsnorm(
-//    this->state_.xb, this->state_.x, this->state_.xb2, layer_weights.rms_att_weight, Config::dim, curr_conc_lvl );
-//
-//  // qkv matmuls for this position
-//  ops::matmul( this->state_.q, this->state_.xb, layer_weights.wq, curr_conc_lvl, Config::dim, Config::dim );
-//  ops::matmul( this->state_.k, this->state_.xb, layer_weights.wk, curr_conc_lvl, Config::dim, Config::kv_dim );
-//  ops::matmul( this->state_.v, this->state_.xb, layer_weights.wv, curr_conc_lvl, Config::dim, Config::kv_dim );
-//
-//  // save key,value at each time step (pos) to our kv cache
-//  ops::copy_kv_cache( this->state_.batch_context_pointers,
-//                      this->state_.k,
-//                      this->state_.v,
-//                      Config::kv_dim,
-//                      curr_conc_lvl,
-//                      this->state_.batch_token_positions );
+  ops::rmsnorm(
+    this->state_.xb, this->state_.x, this->state_.xb2, layer_weights.rms_att_weight, Config::dim, curr_conc_lvl );
+
+  // qkv matmuls for this position
+  ops::matmul( this->state_.q, this->state_.xb, layer_weights.wq, curr_conc_lvl, Config::dim, Config::dim );
+  ops::matmul( this->state_.k, this->state_.xb, layer_weights.wk, curr_conc_lvl, Config::dim, Config::kv_dim );
+  ops::matmul( this->state_.v, this->state_.xb, layer_weights.wv, curr_conc_lvl, Config::dim, Config::kv_dim );
+
+  // save key,value at each time step (pos) to our kv cache
+  ops::copy_kv_cache( this->state_.batch_context_pointers,
+                      this->state_.k,
+                      this->state_.v,
+                      Config::kv_dim,
+                      curr_conc_lvl,
+                      this->state_.batch_token_positions );
 }
 
 template<typename Config, typename DType>
 void Llama2<Config, DType>::attention_ops()
 {
-//  const uint64_t curr_conc_lvl = this->state_.curr_concurrency_size;
+  const uint64_t curr_conc_lvl = this->state_.curr_concurrency_size;
 
-//  ops::apply_rope( Config::head_size,
-//                   Config::n_kv_heads,
-//                   Config::gqa_size,
-//                   curr_conc_lvl,
-//                   this->state_.batch_token_positions,
-//                   this->base_weights_.freq_cis_real,
-//                   this->base_weights_.freq_cis_imag,
-//                   this->state_.q,
-//                   this->state_.batch_context_pointers );
-//
-//  // <multihead attention> for each head and for each token up to and including the current one
-//  ops::attention_0_gemm( this->state_.q,
-//                         this->state_.batch_context_pointers,
-//                         this->state_.att,
-//                         Config::seq_len,
-//                         Config::head_size,
-//                         Config::n_kv_heads,
-//                         Config::gqa_size,
-//                         curr_conc_lvl,
-//                         this->state_.batch_token_positions );
-//
-//  // softmax
-//  ops::attention_softmax( this->state_.att,
-//                          this->state_.batch_token_positions,
-//                          Config::seq_len,
-//                          Config::n_heads,
-//                          this->state_.temp_softmax,
-//                          curr_conc_lvl );
-//
-//  ops::attention_2_gemm( this->state_.att,
-//                         this->state_.batch_context_pointers,
-//                         this->state_.xb,
-//                         Config::seq_len,
-//                         Config::head_size,
-//                         Config::n_kv_heads,
-//                         Config::gqa_size,
-//                         curr_conc_lvl,
-//                         this->state_.batch_token_positions );
+  ops::apply_rope( Config::head_size,
+                   Config::n_kv_heads,
+                   Config::gqa_size,
+                   curr_conc_lvl,
+                   this->state_.batch_token_positions,
+                   this->base_weights_.freq_cis_real,
+                   this->base_weights_.freq_cis_imag,
+                   this->state_.q,
+                   this->state_.batch_context_pointers );
+
+  // <multihead attention> for each head and for each token up to and including the current one
+  ops::attention_0_gemm( this->state_.q,
+                         this->state_.batch_context_pointers,
+                         this->state_.att,
+                         Config::seq_len,
+                         Config::head_size,
+                         Config::n_kv_heads,
+                         Config::gqa_size,
+                         curr_conc_lvl,
+                         this->state_.batch_token_positions );
+
+  // softmax
+  ops::attention_softmax( this->state_.att,
+                          this->state_.batch_token_positions,
+                          Config::seq_len,
+                          Config::n_heads,
+                          this->state_.temp_softmax,
+                          curr_conc_lvl );
+
+  ops::attention_2_gemm( this->state_.att,
+                         this->state_.batch_context_pointers,
+                         this->state_.xb,
+                         Config::seq_len,
+                         Config::head_size,
+                         Config::n_kv_heads,
+                         Config::gqa_size,
+                         curr_conc_lvl,
+                         this->state_.batch_token_positions );
   // </multihead attention>
 }
 
 template<typename Config, typename DType>
-void Llama2<Config, DType>::post_attention_ops( [[maybe_unused]] const int32_t layer_num )
+void Llama2<Config, DType>::post_attention_ops( const int32_t layer_num )
 {
-//  const uint64_t curr_conc_lvl = this->state_.curr_concurrency_size;
-//
-//  const auto& layer_weights = this->layer_weights_[layer_num];
+  const uint64_t curr_conc_lvl = this->state_.curr_concurrency_size;
+
+  const auto& layer_weights = this->layer_weights_[layer_num];
 
   // final matmul to get the output of the attention
-//  ops::matmul( this->state_.xb2, this->state_.xb, layer_weights.wo, curr_conc_lvl, Config::dim, Config::dim );
-//
-//  // residual connection back into x
-//  ops::accum( this->state_.x, this->state_.xb2, Config::dim, curr_conc_lvl );
-//
-//  // ffn rmsnorm
-//  ops::rmsnorm(
-//    this->state_.xb, this->state_.x, this->state_.xb2, layer_weights.rms_ffn_weight, Config::dim, curr_conc_lvl );
-//
-//  // now for ffn in we have: self.w2(F.silu(self.w1(x)) * self.w3(x))
-//  // first calculate self.w1(x) and self.w3(x)
-//  ops::matmul( this->state_.hb, this->state_.xb, layer_weights.w1, curr_conc_lvl, Config::dim, Config::hidden_dim );
-//  ops::matmul( this->state_.hb2, this->state_.xb, layer_weights.w3, curr_conc_lvl, Config::dim, Config::hidden_dim );
-//
-//  ops::silu( this->state_.hb, this->state_.hb2, Config::hidden_dim, curr_conc_lvl );
-//
-//  // final matmul to get the output of the ffn
-//  ops::matmul( this->state_.xb, this->state_.hb, layer_weights.w2, curr_conc_lvl, Config::hidden_dim, Config::dim );
-//
-//  // residual connection
-//  ops::accum( this->state_.x, this->state_.xb, Config::dim, curr_conc_lvl );
+  ops::matmul( this->state_.xb2, this->state_.xb, layer_weights.wo, curr_conc_lvl, Config::dim, Config::dim );
+
+  // residual connection back into x
+  ops::accum( this->state_.x, this->state_.xb2, Config::dim, curr_conc_lvl );
+
+  // ffn rmsnorm
+  ops::rmsnorm(
+    this->state_.xb, this->state_.x, this->state_.xb2, layer_weights.rms_ffn_weight, Config::dim, curr_conc_lvl );
+
+  // now for ffn in we have: self.w2(F.silu(self.w1(x)) * self.w3(x))
+  // first calculate self.w1(x) and self.w3(x)
+  ops::matmul( this->state_.hb, this->state_.xb, layer_weights.w1, curr_conc_lvl, Config::dim, Config::hidden_dim );
+  ops::matmul( this->state_.hb2, this->state_.xb, layer_weights.w3, curr_conc_lvl, Config::dim, Config::hidden_dim );
+
+  ops::silu( this->state_.hb, this->state_.hb2, Config::hidden_dim, curr_conc_lvl );
+
+  // final matmul to get the output of the ffn
+  ops::matmul( this->state_.xb, this->state_.hb, layer_weights.w2, curr_conc_lvl, Config::hidden_dim, Config::dim );
+
+  // residual connection
+  ops::accum( this->state_.x, this->state_.xb, Config::dim, curr_conc_lvl );
 }
 
 template<typename Config, typename DType>
 void Llama2<Config, DType>::pass_end()
 {
-//  // final rmsnorm
-//  ops::rmsnorm( this->state_.x,
-//                this->state_.x,
-//                this->state_.xb2,
-//                this->base_weights_.rms_final_weight,
-//                Config::dim,
-//                this->state_.curr_concurrency_size );
-//
-//  // classifier into logits
-//  ops::matmul( this->state_.logits,
-//               this->state_.x,
-//               this->base_weights_.wcls,
-//               this->state_.curr_concurrency_size,
-//               Config::dim,
-//               Config::vocab_size );
+  // final rmsnorm
+  ops::rmsnorm( this->state_.x,
+                this->state_.x,
+                this->state_.xb2,
+                this->base_weights_.rms_final_weight,
+                Config::dim,
+                this->state_.curr_concurrency_size );
+
+  // classifier into logits
+  ops::matmul( this->state_.logits,
+               this->state_.x,
+               this->base_weights_.wcls,
+               this->state_.curr_concurrency_size,
+               Config::dim,
+               Config::vocab_size );
 }
 
 template<typename Config, typename DType>
@@ -559,7 +559,7 @@ std::vector<InferenceState> Llama2<Config, DType>::post_attention_forward(
 
   std::vector<InferenceState> output_states;
 
-  if ( next_layer_batch + 1 == Config::n_layers - 1 ) {
+  if ( next_layer_batch == Config::n_layers - 1 ) {
     pass_end();
 
     std::vector<float> batch_temps;

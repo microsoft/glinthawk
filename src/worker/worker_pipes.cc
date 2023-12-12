@@ -63,14 +63,12 @@ void WorkerPiped<Model>::setup_peer( std::map<net::Address, Peer>::iterator peer
     "Outgoing message",
     [this, peer_it] {
       for ( auto& state : peer_it->second.outgoing_states ) {
-        LOG( INFO ) << "Sending state to " << peer_it->first.to_string() << ": " << state.to_string();
+        DLOG( INFO ) << "Sending state to " << peer_it->first.to_string() << ": " << state.to_string();
         auto state_ser = state.serialize();
         peer_it->second.message_handler.push_message( Message( Message::OpCode::InferenceState, move( state_ser ) ) );
       }
 
       peer_it->second.outgoing_states.clear();
-      LOG( INFO ) << "done";
-
     },
     [peer_it] { return not peer_it->second.outgoing_states.empty(); } );
 }
@@ -348,7 +346,7 @@ void WorkerPiped<Model>::handle_compute_kernel_event()
   while ( this->compute_kernel_->pop( state ) ) {
     __stats__.increment<Counters::StatesProcessed>();
 
-    LOG( INFO ) << "Got state from compute kernel: " << state.to_string();
+    DLOG( INFO ) << "Got state from compute kernel: " << state.to_string();
 
     const auto& next_worker = state.next_worker();
     auto peer_it = peers_.find( next_worker );
@@ -367,8 +365,6 @@ void WorkerPiped<Model>::handle_compute_kernel_event()
     }
 
     peer_it->second.outgoing_states.push_back( move( state ) );
-
-    LOG( INFO ) << "sent!";
   }
 }
 
@@ -382,7 +378,7 @@ bool WorkerPiped<Model>::handle_peer_message( core::Message&& msg )
       __stats__.increment<Counters::StatesReceived>();
 
       auto state = models::InferenceState( msg.payload() );
-      LOG( INFO ) << "Peer: Inference state: " << state.to_string();
+      DLOG( INFO ) << "Inference state: " << state.to_string();
 
       this->compute_kernel_->check_finished( state );
 
@@ -418,8 +414,6 @@ bool WorkerPiped<Model>::handle_peer_message( core::Message&& msg )
       } else {
         this->compute_kernel_->push( move( state ) );
       }
-
-      LOG( INFO ) << "queued!";
       break;
     }
 

@@ -42,6 +42,8 @@ struct SHA256Hash
 
 void sha256( const std::string_view input, SHA256Hash& hash );
 
+std::ostream& operator<<( std::ostream& os, const SHA256Hash& v );
+
 }
 
 template<>
