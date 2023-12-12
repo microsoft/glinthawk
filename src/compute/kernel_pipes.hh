@@ -127,6 +127,7 @@ public:
 
   void push_finished( glinthawk::models::InferenceState&& state )
   {
+    LOG (INFO) << "got this in push_finished: " << state;
     // Release the context
     bool released;
     {
@@ -163,6 +164,7 @@ public:
 
   void check_finished( glinthawk::models::InferenceState& state )
   {
+//    LOG (INFO) << "got this in check_finished: " << state;
     if ( model_->is_finished( state ) ) {
       state.set_finished();
     }

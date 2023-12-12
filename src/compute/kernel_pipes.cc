@@ -65,13 +65,15 @@ void ComputeKernelPiped<Model>::execution_thread_func()
       // TODO: OOM issue
       // TODO: save prompts
       // TODO: memory is not freed after completion
+      // TODO: why slow? -> no ML seems to be slow too -> queue to queue speed? -> CPU -> GPU path seems to include 44ms of latency, but GPU -> CPU is only 0.14ms
+      // TODO: why no check_finished on layer 31?
 
       // find the queue and pop the data to input_states and possibly contexts
       switch ( next_stage ) {
         case InferenceState::Stage::PreAttention: {
           for ( size_t j = 0; j < target_conc_pre_size_; j++ ) {
             action = move( processing_pre_attention_[next_layer_idx].front() );
-//            LOG (INFO) << "got this in processing: " << action.first;
+            LOG (INFO) << "got this in processing: " << action.first;
             processing_pre_attention_[next_layer_idx].pop();
             input_states.push_back( move( action.first ) );
             contexts.push_back( action.second );
@@ -81,7 +83,7 @@ void ComputeKernelPiped<Model>::execution_thread_func()
         case InferenceState::Stage::Attention: {
           for ( size_t j = 0; j < target_conc_att_size_; j++ ) {
             action = move( processing_attention_.front() );
-//            LOG (INFO) << "got this in processing: " << action.first;
+            LOG (INFO) << "got this in processing: " << action.first;
             processing_attention_.pop();
             input_states.push_back( move( action.first ) );
             contexts.push_back( action.second );
@@ -91,7 +93,7 @@ void ComputeKernelPiped<Model>::execution_thread_func()
         case InferenceState::Stage::PostAttention: {
           for ( size_t j = 0; j < target_conc_post_size_; j++ ) {
             action_post = move( processing_post_attention_[next_layer_idx].front() );
-//            LOG (INFO) << "got this in processing: " << action_post;
+            LOG (INFO) << "got this in processing: " << action_post;
             processing_post_attention_[next_layer_idx].pop();
             input_states.push_back( move( action_post ) );
           }
@@ -119,6 +121,8 @@ void ComputeKernelPiped<Model>::execution_thread_func()
         __stats__.add_point<IntDistributions::KernelPostAttentionForwardTime>( duration.count() );
       } break;
     }
+
+    LOG (INFO) << "processing is done: ";
 
     outgoing_states.clear();
     processing_states.clear();

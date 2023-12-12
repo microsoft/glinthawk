@@ -178,13 +178,13 @@ string InferenceState::to_string() const
       << "temperature=" << temperature_ << ", "
       << "finished=" << finished_ << ", "
       << "dtype=" << dtype_ << ", "
-      << "activations.len=" << activations_ << ", "
-      << "peers={";
-  for ( auto& [layer_stage, address] : layer_workers_ ) {
-    oss << " (" << layer_stage.first << "-" << layer_stage.second << " -> " << address.to_string() << ")";
-  }
-
-  oss << " })";
+      << "activations.len=" << activations_ << ", ";
+//      << "peers={";
+//  for ( auto& [layer_stage, address] : layer_workers_ ) {
+//    oss << " (" << layer_stage.first << "-" << layer_stage.second << " -> " << address.to_string() << ")";
+//  }
+//
+//  oss << " })";
 
   return oss.str();
 }
