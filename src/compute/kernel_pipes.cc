@@ -54,10 +54,17 @@ void ComputeKernelPiped<Model>::execution_thread_func()
       // TODO: work that way right now?
       // TODO: any reason we shouldn't always use max batch size?
 
-      // TODO: OOM issue
-      // TODO: how to save prompts?
+      // TODO: why slow? -> inter-proc comm seems to be high-latency.
+      // TODO: fix OOM issue by reimplementing context.
+      // TODO: fix first and last layer on same machine logging issue.
+      // TODO: route is very long, long messages (adds 3x32x11=1056 bytes).
+      // TODO: make kv matrix done together so memcpy is together.
+      // TODO: either make parallel tokens in one prompt work, or remove the feature altogether (and put protections in place).
 
-      // TODO: why slow? -> inter-proc comm seems to be high-latency
+      // Successful:
+      //      3) CPU+GPU or GPU only with BS=16, 256 dummies
+      //      3) CPU+GPU or GPU only with BS=1, 8 dummies
+
 
       // find the queue and pop the data to input_states and possibly contexts
       switch ( next_stage ) {
@@ -65,7 +72,7 @@ void ComputeKernelPiped<Model>::execution_thread_func()
           for ( size_t j = 0; j < target_conc_pre_size_; j++ ) {
             pair<InferenceState, shared_ptr<typename Model::ContextType>> action
               = move( processing_pre_attention_[next_layer_idx].front() );
-//            LOG( INFO ) << "got this in processing: " << action.first;
+//            LOG_EVERY_N( INFO, 384 ) << "got this in processing: " << action.first;
             processing_pre_attention_[next_layer_idx].pop();
             input_states.push_back( move( action.first ) );
             contexts.push_back( action.second );
@@ -76,7 +83,7 @@ void ComputeKernelPiped<Model>::execution_thread_func()
           for ( size_t j = 0; j < target_conc_att_size_; j++ ) {
             pair<InferenceState, shared_ptr<typename Model::ContextType>> action
               = move( processing_attention_.front() );
-//            LOG( INFO ) << "got this in processing: " << action.first;
+//            LOG_EVERY_N( INFO, 384 ) << "got this in processing: " << action.first;
             processing_attention_.pop();
             input_states.push_back( move( action.first ) );
             contexts.push_back( action.second );
@@ -86,7 +93,7 @@ void ComputeKernelPiped<Model>::execution_thread_func()
         case InferenceState::Stage::PostAttention: {
           for ( size_t j = 0; j < target_conc_post_size_; j++ ) {
             InferenceState action_post = move( processing_post_attention_[next_layer_idx].front() );
-//            LOG( INFO ) << "got this in processing: " << action_post;
+//            LOG_EVERY_N( INFO, 384 ) << "got this in processing: " << action_post;
             processing_post_attention_[next_layer_idx].pop();
             input_states.push_back( move( action_post ) );
           }

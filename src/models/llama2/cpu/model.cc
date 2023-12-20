@@ -358,19 +358,22 @@ std::vector<InferenceState> Llama2<Config, DType>::pre_attention_forward(
   std::vector<InferenceState> output_states;
 
   for ( size_t i = 0; i < inference_states.size(); i++ ) {
-    size_t len_activation = Config::dim;
+    size_t len_activation = 2 * Config::dim;
     if ( contexts[i]->empty() ) {
       len_activation += 2 * Config::kv_dim;
     }
     DataBuffer activations { len_activation * sizeof( DType ) };
-    memcpy( activations.data(), this->state_.q + i * Config::dim, Config::dim * sizeof( DType ) );
+    memcpy( activations.data(), this->state_.x + i * Config::dim, Config::dim * sizeof( DType ) );
+    memcpy( activations.data() + Config::dim * sizeof( DType ),
+            this->state_.q + i * Config::dim,
+            Config::dim * sizeof( DType ) );
 
     if ( contexts[i]->empty() ) {
-      memcpy( activations.data() + Config::dim * sizeof( DType ),
+      memcpy( activations.data() + 2 * Config::dim * sizeof( DType ),
               this->state_.k + i * Config::kv_dim,
               Config::kv_dim * sizeof( DType ) );
 
-      memcpy( activations.data() + ( Config::dim + Config::kv_dim ) * sizeof( DType ),
+      memcpy( activations.data() + ( 2 * Config::dim + Config::kv_dim ) * sizeof( DType ),
               this->state_.v + i * Config::kv_dim,
               Config::kv_dim * sizeof( DType ) );
     }
@@ -404,25 +407,26 @@ std::vector<InferenceState> Llama2<Config, DType>::attention_forward(
       case DataType::Float16:
         // Q should go to run state
         ops::cvt_and_copy(
-          this->state_.q + i * Config::dim, reinterpret_cast<_Float16*>( activation_data ), Config::dim );
+          this->state_.q + i * Config::dim, reinterpret_cast<_Float16*>( activation_data ) + Config::dim, Config::dim );
 
         // if KV is not already in context, put it there
-        if ( activation_len > Config::dim * DataTypeSize( inference_states[i].dtype() ) ) {
+        if ( activation_len > 2 * Config::dim * DataTypeSize( inference_states[i].dtype() ) ) {
           ops::cvt_and_copy(
             contexts[i]->key( this->settings_, inference_states[i].next_layer(), inference_states[i].token_pos() ),
-            reinterpret_cast<_Float16*>( activation_data + Config::dim * sizeof( DType ) ),
+            reinterpret_cast<_Float16*>( activation_data ) + 2 * Config::dim,
             Config::kv_dim * 2 );
         }
         break;
       case DataType::Float32:
         // Q should go to run state
-        ops::cvt_and_copy( this->state_.q + i * Config::dim, reinterpret_cast<float*>( activation_data ), Config::dim );
+        ops::cvt_and_copy(
+          this->state_.q + i * Config::dim, reinterpret_cast<float*>( activation_data ) + Config::dim, Config::dim );
 
         // if KV is not already in context, put it there
-        if ( activation_len > Config::dim * DataTypeSize( inference_states[i].dtype() ) ) {
+        if ( activation_len > 2 * Config::dim * DataTypeSize( inference_states[i].dtype() ) ) {
           ops::cvt_and_copy(
             contexts[i]->key( this->settings_, inference_states[i].next_layer(), inference_states[i].token_pos() ),
-            reinterpret_cast<float*>( activation_data + Config::dim * sizeof( DType ) ),
+            reinterpret_cast<float*>( activation_data ) + 2 * Config::dim,
             Config::kv_dim * 2 );
         }
         break;
@@ -435,16 +439,20 @@ std::vector<InferenceState> Llama2<Config, DType>::attention_forward(
   std::vector<InferenceState> output_states;
 
   for ( size_t i = 0; i < inference_states.size(); i++ ) {
-    DataBuffer activations { Config::dim * DataTypeSize( inference_states[i].dtype() ) };
+    DataBuffer activations { 2 * Config::dim * DataTypeSize( inference_states[i].dtype() ) };
+
+    memcpy( activations.data(), inference_states[i].activations().data(), Config::dim * sizeof( DType ) );
 
     switch ( inference_states[i].dtype() ) {
       case DataType::Float16:
-        ops::cvt_and_copy(
-          reinterpret_cast<_Float16*>( activations.data() ), this->state_.xb + i * Config::dim, Config::dim );
+        ops::cvt_and_copy( reinterpret_cast<_Float16*>( activations.data() ) + Config::dim,
+                           this->state_.xb + i * Config::dim,
+                           Config::dim );
         break;
       case DataType::Float32:
-        ops::cvt_and_copy(
-          reinterpret_cast<float*>( activations.data() ), this->state_.xb + i * Config::dim, Config::dim );
+        ops::cvt_and_copy( reinterpret_cast<float*>( activations.data() ) + Config::dim,
+                           this->state_.xb + i * Config::dim,
+                           Config::dim );
         break;
       default: throw std::runtime_error( "invalid dtype" );
     }
@@ -466,10 +474,14 @@ std::vector<InferenceState> Llama2<Config, DType>::post_attention_forward(
 
   this->state_.curr_concurrency_size = inference_states.size();
 
-  for ( size_t i = 0; i < inference_states.size(); i++ )
+  for ( size_t i = 0; i < inference_states.size(); i++ ) {
+
     // load the activations
-    memcpy(
-      this->state_.xb + i * Config::dim, inference_states[i].activations().data(), Config::dim * sizeof( DType ) );
+    memcpy( this->state_.x + i * Config::dim, inference_states[i].activations().data(), Config::dim * sizeof( DType ) );
+    memcpy( this->state_.xb + i * Config::dim,
+            inference_states[i].activations().data() + Config::dim * sizeof( DType ),
+            Config::dim * sizeof( DType ) );
+  }
 
   post_attention_ops( next_layer_batch );
 

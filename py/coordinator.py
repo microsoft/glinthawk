@@ -127,9 +127,14 @@ class Coordinator:
         self.layer_cpu_workers = {}
         self.incoming_messages = asyncio.Queue()
         self.outgoing_messages = asyncio.Queue()
+        # self.model = ModelInfo(
+        #     name="llama2-7b-chat",
+        #     n_layers=kwargs.get("n_layers", 12),
+        #     layers_per_worker=kwargs.get("layers_per_worker", 6),
+        # )
         self.model = ModelInfo(
-            name="llama2-7b-chat",
-            n_layers=kwargs.get("n_layers", 32),
+            name="stories-110m",
+            n_layers=kwargs.get("n_layers", 12),
             layers_per_worker=kwargs.get("layers_per_worker", 6),
         )
 
@@ -240,7 +245,8 @@ class Coordinator:
                     concurrency_pre_att_size=worker.max_concurrency_size_pre,
                     concurrency_att_size=worker.max_concurrency_size_att,
                     concurrency_post_att_size=worker.max_concurrency_size_post,
-                    randomize=message.opcode == Message.OpCode.HeyCPU,
+                    # randomize=message.opcode == Message.OpCode.HeyCPU,
+                    randomize=False,
                     blobstore_uri=settings.GLINTHAWK_PROMPT_BLOBSTORE,
                 )
 
@@ -281,6 +287,17 @@ class Coordinator:
                                 Message(
                                     Message.OpCode.PushDummyPrompts,
                                     str(self.dummy_prompt_count).encode(),
+                                ),
+                            ]
+                        )
+
+                        # For writing prompts to storage
+                        self.outgoing_messages.put_nowait(
+                            [
+                                self.layer_gpu_workers[0],
+                                Message(
+                                    Message.OpCode.ProcessPrompts,
+                                    "".encode(),
                                 ),
                             ]
                         )
