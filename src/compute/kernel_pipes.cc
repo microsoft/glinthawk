@@ -55,16 +55,11 @@ void ComputeKernelPiped<Model>::execution_thread_func()
       // TODO: any reason we shouldn't always use max batch size?
       // TODO: context state?
 
-      // TODO: fix first and last layer on same machine logging issue.
       // TODO: fix partial model loading
       // TODO: route is very long, long messages (adds 3x32x11=1056 bytes).
       // TODO: make kv matrix done together so memcpy is together.
       // TODO: either make parallel tokens in one prompt work, or remove the feature altogether (and put protections in
-      // place).
-
-      // Successful:
-      //      3) CPU+GPU or GPU only with BS=16, 256 dummies
-      //      3) CPU+GPU or GPU only with BS=1, 8 dummies
+      //       place).
 
       // find the queue and pop the data to input_states and possibly contexts
       switch ( next_stage ) {
@@ -151,7 +146,7 @@ void ComputeKernelPiped<Model>::execution_thread_func()
         for ( size_t j = 0; j < target_conc_post_size_; j++ ) {
           check_finished( results[j] );
           if ( process_pre_ and results[j].next_layer() <= end_layer_ and results[j].next_layer() >= start_layer_
-               and !results[j].finished() ) {
+               and !results[j].finished() and results[j].next_layer() != 0 ) {
             lock_guard lock( ctx_mgr_mutex_ );
             processing_states.emplace_back( move( results[j] ),
                                             context_manager_.get_context( results[j].prompt_id(), true ) );
