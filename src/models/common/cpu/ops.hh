@@ -74,8 +74,7 @@ void apply_rope( const uint64_t head_size,
 
 template<typename DType>
 void copy_kv_cache( DType* context_pointers[],
-                    const DType* state_k,
-                    const DType* state_v,
+                    const DType* state_kv,
                     const uint64_t dim,
                     const uint64_t batch_size,
                     const uint32_t* token_positions );

@@ -185,8 +185,7 @@ LayerWeights<Config, DType>::LayerWeights( const DType* model )
   // base pointers
   this->rms_att_weight = _advance_pointer( ptr, Config::dim );
   this->wq = _advance_pointer( ptr, Config::dim * Config::dim );
-  this->wk = _advance_pointer( ptr, Config::dim * Config::kv_dim );
-  this->wv = _advance_pointer( ptr, Config::dim * Config::kv_dim );
+  this->wkv = _advance_pointer( ptr, Config::dim * Config::kv_dim * 2 );
   this->wo = _advance_pointer( ptr, Config::dim * Config::dim );
   this->rms_ffn_weight = _advance_pointer( ptr, Config::dim );
   this->w1 = _advance_pointer( ptr, Config::dim * Config::hidden_dim );
@@ -204,9 +203,8 @@ RunState<Config, DType>::RunState( const Settings<Config>& settings, DType* buff
   , xb( buffer_ + Config::dim * settings.concurrency_limit )
   , xb2( xb + Config::dim * settings.concurrency_limit )
   , q( xb2 + Config::dim * settings.concurrency_limit )
-  , k( q + Config::dim * settings.concurrency_limit )
-  , v( k + Config::kv_dim * settings.concurrency_limit )
-  , hb( v + Config::kv_dim * settings.concurrency_limit )
+  , kv( q + Config::dim * settings.concurrency_limit )
+  , hb( kv + 2 * Config::kv_dim * settings.concurrency_limit )
   , hb2( hb + Config::hidden_dim * settings.concurrency_limit )
   , att( hb2 + Config::hidden_dim * settings.concurrency_limit )
   , logits( att + Config::n_heads * Config::seq_len * settings.concurrency_limit )

@@ -229,8 +229,7 @@ void rmsnorm<__half>( __half* output,
 
 template<typename DType>
 void copy_kv_cache( DType* context_pointers[],
-                    const DType* state_k,
-                    const DType* state_v,
+                    const DType* state_kv,
                     const uint64_t kv_dim,
                     const uint64_t batch_size,
                     const uint32_t* token_positions )
@@ -238,13 +237,10 @@ void copy_kv_cache( DType* context_pointers[],
   for ( size_t i = 0; i < batch_size; i++ ) {
     if ( context_pointers[i] == nullptr )
       continue;
-    DType* k_cache_pos = context_pointers[i] + token_positions[i] * kv_dim * 2;
-    DType* v_cache_pos = k_cache_pos + kv_dim;
+    DType* kv_cache_pos = context_pointers[i] + token_positions[i] * kv_dim * 2;
 
-    ops::CHECK_CUDA(
-      cudaMemcpyAsync( k_cache_pos, state_k + i * kv_dim, kv_dim * sizeof( DType ), cudaMemcpyDeviceToDevice ) );
-    ops::CHECK_CUDA(
-      cudaMemcpyAsync( v_cache_pos, state_v + i * kv_dim, kv_dim * sizeof( DType ), cudaMemcpyDeviceToDevice ) );
+    ops::CHECK_CUDA( cudaMemcpyAsync(
+      kv_cache_pos, state_kv + i * 2 * kv_dim, 2 * kv_dim * sizeof( DType ), cudaMemcpyDeviceToDevice ) );
   }
 }
 
@@ -966,15 +962,13 @@ template void apply_rope<__half>( const uint64_t head_size,
                                   __half* context_pointers[] );
 
 template void copy_kv_cache<float>( float* context_pointers[],
-                                    const float* state_k,
-                                    const float* state_v,
+                                    const float* state_kv,
                                     const uint64_t dim,
                                     const uint64_t batch_size,
                                     const uint32_t* token_positions );
 
 template void copy_kv_cache<__half>( __half* context_pointers[],
-                                     const __half* state_k,
-                                     const __half* state_v,
+                                     const __half* state_kv,
                                      const uint64_t dim,
                                      const uint64_t batch_size,
                                      const uint32_t* token_positions );

@@ -246,7 +246,7 @@ class Coordinator:
                     concurrency_att_size=worker.max_concurrency_size_att,
                     concurrency_post_att_size=worker.max_concurrency_size_post,
                     # randomize=message.opcode == Message.OpCode.HeyCPU,
-                    max_context_count=1024 if message.opcode == Message.OpCode.HeyCPU else 384,
+                    max_context_count=1024 if message.opcode == Message.OpCode.HeyCPU else 256,
                     randomize=False,
                     blobstore_uri=settings.GLINTHAWK_PROMPT_BLOBSTORE,
                 )

@@ -151,13 +151,11 @@ void Llama2<Config, DType>::pre_attention_ops( const int32_t layer_num )
 
   // qkv matmuls for this position
   ops::matmul( this->state_.q, this->state_.xb, layer_weights.wq, curr_conc_lvl, Config::dim, Config::dim );
-  ops::matmul( this->state_.k, this->state_.xb, layer_weights.wk, curr_conc_lvl, Config::dim, Config::kv_dim );
-  ops::matmul( this->state_.v, this->state_.xb, layer_weights.wv, curr_conc_lvl, Config::dim, Config::kv_dim );
+  ops::matmul( this->state_.kv, this->state_.xb, layer_weights.wkv, curr_conc_lvl, Config::dim, 2 * Config::kv_dim );
 
   // save key, value at each time step (pos) to our kv cache, if the context resides on memory
   ops::copy_kv_cache( this->state_.batch_context_pointers,
-                      this->state_.k,
-                      this->state_.v,
+                      this->state_.kv,
                       Config::kv_dim,
                       curr_conc_lvl,
                       this->state_.batch_token_positions );
@@ -380,12 +378,8 @@ std::vector<InferenceState> Llama2<Config, DType>::pre_attention_forward(
 
     if ( contexts[i]->empty() ) {
       memcpy( activations.data() + 2 * Config::dim * sizeof( DType ),
-              this->state_.k + i * Config::kv_dim,
-              Config::kv_dim * sizeof( DType ) );
-
-      memcpy( activations.data() + ( 2 * Config::dim + Config::kv_dim ) * sizeof( DType ),
-              this->state_.v + i * Config::kv_dim,
-              Config::kv_dim * sizeof( DType ) );
+              this->state_.kv + i * 2 * Config::kv_dim,
+              2 * Config::kv_dim * sizeof( DType ) );
     }
 
     inference_states[i].set_next_stage( InferenceState::Stage::Attention );

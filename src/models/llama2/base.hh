@@ -118,10 +118,9 @@ struct LayerWeights
   const DType* rms_ffn_weight { nullptr }; // (dim)
 
   // weights for matmuls
-  const DType* wq { nullptr }; // (dim, dim)
-  const DType* wk { nullptr }; // (dim, dim)
-  const DType* wv { nullptr }; // (dim, dim)
-  const DType* wo { nullptr }; // (dim, dim)
+  const DType* wq { nullptr };   // (dim, dim)
+  const DType* wkv { nullptr };  // (dim, 2*kv_dim)
+  const DType* wo { nullptr };   // (dim, dim)
 
   // weights for ffn
   const DType* w1 { nullptr }; // (hidden_dim, dim)
@@ -149,8 +148,7 @@ struct RunState
   DType* xb {};           // same, but inside a residual branch (B, dim)
   DType* xb2 {};          // an additional buffer just for convenience (B, dim)
   DType* q {};            // query (B, dim)
-  DType* k {};            // key (B, kv_dim)
-  DType* v {};            // value (B, kv_dim)
+  DType* kv {};           // key-value (B, kv_dim, 2)
   DType* hb {};           // buffer for hidden dimension in the ffn (B, hidden_dim)
   DType* hb2 {};          // buffer for hidden dimension in the ffn (B, hidden_dim)
   DType* att {};          // buffer for scores/attention values (B, n_heads, seq_len)

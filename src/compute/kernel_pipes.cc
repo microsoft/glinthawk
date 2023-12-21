@@ -57,7 +57,6 @@ void ComputeKernelPiped<Model>::execution_thread_func()
 
       // TODO: fix partial model loading
       // TODO: route is very long, long messages (adds 3x32x11=1056 bytes).
-      // TODO: make kv matrix done together so memcpy is together.
       // TODO: either make parallel tokens in one prompt work, or remove the feature altogether (and put protections in
       //       place).
 

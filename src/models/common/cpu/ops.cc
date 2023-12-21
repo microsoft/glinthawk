@@ -546,8 +546,7 @@ void apply_rope( const uint64_t head_size,
 
 template<typename DType>
 void copy_kv_cache( DType* context_pointers[],
-                    const DType* state_k,
-                    const DType* state_v,
+                    const DType* state_kv,
                     const uint64_t dim,
                     const uint64_t batch_size,
                     const uint32_t* token_positions )
@@ -557,11 +556,9 @@ void copy_kv_cache( DType* context_pointers[],
   for ( i = 0; i < batch_size; i++ ) {
     if ( context_pointers[i] == nullptr )
       continue;
-    DType* k_cache_pos = context_pointers[i] + token_positions[i] * dim * 2;
-    DType* v_cache_pos = k_cache_pos + dim;
+    DType* kv_cache_pos = context_pointers[i] + token_positions[i] * dim * 2;
 
-    memcpy( k_cache_pos, state_k + i * dim, dim * sizeof( DType ) );
-    memcpy( v_cache_pos, state_v + i * dim, dim * sizeof( DType ) );
+    memcpy( kv_cache_pos, state_kv + i * 2 * dim, 2 * dim * sizeof( DType ) );
   }
 }
 
@@ -681,8 +678,7 @@ template void apply_rope<_Float16>( const uint64_t head_size,
                                     _Float16* context_pointers[] );
 
 template void copy_kv_cache<_Float16>( _Float16* context_pointers[],
-                                       const _Float16* state_k,
-                                       const _Float16* state_v,
+                                       const _Float16* state_kv,
                                        const uint64_t dim,
                                        const uint64_t batch_size,
                                        const uint32_t* token_positions );
@@ -747,8 +743,7 @@ template void apply_rope<float>( const uint64_t head_size,
                                  float* context_pointers[] );
 
 template void copy_kv_cache<float>( float* context_pointers[],
-                                    const float* state_k,
-                                    const float* state_v,
+                                    const float* state_kv,
                                     const uint64_t dim,
                                     const uint64_t batch_size,
                                     const uint32_t* token_positions );
