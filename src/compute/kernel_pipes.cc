@@ -54,7 +54,6 @@ void ComputeKernelPiped<Model>::execution_thread_func()
       // TODO: work that way right now?
       // TODO: any reason we shouldn't always use max batch size?
 
-      // TODO: why slow? -> inter-proc comm seems to be high-latency.
       // TODO: fix OOM issue by reimplementing context.
       // TODO: fix first and last layer on same machine logging issue.
       // TODO: route is very long, long messages (adds 3x32x11=1056 bytes).

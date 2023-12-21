@@ -219,3 +219,4 @@ void UnixDomainSocketStream::connect( const std::filesystem::path& path )
 }
 
 template void Socket::setsockopt( const int level, const int option, const timeval& option_value );
+template void Socket::setsockopt( const int level, const int option, const int& option_value );

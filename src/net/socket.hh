@@ -5,6 +5,7 @@
 #include <functional>
 #include <string>
 #include <sys/socket.h>
+#include <netinet/tcp.h>
 
 #include "address.hh"
 #include "util/file_descriptor.hh"
@@ -111,6 +112,8 @@ private:
   explicit TCPSocket( FileDescriptor&& fd )
     : Socket( std::move( fd ), AF_INET, SOCK_STREAM )
   {
+    // Deactivate Nagle's Algorithm
+    this->setsockopt<int>( IPPROTO_TCP, TCP_NODELAY, 1 );
   }
 
 public:
@@ -118,6 +121,8 @@ public:
   TCPSocket()
     : Socket( AF_INET, SOCK_STREAM )
   {
+    // Deactivate Nagle's Algorithm
+    this->setsockopt<int>( IPPROTO_TCP, TCP_NODELAY, 1 );
   }
 
   //! Mark a socket as listening for incoming connections
