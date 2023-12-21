@@ -93,7 +93,7 @@ void Worker<Model>::setup_compute_kernel( const filesystem::path& model_root,
   CHECK_LE( start_layer, end_layer ) << "start_layer must be less than or equal to end_layer";
 
   compute_kernel_ = make_unique<compute::ComputeKernel<Model>>(
-    make_unique<Model>( model_root, start_layer, end_layer, concurrency_size ), concurrency_size );
+    make_unique<Model>( model_root, start_layer, end_layer, concurrency_size, 1 ), concurrency_size );
 
   event_loop_.add_rule( "Compute Kernel",
                         Direction::In,

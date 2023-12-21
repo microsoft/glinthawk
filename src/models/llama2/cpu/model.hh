@@ -30,7 +30,7 @@ private:
   std::unique_ptr<DType> storage_;
 
 public:
-  Context( const Settings<Config>& settings );
+  Context( const Settings<Config>& settings, const bool make_empty = false );
 };
 
 template<typename Config, typename DType>
@@ -63,6 +63,7 @@ public:
           const uint32_t start_layer = 0,
           const uint32_t end_layer = std::numeric_limits<uint32_t>::max(),
           const uint64_t concurrency_limit = 1,
+          const uint64_t max_context = 1,
           const bool randomize_parameters = false );
 
   Llama2( const Llama2& ) = delete;

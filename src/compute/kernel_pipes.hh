@@ -3,6 +3,7 @@
 #include <array>
 #include <atomic>
 #include <condition_variable>
+#include <deque>
 #include <memory>
 #include <mutex>
 #include <queue>
@@ -18,11 +19,94 @@
 namespace glinthawk::compute {
 
 template<typename Model>
+class ContextManagerPreAllocated
+{
+private:
+  std::deque<std::shared_ptr<typename Model::ContextType>> free_contexts_ {};
+  std::unordered_map<glinthawk::PromptID, std::shared_ptr<typename Model::ContextType>> assigned_contexts_ {};
+  const typename Model::SettingsType settings_ {};
+  int empty_contexts { 0 };
+
+public:
+  ContextManagerPreAllocated( const typename Model::SettingsType& settings )
+    : settings_( settings )
+  {
+    uint64_t i;
+    for ( i = 0; i < settings_.max_context; i++ ) {
+      auto context = std::make_shared<typename Model::ContextType>( settings_ );
+
+      if ( not context.get()->empty() ) {
+        free_contexts_.push_back( context );
+      } else {
+        break;
+      }
+    }
+
+    LOG( INFO ) << "Allocated " << i << " contexts";
+  }
+
+  size_t size() const { return free_contexts_.size(); }
+
+  std::shared_ptr<typename Model::ContextType> get_context( const glinthawk::PromptID& prompt_id,
+                                                            const bool emplace_empty = false )
+  {
+    auto it = assigned_contexts_.find( prompt_id );
+    if ( it != assigned_contexts_.end() ) {
+      return it->second;
+    }
+
+    std::shared_ptr<typename Model::ContextType> context;
+
+    if ( free_contexts_.empty() ) {
+      context = std::make_shared<typename Model::ContextType>( settings_, true );
+
+      if ( emplace_empty ) {
+        assigned_contexts_.emplace( prompt_id, context );
+        empty_contexts += 1;
+      }
+    } else {
+      context = free_contexts_.front();
+      free_contexts_.pop_front();
+      assigned_contexts_.emplace( prompt_id, context );
+      DLOG( INFO ) << "(size: " << assigned_contexts_.size() - empty_contexts << "/"
+                   << assigned_contexts_.size() + free_contexts_.size() - empty_contexts << ") Added context for "
+                   << prompt_id;
+    }
+
+    return context;
+  }
+
+  bool release( const glinthawk::PromptID& prompt_id )
+  {
+    auto pair_freed = assigned_contexts_.find( prompt_id );
+    // If a context was assigned to this prompt, release it
+    // and if it's non-empty, add it back to unallocated contexts
+    if ( pair_freed != assigned_contexts_.end() ) {
+      auto context_freed = pair_freed->second;
+      assigned_contexts_.erase( prompt_id );
+
+      if ( not context_freed.get()->empty() ) {
+        free_contexts_.push_back( context_freed );
+      } else if ( context_freed.get()->empty() ) {
+        empty_contexts -= 1;
+      }
+
+      DLOG( INFO ) << "(size: " << assigned_contexts_.size() - empty_contexts << "/"
+                   << assigned_contexts_.size() + free_contexts_.size() - empty_contexts << ") Released context for "
+                   << prompt_id;
+
+      return true;
+    }
+    return false;
+  }
+};
+
+template<typename Model>
 class ComputeKernelPiped
 {
 private:
   std::unique_ptr<Model> model_;
-  ContextManager<Model> context_manager_;
+  ContextManagerPreAllocated<Model> context_manager_;
 
   const uint64_t target_conc_pre_size_;
   const uint64_t target_conc_att_size_;
@@ -36,8 +120,6 @@ private:
   const uint64_t end_layer_;
   const uint64_t n_layers_;
 
-  uint64_t released_;
-
   std::vector<std::queue<std::pair<glinthawk::models::InferenceState, std::shared_ptr<typename Model::ContextType>>>>
     processing_pre_attention_;
   std::vector<std::queue<glinthawk::models::InferenceState>> processing_post_attention_;
@@ -49,7 +131,7 @@ private:
   std::mutex ctx_mgr_mutex_ {}, outgoing_mutex_ {}, incoming_mutex_ {}, waiting_attention_mutex_ {},
     processing_mutex_ {};
 
-  std::condition_variable incoming_cv_ {}, processing_cv_ {}, waiting_attention_cv_ {};
+  std::condition_variable ctx_mgr_cv_ {}, incoming_cv_ {}, processing_cv_ {}, waiting_attention_cv_ {};
 
   EventFD event_fd_ {};
 
@@ -83,7 +165,6 @@ public:
     , start_layer_( start_layer )
     , end_layer_( end_layer )
     , n_layers_( end_layer_ - start_layer_ + 1 )
-    , released_( 0 )
     , processing_pre_attention_( n_layers_ )
     , processing_post_attention_( n_layers_ )
     , running_( true )
@@ -128,20 +209,10 @@ public:
   void push_finished( glinthawk::models::InferenceState&& state )
   {
     // Release the context
-    bool released;
     {
       std::lock_guard lock( ctx_mgr_mutex_ );
-      released = context_manager_.release( state.prompt_id() );
-    }
-
-    // if released, notify waiting prompts
-    if ( released ) {
-      {
-        std::lock_guard lock( waiting_attention_mutex_ );
-        released_ += 1;
-      }
-
-      waiting_attention_cv_.notify_one();
+      context_manager_.release( state.prompt_id() );
+      ctx_mgr_cv_.notify_one();
     }
 
     // do a "fake" forward: remove self from propagation list and set next worker
@@ -163,7 +234,7 @@ public:
 
   void check_finished( glinthawk::models::InferenceState& state )
   {
-//    LOG (INFO) << "got this in check_finished: " << state;
+    //    LOG (INFO) << "got this in check_finished: " << state;
     if ( model_->is_finished( state ) ) {
       state.set_finished();
     }

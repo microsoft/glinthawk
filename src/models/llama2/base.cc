@@ -25,8 +25,10 @@ Settings<T>::Settings( const std::filesystem::path& config_file,
                        const uint32_t start_layer,
                        const uint32_t end_layer,
                        const uint64_t concurrency_limit_,
+                       const uint64_t max_context_,
                        const bool randomize_parameters_ )
   : concurrency_limit( concurrency_limit_ )
+  , max_context( max_context_ )
   , randomize_parameters( randomize_parameters_ )
 {
   std::ifstream fin { config_file, std::ios::binary };
@@ -109,6 +111,7 @@ std::string Settings<T>::to_string() const
   oss << "seq_len: " << T::seq_len << ", ";
   oss << "wcls_present: " << T::wcls_present << ", ";
   oss << "concurrency_limit: " << concurrency_limit << ", ";
+  oss << "max_context: " << max_context << ", ";
   oss << "start_layer_num: " << start_layer_num << ", ";
   oss << "end_layer_num: " << end_layer_num;
   oss << " }";

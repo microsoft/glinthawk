@@ -33,8 +33,9 @@ struct Settings
   Settings( const std::filesystem::path& config_file,
             const uint32_t start_layer,
             const uint32_t end_layer,
-            const uint64_t concurrency_limit,
-            const bool randomize_parameters );
+            const uint64_t concurrency_limit_,
+            const uint64_t max_context_,
+            const bool randomize_parameters_ );
 
   std::string to_string() const;
 
@@ -45,6 +46,7 @@ struct Settings
   uint64_t start_layer_num {};
   uint64_t end_layer_num {};
   uint64_t concurrency_limit { 1 }; // max concurrent inference size
+  uint64_t max_context { 1 };       // max context size, only valid with a pre-allocated context manager
   bool randomize_parameters { false };
 };
 
@@ -173,7 +175,6 @@ template<typename Config, typename DType>
 requires ModelConfig<Config>
 struct InferenceContext
 {
-  // TODO: add context state here
   static size_t context_size( const Settings<Config>& settings );
 
   DType* buffer_ { nullptr };

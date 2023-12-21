@@ -94,6 +94,7 @@ private:
                              const int concurrency_size_pre_attention,
                              const int concurrency_size_attention,
                              const int concurrency_size_post_attention,
+                             const int max_context_count,
                              const bool randomize );
   void setup_stats_handler();
 

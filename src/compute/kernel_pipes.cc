@@ -53,17 +53,18 @@ void ComputeKernelPiped<Model>::execution_thread_func()
       // TODO: Right now the attention cpu machines do not need to know about layers for reserving context. Will they
       // TODO: work that way right now?
       // TODO: any reason we shouldn't always use max batch size?
+      // TODO: context state?
 
-      // TODO: fix OOM issue by reimplementing context.
       // TODO: fix first and last layer on same machine logging issue.
+      // TODO: fix partial model loading
       // TODO: route is very long, long messages (adds 3x32x11=1056 bytes).
       // TODO: make kv matrix done together so memcpy is together.
-      // TODO: either make parallel tokens in one prompt work, or remove the feature altogether (and put protections in place).
+      // TODO: either make parallel tokens in one prompt work, or remove the feature altogether (and put protections in
+      // place).
 
       // Successful:
       //      3) CPU+GPU or GPU only with BS=16, 256 dummies
       //      3) CPU+GPU or GPU only with BS=1, 8 dummies
-
 
       // find the queue and pop the data to input_states and possibly contexts
       switch ( next_stage ) {
@@ -71,7 +72,7 @@ void ComputeKernelPiped<Model>::execution_thread_func()
           for ( size_t j = 0; j < target_conc_pre_size_; j++ ) {
             pair<InferenceState, shared_ptr<typename Model::ContextType>> action
               = move( processing_pre_attention_[next_layer_idx].front() );
-//            LOG_EVERY_N( INFO, 384 ) << "got this in processing: " << action.first;
+            // LOG_EVERY_N( INFO, 384 ) << "got this in processing: " << action.first;
             processing_pre_attention_[next_layer_idx].pop();
             input_states.push_back( move( action.first ) );
             contexts.push_back( action.second );
@@ -82,7 +83,7 @@ void ComputeKernelPiped<Model>::execution_thread_func()
           for ( size_t j = 0; j < target_conc_att_size_; j++ ) {
             pair<InferenceState, shared_ptr<typename Model::ContextType>> action
               = move( processing_attention_.front() );
-//            LOG_EVERY_N( INFO, 384 ) << "got this in processing: " << action.first;
+            // LOG_EVERY_N( INFO, 384 ) << "got this in processing: " << action.first;
             processing_attention_.pop();
             input_states.push_back( move( action.first ) );
             contexts.push_back( action.second );
@@ -92,7 +93,7 @@ void ComputeKernelPiped<Model>::execution_thread_func()
         case InferenceState::Stage::PostAttention: {
           for ( size_t j = 0; j < target_conc_post_size_; j++ ) {
             InferenceState action_post = move( processing_post_attention_[next_layer_idx].front() );
-//            LOG_EVERY_N( INFO, 384 ) << "got this in processing: " << action_post;
+            // LOG_EVERY_N( INFO, 384 ) << "got this in processing: " << action_post;
             processing_post_attention_[next_layer_idx].pop();
             input_states.push_back( move( action_post ) );
           }
@@ -153,7 +154,7 @@ void ComputeKernelPiped<Model>::execution_thread_func()
                and !results[j].finished() ) {
             lock_guard lock( ctx_mgr_mutex_ );
             processing_states.emplace_back( move( results[j] ),
-                                            context_manager_.get_context( results[j].prompt_id() ) );
+                                            context_manager_.get_context( results[j].prompt_id(), true ) );
           } else {
             outgoing_states.emplace_back( move( results[j] ) );
           }
@@ -219,11 +220,11 @@ void ComputeKernelPiped<Model>::bookkeeping_thread_func()
       << "InferenceState can not be processed in this machine, original next layer was: " << action.next_layer()
       << ", but we host " << start_layer_ << " to " << end_layer_;
 
-    shared_ptr<typename Model::ContextType> context;
     switch ( action.next_stage() ) {
       case InferenceState::Stage::PreAttention: {
         // for action in pre-attention stage, get (try to create) context and just push to compute.
         CHECK_EQ( process_pre_, true ) << "This machine does not service the PreAttention pipeline";
+        shared_ptr<typename Model::ContextType> context;
         {
           // let's get the context for this action, but it doesn't matter if it's empty
           lock_guard lock( ctx_mgr_mutex_ );
@@ -242,10 +243,11 @@ void ComputeKernelPiped<Model>::bookkeeping_thread_func()
         // for action in attention stage, get non-empty context and just push to compute.
         // if the context doesn't exist, just wait
         CHECK_EQ( process_att_, true ) << "This machine does not service the Attention pipeline";
+        shared_ptr<typename Model::ContextType> context;
         {
           // let's get the context for this action
           lock_guard lock( ctx_mgr_mutex_ );
-          context = context_manager_.get_context( action.prompt_id() );
+          context = context_manager_.get_context( action.prompt_id(), false );
         }
         if ( not context.get()->empty() ) {
           {
@@ -288,37 +290,29 @@ void ComputeKernelPiped<Model>::backlog_thread_func()
 
   while ( running_ ) {
     InferenceState action;
+    shared_ptr<typename Model::ContextType> context;
     // let's get an action from the waiting_attention_
     {
       unique_lock<mutex> lock( waiting_attention_mutex_ );
-      waiting_attention_cv_.wait( lock, [this] { return released_ > 0 && !waiting_attention_.empty(); } );
+      waiting_attention_cv_.wait( lock, [this] { return !waiting_attention_.empty(); } );
       action = move( waiting_attention_.front() );
       waiting_attention_.pop();
-      released_ -= 1;
     }
 
-    //    LOG (INFO) << "got this in waiting: " << action;
-
-    shared_ptr<typename Model::ContextType> context;
+    // let's get a free context from context_manager_
     {
-      // let's get the context for this action
-      lock_guard lock( ctx_mgr_mutex_ );
-      context = context_manager_.get_context( action.prompt_id() );
+      unique_lock<mutex> lock( ctx_mgr_mutex_ );
+      ctx_mgr_cv_.wait( lock, [this] { return context_manager_.size() > 0; } );
+      context = context_manager_.get_context( action.prompt_id(), false );
     }
 
-    if ( not context.get()->empty() ) {
-      {
-        lock_guard lock( processing_mutex_ );
-        processing_attention_.emplace( move( action ), context );
-      }
-
-      processing_cv_.notify_one();
-    } else {
-      {
-        lock_guard lock( waiting_attention_mutex_ );
-        waiting_attention_.emplace( move( action ) );
-      }
+    CHECK_EQ( context.get()->empty(), false ) << "Context should not be empty";
+    {
+      lock_guard lock( processing_mutex_ );
+      processing_attention_.emplace( move( action ), context );
     }
+
+    processing_cv_.notify_one();
   }
 }
 

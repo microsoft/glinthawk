@@ -92,6 +92,7 @@ void WorkerPiped<Model>::setup_compute_kernel( const filesystem::path& model_roo
                                                const int concurrency_size_pre_attention,
                                                const int concurrency_size_attention,
                                                const int concurrency_size_post_attention,
+                                               const int max_context_count,
                                                const bool randomize )
 {
   CHECK_LE( start_layer, end_layer ) << "start_layer must be less than or equal to end_layer";
@@ -102,6 +103,7 @@ void WorkerPiped<Model>::setup_compute_kernel( const filesystem::path& model_roo
       start_layer,
       end_layer,
       std::max( { concurrency_size_pre_attention, concurrency_size_attention, concurrency_size_post_attention } ),
+      max_context_count,
       randomize ),
     concurrency_size_pre_attention,
     concurrency_size_attention,
@@ -207,6 +209,7 @@ bool WorkerPiped<Model>::handle_coordinator_message( core::Message&& msg )
                             proto.concurrency_pre_att_size(),
                             proto.concurrency_att_size(),
                             proto.concurrency_post_att_size(),
+                            proto.max_context_count(),
                             proto.randomize() );
       setup_blobstore( proto.blobstore_uri() );
 

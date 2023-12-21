@@ -40,13 +40,14 @@ void randomize_buffer( DType* buffer, size_t len, const float min, const float m
 }
 
 template<typename Config, typename DType>
-Context<Config, DType>::Context( const Settings<Config>& settings )
+Context<Config, DType>::Context( const Settings<Config>& settings, const bool make_empty )
   : storage_( [&]() -> decltype( storage_ ) {
-    DType* ptr;
-    const cudaError_t err = cudaMalloc( &ptr, InferenceContext<Config, DType>::context_size( settings ) );
-    if ( err == cudaSuccess ) {
-      if ( settings.randomize_parameters ) {
-        LOG( WARNING ) << "Randomizing context...";
+    if ( make_empty ) {
+      return std::unique_ptr<DType, CUDADeleter<DType>> { nullptr };
+    } else {
+      DType* ptr;
+      const cudaError_t err = cudaMalloc( &ptr, InferenceContext<Config, DType>::context_size( settings ) );
+      if ( err == cudaSuccess ) {
         std::unique_ptr<DType> host_ptr {
           new DType[InferenceContext<Config, DType>::context_size( settings ) / sizeof( DType )]
         };
@@ -56,10 +57,11 @@ Context<Config, DType>::Context( const Settings<Config>& settings )
                           10.0 / sqrt( Config::dim ) );
         ops::CHECK_CUDA( cudaMemcpy(
           ptr, host_ptr.get(), InferenceContext<Config, DType>::context_size( settings ), cudaMemcpyHostToDevice ) );
+
+        return std::unique_ptr<DType, CUDADeleter<DType>> { ptr };
+      } else {
+        return std::unique_ptr<DType, CUDADeleter<DType>> { nullptr };
       }
-      return std::unique_ptr<DType, CUDADeleter<DType>> { ptr };
-    } else {
-      return std::unique_ptr<DType, CUDADeleter<DType>> { nullptr };
     }
   }() )
 {
@@ -77,6 +79,7 @@ Llama2<Config, DType>::Llama2( const std::filesystem::path& model_path,
                                const uint32_t start_layer,
                                const uint32_t end_layer,
                                const uint64_t concurrency_limit,
+                               const uint64_t max_context,
                                const bool randomize_parameters )
 {
   ops::init( concurrency_limit );
@@ -85,7 +88,8 @@ Llama2<Config, DType>::Llama2( const std::filesystem::path& model_path,
   const auto config_path = model_path / "CONFIG";
   const auto base_path = model_path / ( "BASEWEIGHTS" + filename_suffix );
 
-  llama2::Settings<Config> settings { config_path, start_layer, end_layer, concurrency_limit, randomize_parameters };
+  llama2::Settings<Config> settings { config_path,       start_layer, end_layer,
+                                      concurrency_limit, max_context, randomize_parameters };
 
   CHECK_GE( 1024, Config::n_heads ) << "Attention softmax has n_heads threads, and this cannot surpass 1024.";
   CHECK_GE( 1024, Config::dim / Config::n_heads / 2 ) << "RoPE has head_size / 2 threads and cannot surpass 1024.";

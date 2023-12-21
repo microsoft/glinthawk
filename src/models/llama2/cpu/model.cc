@@ -38,17 +38,25 @@ void randomize_buffer( DType* buffer, size_t len, const float min, const float m
 } // namespace
 
 template<typename Config, typename DType>
-Context<Config, DType>::Context( const Settings<Config>& settings )
-  : storage_( reinterpret_cast<DType*>( new uint8_t[InferenceContext<Config, DType>::context_size( settings )] ) )
+Context<Config, DType>::Context( const Settings<Config>& settings, const bool make_empty )
+  : storage_( [&]() -> decltype( storage_ ) {
+    DType* ptr;
+    if ( make_empty ) {
+      ptr = nullptr;
+    } else {
+      ptr = reinterpret_cast<DType*>( new ( std::nothrow )
+                                        uint8_t[InferenceContext<Config, DType>::context_size( settings )] );
+    }
+    if ( ptr != nullptr ) {
+      randomize_buffer( ptr,
+                        InferenceContext<Config, DType>::context_size( settings ) / sizeof( DType ),
+                        -10.0 / sqrt( Config::dim ),
+                        10.0 / sqrt( Config::dim ) );
+    }
+    return std::unique_ptr<DType> { ptr };
+  }() )
 {
   this->buffer_ = storage_.get();
-  if ( settings.randomize_parameters ) {
-    LOG( WARNING ) << "Randomizing context...";
-    randomize_buffer( storage_.get(),
-                      InferenceContext<Config, DType>::context_size( settings ) / sizeof( DType ),
-                      -10.0 / sqrt( Config::dim ),
-                      10.0 / sqrt( Config::dim ) );
-  }
 }
 
 template<typename Config, typename DType>
@@ -56,13 +64,15 @@ Llama2<Config, DType>::Llama2( const std::filesystem::path& model_path,
                                const uint32_t start_layer,
                                const uint32_t end_layer,
                                const uint64_t concurrency_limit,
+                               const uint64_t max_context,
                                const bool randomize_parameters )
 {
   const std::string filename_suffix = "_" + dtype_str<DType>();
   const auto config_path = model_path / "CONFIG";
   const auto base_path = model_path / ( "BASEWEIGHTS" + filename_suffix );
 
-  llama2::Settings<Config> settings { config_path, start_layer, end_layer, concurrency_limit, randomize_parameters };
+  llama2::Settings<Config> settings { config_path,       start_layer, end_layer,
+                                      concurrency_limit, max_context, randomize_parameters };
 
   constexpr auto base_size = BaseWeights<Config, DType>::base_size();
   constexpr auto layer_size = LayerWeights<Config, DType>::layer_size();

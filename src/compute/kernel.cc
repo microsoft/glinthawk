@@ -106,8 +106,7 @@ void ComputeKernel<Model>::backlog_thread_func()
     // let's get an action from the incoming_
     {
       unique_lock<mutex> lock( waiting_mutex_ );
-      while ( not( released_ > 0 && !waiting_.empty() ) )
-        waiting_cv_.wait( lock );
+      waiting_cv_.wait( lock, [this] { return released_ > 0 && !waiting_.empty(); } );
       action = move( waiting_.front() );
       waiting_.pop();
       released_ -= 1;
