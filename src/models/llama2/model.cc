@@ -85,8 +85,14 @@ Llama2<Config, DType, LlamaOperations, Context>::Llama2( const std::filesystem::
                                                          const uint32_t start_layer,
                                                          const uint32_t end_layer,
                                                          const uint64_t concurrency_limit,
+                                                         const uint64_t max_context_count,
                                                          const bool randomize_parameters )
-  : settings_( model_dir / "CONFIG", start_layer, end_layer, concurrency_limit, randomize_parameters )
+  : settings_( model_dir / "CONFIG",
+               start_layer,
+               end_layer,
+               concurrency_limit,
+               max_context_count,
+               randomize_parameters )
   , base_weights_buffer_( ops_.device_allocate( BaseWeights<Config, DType>::base_size() ) )
   , layers_buffer_( ops_.device_allocate( LayerWeights<Config, DType>::layer_size() * settings_.n_layers_loaded() ) )
   , run_state_buffer_( ops_.device_allocate( RunState<Config, DType, Context>::state_size( settings_ ) ) )
@@ -163,21 +169,16 @@ Llama2<Config, DType, LlamaOperations, Context>::Llama2( const std::filesystem::
 template<typename Config, typename DType, typename LlamaOperations, typename Context>
 void Llama2<Config, DType, LlamaOperations, Context>::dummy_forward( InferenceState& state )
 {
-  CHECK_EQ( state.next_layer(), settings_.start_layer_num );
-
-  state.erase_from_workers( settings_.start_layer_num );
-  if ( settings_.end_layer_num == Config::n_layers - 1 ) {
-    state.set_next_layer( 0 );
-  } else {
-    state.set_next_layer( settings_.end_layer_num + 1 );
-  }
+  CHECK_GE( state.next_layer(), settings_.start_layer_num );
+  CHECK_LE( state.next_layer(), settings_.end_layer_num );
+  state.erase_from_workers( state.next_layer(), state.next_stage() );
+  state.loop_till_next_worker( Config::n_layers );
 }
 
 template<typename Config, typename DType, typename LlamaOperations, typename Context>
 bool Llama2<Config, DType, LlamaOperations, Context>::is_finished( const InferenceState& state )
 {
-  CHECK_EQ( state.next_layer(), settings_.start_layer_num );
-  return ( state.next_layer() == 0 )
+  return ( state.next_layer() == 0 and state.next_stage() == InferenceState::Stage::PreAttention )
          and ( state.token() == 2 or state.token_pos() >= Config::seq_len ); // EOS or out of length
 }
 
@@ -230,11 +231,11 @@ void Llama2<Config, DType, LlamaOperations, Context>::pre_attention_ops( const i
 
   // qkv matmuls for this position
   ops_.template matmul<Config::dim, Config::dim>( this->state_.q, this->state_.xb, layer_weights.wq, batch_size );
-  ops_.template matmul<Config::dim, Config::kv_dim>( this->state_.k, this->state_.xb, layer_weights.wk, batch_size );
-  ops_.template matmul<Config::dim, Config::kv_dim>( this->state_.v, this->state_.xb, layer_weights.wv, batch_size );
+  ops_.template matmul<Config::dim, Config::kv_dim * 2>(
+    this->state_.kv, this->state_.xb, layer_weights.wkv, batch_size );
 
   // save key, value at each time step (pos) to our kv cache, if the context resides on memory
-  ops_.copy_kv_cache( this->state_.batch_token_contexts, this->state_.k, this->state_.v, batch_size );
+  ops_.copy_kv_cache( this->state_.batch_token_contexts, this->state_.kv, batch_size );
 }
 
 template<typename Config, typename DType, typename LlamaOperations, typename Context>
@@ -383,7 +384,7 @@ std::vector<InferenceState> Llama2<Config, DType, LlamaOperations, Context>::for
                  CopyType::DeviceToHost );
 
       states[i].set_next_stage( InferenceState::Stage::PreAttention );
-      states[i].set_next_layer( this->settings_.end_layer_num + 1 );
+      states[i].set_next_layer( states[i].next_layer() + 1 );
       states[i].set_activations( std::move( activations ) );
       output_states.push_back( std::move( states[i] ) );
     }
@@ -423,27 +424,31 @@ std::vector<InferenceState> Llama2<Config, DType, LlamaOperations, Context>::pre
 
   std::vector<InferenceState> output_states;
   for ( size_t i = 0; i < states.size(); i++ ) {
-    DataBuffer activations { ( Config::dim + 2 * Config::kv_dim ) * sizeof( DType ) };
+    size_t len_activation = 2 * Config::dim;
+    if ( contexts[i]->empty() ) {
+      len_activation += 2 * Config::kv_dim;
+    }
+
+    DataBuffer activations { len_activation * sizeof( DType ) };
 
     ops_.copy( reinterpret_cast<DType*>( activations.data() ),
+               this->state_.x + i * Config::dim,
+               Config::dim * sizeof( DType ),
+               CopyType::DeviceToHost );
+
+    ops_.copy( reinterpret_cast<DType*>( activations.data() ) + Config::dim,
                this->state_.q + i * Config::dim,
                Config::dim * sizeof( DType ),
                CopyType::DeviceToHost );
 
     if ( contexts[i]->empty() ) {
-      ops_.copy( reinterpret_cast<DType*>( activations.data() + Config::dim * sizeof( DType ) ),
-                 this->state_.k + i * Config::kv_dim,
-                 Config::kv_dim * sizeof( DType ),
-                 CopyType::DeviceToHost );
-
-      ops_.copy( reinterpret_cast<DType*>( activations.data() + ( Config::dim + Config::kv_dim ) * sizeof( DType ) ),
-                 this->state_.v + i * Config::kv_dim,
-                 Config::kv_dim * sizeof( DType ),
+      ops_.copy( reinterpret_cast<DType*>( activations.data() ) + 2 * Config::dim,
+                 this->state_.kv + i * 2 * Config::kv_dim,
+                 2 * Config::kv_dim * sizeof( DType ),
                  CopyType::DeviceToHost );
     }
 
     states[i].set_next_stage( InferenceState::Stage::Attention );
-    states[i].set_next_layer( this->settings_.end_layer_num + 1 );
     states[i].set_activations( std::move( activations ) );
     output_states.push_back( std::move( states[i] ) );
   }
@@ -474,34 +479,34 @@ std::vector<InferenceState> Llama2<Config, DType, LlamaOperations, Context>::att
       case DataType::Float16:
         // Q should go to run state
         ops_.template convert_and_copy( this->state_.q + i * Config::dim,
-                                        reinterpret_cast<LlamaOperations::Float16*>( activation_data ),
+                                        reinterpret_cast<LlamaOperations::Float16*>( activation_data ) + Config::dim,
                                         Config::dim,
                                         CopyType::HostToDevice );
 
         // if KV is not already in context, put it there
-        if ( activation_len > Config::dim * DataTypeSize( state.dtype() ) ) {
-          ops_.template convert_and_copy(
-            contexts[i]->layer( state.next_layer() ).token( state.token_pos() ).key(),
-            reinterpret_cast<LlamaOperations::Float16*>( activation_data + Config::dim * sizeof( DType ) ),
-            Config::kv_dim * 2,
-            CopyType::HostToDevice );
+        if ( activation_len > 2 * Config::dim * DataTypeSize( state.dtype() ) ) {
+          ops_.template convert_and_copy( contexts[i]->layer( state.next_layer() ).token( state.token_pos() ).key(),
+                                          reinterpret_cast<LlamaOperations::Float16*>( activation_data )
+                                            + 2 * Config::dim,
+                                          Config::kv_dim * 2,
+                                          CopyType::HostToDevice );
         }
         break;
 
       case DataType::Float32:
         // Q should go to run state
         ops_.template convert_and_copy( this->state_.q + i * Config::dim,
-                                        reinterpret_cast<LlamaOperations::Float32*>( activation_data ),
+                                        reinterpret_cast<LlamaOperations::Float32*>( activation_data ) + Config::dim,
                                         Config::dim,
                                         CopyType::HostToDevice );
 
         // if KV is not already in context, put it there
-        if ( activation_len > Config::dim * DataTypeSize( state.dtype() ) ) {
-          ops_.template convert_and_copy(
-            contexts[i]->layer( state.next_layer() ).token( state.token_pos() ).key(),
-            reinterpret_cast<LlamaOperations::Float32*>( activation_data + Config::dim * sizeof( DType ) ),
-            Config::kv_dim * 2,
-            CopyType::HostToDevice );
+        if ( activation_len > 2 * Config::dim * DataTypeSize( state.dtype() ) ) {
+          ops_.template convert_and_copy( contexts[i]->layer( state.next_layer() ).token( state.token_pos() ).key(),
+                                          reinterpret_cast<LlamaOperations::Float32*>( activation_data )
+                                            + 2 * Config::dim,
+                                          Config::kv_dim * 2,
+                                          CopyType::HostToDevice );
         }
         break;
 
@@ -517,18 +522,23 @@ std::vector<InferenceState> Llama2<Config, DType, LlamaOperations, Context>::att
   for ( size_t i = 0; i < states.size(); i++ ) {
     auto& state = states[i];
 
-    DataBuffer activations { Config::dim * DataTypeSize( state.dtype() ) };
+    DataBuffer activations { 2 * Config::dim * DataTypeSize( state.dtype() ) };
+
+    ops_.copy( reinterpret_cast<DType*>( activations.data() ),
+               reinterpret_cast<DType*>( state.activations().data() ),
+               Config::dim * sizeof( DType ),
+               CopyType::HostToHost );
 
     switch ( state.dtype() ) {
       case DataType::Float16:
-        ops_.template convert_and_copy( reinterpret_cast<LlamaOperations::Float16*>( activations.data() ),
+        ops_.template convert_and_copy( reinterpret_cast<LlamaOperations::Float16*>( activations.data() ) + Config::dim,
                                         this->state_.xb + i * Config::dim,
                                         Config::dim,
                                         CopyType::DeviceToHost );
         break;
 
       case DataType::Float32:
-        ops_.template convert_and_copy( reinterpret_cast<LlamaOperations::Float32*>( activations.data() ),
+        ops_.template convert_and_copy( reinterpret_cast<LlamaOperations::Float32*>( activations.data() ) + Config::dim,
                                         this->state_.xb + i * Config::dim,
                                         Config::dim,
                                         CopyType::DeviceToHost );
@@ -538,7 +548,6 @@ std::vector<InferenceState> Llama2<Config, DType, LlamaOperations, Context>::att
     }
 
     state.set_next_stage( InferenceState::Stage::PostAttention );
-    state.set_next_layer( this->settings_.end_layer_num + 1 );
     state.set_activations( std::move( activations ) );
     output_states.push_back( std::move( state ) );
   }
@@ -552,12 +561,18 @@ std::vector<InferenceState> Llama2<Config, DType, LlamaOperations, Context>::pos
 {
   this->check_batch( states, {}, InferenceState::Stage::PostAttention );
 
-  for ( size_t i = 0; i < states.size(); i++ )
+  for ( size_t i = 0; i < states.size(); i++ ) {
     // load the activations
-    ops_.copy( this->state_.xb + i * Config::dim,
+    ops_.copy( this->state_.x + i * Config::dim,
                reinterpret_cast<DType*>( states[i].activations().data() ),
                Config::dim * sizeof( DType ),
                CopyType::HostToDevice );
+
+    ops_.copy( this->state_.xb + i * Config::dim,
+               reinterpret_cast<DType*>( states[i].activations().data() ) + Config::dim,
+               Config::dim * sizeof( DType ),
+               CopyType::HostToDevice );
+  }
 
   post_attention_ops( states[0].next_layer() );
 

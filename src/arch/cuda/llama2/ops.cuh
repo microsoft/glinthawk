@@ -53,8 +53,7 @@ public:
   void soft_sample( DType* v, const std::vector<float>& temp_s, const uint64_t batch_size );
 
   void copy_kv_cache( typename ContextType::TokenContextType token_contexts[],
-                      const DType* state_k,
-                      const DType* state_v,
+                      const DType* state_kv,
                       const uint64_t batch_size );
 
   template<typename DTypeDst, typename DTypeSrc>
@@ -69,7 +68,7 @@ private:
 
 public:
   using llama2::Context<Config, DType>::Context;
-  Context( const Settings<Config>& settings );
+  Context( const Settings<Config>& settings, const bool make_empty = false );
 };
 
 static_assert(
@@ -93,15 +92,20 @@ constexpr size_t AMRBS = 128; /* argmax reduce block size */
 }
 
 template<typename Config, typename DType>
-Context<Config, DType>::Context( const Settings<Config>& settings )
+Context<Config, DType>::Context( const Settings<Config>& settings, const bool make_empty )
   : storage_( [&]() -> decltype( storage_ ) {
     DType* ptr;
-    const cudaError_t err = cudaMalloc( &ptr, Context<Config, DType>::max_size( settings.n_layers_loaded() ) );
-    if ( err == cudaSuccess ) {
-      return decltype( storage_ ) { ptr };
+    if ( make_empty ) {
+      ptr = nullptr;
     } else {
-      return decltype( storage_ ) { nullptr };
+      const cudaError_t err = cudaMalloc( &ptr, Context<Config, DType>::max_size( settings.n_layers_loaded() ) );
+      if ( err == cudaSuccess ) {
+        return decltype( storage_ ) { ptr };
+      } else {
+        return decltype( storage_ ) { nullptr };
+      }
     }
+    return decltype( storage_ ) { ptr };
   }() )
 {
   this->buffer_ = storage_.get();
@@ -250,13 +254,10 @@ LlamaOperations<Config, DType, ContextType>::LlamaOperations( const Settings<Con
   // (b) Config::n_heads must not exceed 1024.
   // (c) Config::dim / Config::n_heads / 2 must not exceed 1024.
   // (d) Config::n_heads must not exceed (1 << 16) - 1. RoPE has n_heads blocks, which cannot surpass 2^16.
-  // (e) Config::seq_len must not exceed (1 << 16) - 1. Attention softmax has seq_len blocks, which cannot surpass 2^16.
-  // (f) Accum blocks must not exceed (1 << 16) - 1.
-  // (g) Silu blocks must not exceed (1 << 16) - 1.
-  // (h) CuRAND blocks must not exceed (1 << 16) - 1.
-  // (i) RMS Norm blocks must not exceed (1 << 16) - 1.
-  // (j) RMS Norm scratch pad must have enough space for calculations.
-  // (k) Argmax scratch pad must have enough space.
+  // (e) Config::seq_len must not exceed (1 << 16) - 1. Attention softmax has seq_len blocks, which cannot surpass
+  // 2^16. (f) Accum blocks must not exceed (1 << 16) - 1. (g) Silu blocks must not exceed (1 << 16) - 1. (h) CuRAND
+  // blocks must not exceed (1 << 16) - 1. (i) RMS Norm blocks must not exceed (1 << 16) - 1. (j) RMS Norm scratch pad
+  // must have enough space for calculations. (k) Argmax scratch pad must have enough space.
 
   static_assert( 1024 >= TPB );                                                                  // (a)
   static_assert( 1024 >= Config::n_heads );                                                      // (b)
@@ -454,8 +455,7 @@ void LlamaOperations<Config, DType, ContextType>::soft_sample( DType* v,
 template<typename Config, typename DType, typename ContextType>
 void LlamaOperations<Config, DType, ContextType>::copy_kv_cache(
   typename ContextType::TokenContextType token_contexts[],
-  const DType* state_k,
-  const DType* state_v,
+  const DType* state_kv,
   const uint64_t batch_size )
 {
   for ( size_t i = 0; i < batch_size; i++ ) {
@@ -463,15 +463,12 @@ void LlamaOperations<Config, DType, ContextType>::copy_kv_cache(
       continue;
     }
 
-    DType* k_cache_pos = token_contexts[i].key();
-    DType* v_cache_pos = token_contexts[i].value();
+    DType* kv_cache_pos = token_contexts[i].key();
 
-    // XXX why not just one memcpy?
-    common::cuda::CHECK_CUDA( cudaMemcpyAsync(
-      k_cache_pos, state_k + i * Config::kv_dim, Config::kv_dim * sizeof( DType ), cudaMemcpyDeviceToDevice ) );
-
-    common::cuda::CHECK_CUDA( cudaMemcpyAsync(
-      v_cache_pos, state_v + i * Config::kv_dim, Config::kv_dim * sizeof( DType ), cudaMemcpyDeviceToDevice ) );
+    common::cuda::CHECK_CUDA( cudaMemcpyAsync( kv_cache_pos,
+                                               state_kv + i * Config::kv_dim * 2,
+                                               Config::kv_dim * sizeof( DType ) * 2,
+                                               cudaMemcpyDeviceToDevice ) );
   }
 }
 

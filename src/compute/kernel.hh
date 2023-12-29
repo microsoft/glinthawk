@@ -40,7 +40,7 @@ public:
   }
 
   std::shared_ptr<typename Model::ContextType> get_context( const glinthawk::PromptID& prompt_id,
-                                                            bool = false )
+                                                            bool emplace_empty = false )
   {
     auto it = contexts_.find( prompt_id );
     if ( it != contexts_.end() ) {
@@ -49,12 +49,12 @@ public:
 
     auto context = std::make_shared<typename Model::ContextType>( settings_ );
 
-    if ( context.get()->empty() ) {
-      return nullptr;
-    } else {
+    if ( not context.get()->empty() or emplace_empty ) {
       contexts_.emplace( prompt_id, context );
-      return context;
+      DLOG( INFO ) << "(size: " << contexts_.size() << ") Added context for " << prompt_id;
     }
+
+    return context;
   }
 
   bool release( const glinthawk::PromptID& prompt_id ) { return contexts_.erase( prompt_id ) > 0; }
@@ -79,6 +79,8 @@ private:
 
   std::atomic<bool> running_ { true };
 
+  Measurement& __stats__ { global_measurement() };
+
   void execution_thread_func();
   void bookkeeping_thread_func();
   void backlog_thread_func();
@@ -86,8 +88,6 @@ private:
   std::thread execution_thread_;
   std::thread bookkeeping_thread_;
   std::thread backlog_thread_;
-
-  Measurement& __stats__ { global_measurement() };
 
 public:
   ComputeKernel( std::unique_ptr<Model>&& model, const uint64_t target_conc_size )
@@ -199,7 +199,6 @@ void ComputeKernel<Model>::execution_thread_func()
   std::vector<std::shared_ptr<typename Model::ContextType>> contexts;
 
   while ( running_ ) {
-    // TODO: possible move bug shenanigans
     input_states.clear();
     contexts.clear();
 
@@ -210,7 +209,6 @@ void ComputeKernel<Model>::execution_thread_func()
       for ( size_t j = 0; j < target_conc_size_; j++ ) {
         action = move( processing_.front() );
         processing_.pop();
-        // TODO: possible move bug shenanigans
         input_states.push_back( std::move( action.first ) );
         contexts.push_back( action.second );
       }
@@ -225,7 +223,6 @@ void ComputeKernel<Model>::execution_thread_func()
     {
       std::lock_guard lock( outgoing_mutex_ );
       for ( auto& state : results ) {
-        // TODO: possible move bug shenanigans
         outgoing_.emplace( std::move( state ) );
       }
     }
@@ -254,13 +251,9 @@ void ComputeKernel<Model>::bookkeeping_thread_func()
       // let's get the context for this action
       std::lock_guard lock( ctx_mgr_mutex_ );
       context = context_manager_->get_context( action.prompt_id() );
-
-      //    if ( not context ) {
-      //      LOG( ERROR ) << "Could not get context for prompt_id=" << action.prompt_id().to_string();
-      //    }
     }
 
-    if ( context ) {
+    if ( not context->empty() ) {
       {
         std::lock_guard lock( processing_mutex_ );
         processing_.emplace( std::move( action ), context );
@@ -295,8 +288,7 @@ void ComputeKernel<Model>::backlog_thread_func()
     // let's get an action from the incoming_
     {
       std::unique_lock<std::mutex> lock( waiting_mutex_ );
-      while ( not( released_ > 0 && !waiting_.empty() ) )
-        waiting_cv_.wait( lock );
+      waiting_cv_.wait( lock, [this] { return released_ > 0 && !waiting_.empty(); } );
       action = std::move( waiting_.front() );
       waiting_.pop();
       released_ -= 1;
@@ -306,13 +298,9 @@ void ComputeKernel<Model>::backlog_thread_func()
       // let's get the context for this action
       std::lock_guard lock( ctx_mgr_mutex_ );
       context = context_manager_->get_context( action.prompt_id() );
-
-      //    if ( not context ) {
-      //      LOG( ERROR ) << "Could not get context for prompt_id=" << action.prompt_id().to_string();
-      //    }
     }
 
-    if ( context ) {
+    if ( not context->empty() ) {
       {
         std::lock_guard lock( processing_mutex_ );
         processing_.emplace( std::move( action ), context );

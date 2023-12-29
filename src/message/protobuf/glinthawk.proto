@@ -8,7 +8,12 @@ message InitializeWorker
   uint32 start_layer = 2;
   uint32 end_layer = 3;
   uint32 concurrency_size = 4;
-  string blobstore_uri = 5;
+  uint32 concurrency_pre_att_size = 5;
+  uint32 concurrency_att_size = 6;
+  uint32 concurrency_post_att_size = 7;
+  uint32 max_context_count = 8;
+  bool randomize = 9;
+  string blobstore_uri = 10;
 }
 
 message ProcessPrompts { repeated string prompt_ids = 1; }
@@ -19,9 +24,16 @@ message SetRoute
 {
   message LayerToAddress
   {
+    enum ProtoStage
+      {
+        PreAttention = 0;
+        Attention = 1;
+        PostAttention = 2;
+      }
     uint32 layer_num = 1;
-    string ip = 2;
-    uint32 port = 3;
+    ProtoStage stage = 2;
+    string ip = 3;
+    uint32 port = 4;
   }
 
   repeated LayerToAddress layer_to_address = 1;

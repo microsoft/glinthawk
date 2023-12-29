@@ -34,6 +34,12 @@ ostream& operator<<( ostream& os, const glinthawk::models::InferenceState::Stage
   return os;
 }
 
+ostream& operator<<( ostream& os, const glinthawk::models::InferenceState& v )
+{
+  os << v.to_string();
+  return os;
+}
+
 namespace glinthawk {
 
 size_t DataTypeSize( const DataType dtype )
@@ -93,20 +99,40 @@ InferenceState::InferenceState( const string_view serialized )
 
   for ( uint32_t i = 0; i < num_workers; i++ ) {
     const auto layer = _get_and_advance<uint32_t>( ptr );
+    const auto stage = _get_and_advance<Stage>( ptr );
     const auto ipv4_numeric = _get_and_advance<uint32_t>( ptr );
     const auto port = _get_and_advance<uint16_t>( ptr );
-    layer_workers_.emplace( layer, net::Address::from_ipv4_numeric( ipv4_numeric, port ) );
+    layer_workers_.emplace( std::make_pair( layer, stage ), net::Address::from_ipv4_numeric( ipv4_numeric, port ) );
   }
 }
 
 net::Address InferenceState::next_worker() const
 {
-  auto it = layer_workers_.find( next_layer_ );
-  CHECK( it != layer_workers_.end() ) << "No worker found for layer " << next_layer_;
+  auto it = layer_workers_.find( { next_layer_, next_stage_ } );
+  CHECK( it != layer_workers_.end() ) << "No worker found for layer " << next_layer_ << ", stage " << next_stage_;
   return it->second;
 }
 
-void InferenceState::erase_from_workers( const uint32_t next_layer ) { layer_workers_.erase( next_layer ); }
+void InferenceState::loop_till_next_worker( const uint32_t n_layers )
+{
+  while ( layer_workers_.find( { next_layer_, next_stage_ } ) == layer_workers_.end() and layer_workers_.size() > 0 ) {
+    switch ( next_stage_ ) {
+      case InferenceState::Stage::PreAttention: next_stage_ = InferenceState::Stage::Attention; break;
+      case InferenceState::Stage::Attention: next_stage_ = InferenceState::Stage::PostAttention; break;
+      case InferenceState::Stage::PostAttention:
+        next_stage_ = InferenceState::Stage::PreAttention;
+        next_layer_++;
+        if ( next_layer_ == n_layers )
+          next_layer_ = 0;
+        break;
+    }
+  }
+}
+
+void InferenceState::erase_from_workers( const uint32_t next_layer, const Stage next_stage )
+{
+  layer_workers_.erase( { next_layer, next_stage } );
+}
 
 string InferenceState::serialize() const
 {
@@ -132,8 +158,9 @@ string InferenceState::serialize() const
 
   _put_and_advance( ptr, static_cast<uint32_t>( layer_workers_.size() ) );
 
-  for ( auto& [layer, address] : layer_workers_ ) {
-    _put_and_advance( ptr, layer );
+  for ( auto& [layer_stage, address] : layer_workers_ ) {
+    _put_and_advance( ptr, layer_stage.first );
+    _put_and_advance( ptr, layer_stage.second );
     _put_and_advance( ptr, address.ipv4_numeric() );
     _put_and_advance( ptr, address.port() );
   }
@@ -150,8 +177,8 @@ string InferenceState::to_string() const
       << "temperature=" << temperature_ << ", " << "finished=" << finished_ << ", " << "dtype=" << dtype_ << ", "
       << "activations.len=" << activations_ << ", " << "peers={";
 
-  for ( auto& [layer, address] : layer_workers_ ) {
-    oss << " (" << layer << " -> " << address.to_string() << ")";
+  for ( auto& [layer_stage, address] : layer_workers_ ) {
+    oss << " (" << layer_stage.first << "-" << layer_stage.second << " -> " << address.to_string() << ")";
   }
 
   oss << " })";
@@ -161,20 +188,21 @@ string InferenceState::to_string() const
 
 size_t InferenceState::serialized_size() const
 {
-  return sizeof( PromptID )                                                         /* prompt_id_ */
-         + sizeof( ModelID )                                                        /* model_id_ */
-         + sizeof( token_ )                                                         /* token_ */
-         + sizeof( token_pos_ )                                                     /* token_pos_ */
-         + sizeof( next_layer_ )                                                    /* next_layer_ */
-         + sizeof( next_stage_ )                                                    /* next_stage_ */
-         + sizeof( prompt_length_ )                                                 /* prompt_length_ */
-         + sizeof( temperature_ )                                                   /* temperature_ */
-         + sizeof( finished_ )                                                      /* finished_ */
-         + sizeof( DataType )                                                       /* dtype_ */
-         + sizeof( uint64_t /* activations_.len() */ )                              /* activations_.len */
-         + activations_.len()                                                       /* activations_ data */
-         + sizeof( uint32_t )                                                       /* layer_workers_.size() */
-         + layer_workers_.size() * ( 2 * sizeof( uint32_t ) + sizeof( uint16_t ) ); /* layer_workers_ */
+  return sizeof( PromptID )         /* prompt_id_ */
+         + sizeof( ModelID )        /* model_id_ */
+         + sizeof( token_ )         /* token_ */
+         + sizeof( token_pos_ )     /* token_pos_ */
+         + sizeof( next_layer_ )    /* next_layer_ */
+         + sizeof( next_stage_ )    /* next_stage_ */
+         + sizeof( prompt_length_ ) /* prompt_length_ */
+         + sizeof( temperature_ )   /* temperature_ */
+         + sizeof( finished_ )      /* finished_ */
+         + sizeof( DataType )       /* dtype_ */
+         + sizeof( uint64_t )       /* activations_.len */
+         + activations_.len()       /* activations_ data */
+         + sizeof( uint32_t )       /* layer_workers_.size() */
+         + layer_workers_.size()
+             * ( 2 * sizeof( uint32_t ) + sizeof( Stage ) + sizeof( uint16_t ) ); /* layer_workers_ */
 }
 
 }

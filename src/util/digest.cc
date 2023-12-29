@@ -158,4 +158,9 @@ void sha256( const string_view input, SHA256Hash& hash )
   SHA256( reinterpret_cast<const unsigned char*>( input.data() ), input.length(), hash.hash.data() );
 }
 
+ostream& operator<<( ostream& os, const SHA256Hash& v ){
+  os << v.base58digest().substr( 0, 8 );
+  return os;
+}
+
 }

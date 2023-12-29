@@ -40,9 +40,6 @@ file ( GLOB_RECURSE SOURCE_COMPUTE
   src/models/*.cc
 )
 
-# XXX not ready yet
-list ( REMOVE_ITEM SOURCE_COMPUTE "${CMAKE_CURRENT_SOURCE_DIR}/src/compute/kernel_pipes.cc" )
-
 add_library ( glinthawkcore OBJECT ${SOURCE_CORE} )
 link_libraries ( glinthawkcore )
 

@@ -1,4 +1,4 @@
-#include "worker.hh"
+#include "worker_pipes.hh"
 
 #include <chrono>
 #include <filesystem>
@@ -43,7 +43,7 @@ DataType get_datatype()
 }
 
 template<typename Model>
-void Worker<Model>::setup_stats_handler()
+void WorkerPiped<Model>::setup_stats_handler()
 {
   /* let's see if telegraph is listening */
   error_code err;
@@ -60,18 +60,19 @@ void Worker<Model>::setup_stats_handler()
     "Stats timer",
     Direction::In,
     stats_timer_,
-    bind( &Worker<Model>::handle_stats, this ),
+    bind( &WorkerPiped<Model>::handle_stats, this ),
     [] { return true; },
     [] { LOG( ERROR ) << "Stats timer stopped."; } );
 }
 
 template<typename Model>
-void Worker<Model>::setup_peer( std::map<net::Address, Peer>::iterator peer_it )
+void WorkerPiped<Model>::setup_peer( std::map<net::Address, Peer>::iterator peer_it )
 {
-  peer_it->second.message_handler.install_rules( this->event_loop_,
-                                                 this->rule_categories_,
-                                                 bind( &Worker<Model>::handle_peer_message, this, placeholders::_1 ),
-                                                 [] { LOG( INFO ) << "Connection to peer closed."; } );
+  peer_it->second.message_handler.install_rules(
+    this->event_loop_,
+    this->rule_categories_,
+    bind( &WorkerPiped<Model>::handle_peer_message, this, placeholders::_1 ),
+    [] { LOG( INFO ) << "Connection to peer closed."; } );
 
   event_loop_.add_rule(
     "Outgoing message",
@@ -88,7 +89,7 @@ void Worker<Model>::setup_peer( std::map<net::Address, Peer>::iterator peer_it )
 }
 
 template<typename Model>
-void Worker<Model>::setup_blobstore( const string& blobstore_uri )
+void WorkerPiped<Model>::setup_blobstore( const string& blobstore_uri )
 {
   auto blobstore = storage::BlobStore::create( blobstore_uri );
   CHECK( blobstore ) << "Could not create blobstore: " << blobstore_uri;
@@ -100,27 +101,42 @@ void Worker<Model>::setup_blobstore( const string& blobstore_uri )
 }
 
 template<typename Model>
-void Worker<Model>::setup_compute_kernel( const filesystem::path& model_root,
-                                          const int start_layer,
-                                          const int end_layer,
-                                          const int concurrency_size )
+void WorkerPiped<Model>::setup_compute_kernel( const filesystem::path& model_root,
+                                               const int start_layer,
+                                               const int end_layer,
+                                               const int concurrency_size_pre_attention,
+                                               const int concurrency_size_attention,
+                                               const int concurrency_size_post_attention,
+                                               const int max_context_count,
+                                               const bool randomize )
 {
   CHECK_LE( start_layer, end_layer ) << "start_layer must be less than or equal to end_layer";
 
-  compute_kernel_ = make_unique<compute::ComputeKernel<Model>>(
-    make_unique<Model>( model_root, start_layer, end_layer, concurrency_size, 1 ), concurrency_size );
+  compute_kernel_ = make_unique<compute::ComputeKernelPiped<Model>>(
+    make_unique<Model>(
+      model_root,
+      start_layer,
+      end_layer,
+      std::max( { concurrency_size_pre_attention, concurrency_size_attention, concurrency_size_post_attention } ),
+      max_context_count,
+      randomize ),
+    concurrency_size_pre_attention,
+    concurrency_size_attention,
+    concurrency_size_post_attention,
+    start_layer,
+    end_layer );
 
   event_loop_.add_rule( "Compute Kernel",
                         Direction::In,
                         compute_kernel_->event_fd(),
-                        bind( &Worker<Model>::handle_compute_kernel_event, this ),
+                        bind( &WorkerPiped<Model>::handle_compute_kernel_event, this ),
                         [this] { return this->compute_kernel_ != nullptr; } );
 }
 
 template<typename Model>
-Worker<Model>::Worker( const Address& worker_address,
-                       const Address& coordinator_address,
-                       const std::filesystem::path& model_root )
+WorkerPiped<Model>::WorkerPiped( const Address& worker_address,
+                                 const Address& coordinator_address,
+                                 const std::filesystem::path& model_root )
   : listen_address_( worker_address )
   , listen_socket_( [this]() -> TCPSocket {
     TCPSocket socket;
@@ -148,27 +164,34 @@ Worker<Model>::Worker( const Address& worker_address,
   coordinator_.message_handler.install_rules(
     this->event_loop_,
     this->rule_categories_,
-    bind( &Worker<Model>::handle_coordinator_message, this, placeholders::_1 ),
+    bind( &WorkerPiped<Model>::handle_coordinator_message, this, placeholders::_1 ),
     [] { LOG( FATAL ) << "Connection to coordinator closed."; },
     [] { LOG( FATAL ) << "Exception in coordinator message handler."; } );
 
   event_loop_.add_rule(
-    "Worker listen",
+    "WorkerPiped listen",
     Direction::In,
     listen_socket_,
-    bind( &Worker<Model>::listen_callback, this ),
+    bind( &WorkerPiped<Model>::listen_callback, this ),
     [] { return true; },
-    [] { LOG( ERROR ) << "Worker stopped listening."; } );
+    [] { LOG( ERROR ) << "WorkerPiped stopped listening."; } );
 
-  // Send "HEY" to coordinator
+// Send "HEY" to coordinator
+#if defined( TARGET_PLATFORM_AMD64 )
   Message hey_message { Message::OpCode::HeyCPU, this->listen_address_.to_string() };
   coordinator_.message_handler.push_message( move( hey_message ) );
+#elif defined( TARGET_PLATFORM_CUDA )
+  Message hey_message { Message::OpCode::HeyGPU, this->listen_address_.to_string() };
+  coordinator_.message_handler.push_message( move( hey_message ) );
+#else
+#error "Unknown target platform"
+#endif
 
   setup_stats_handler();
 }
 
 template<typename Model>
-void Worker<Model>::listen_callback()
+void WorkerPiped<Model>::listen_callback()
 {
   TCPSocket socket = listen_socket_.accept();
   auto addr = socket.peer_address();
@@ -182,7 +205,7 @@ void Worker<Model>::listen_callback()
 }
 
 template<typename Model>
-bool Worker<Model>::handle_coordinator_message( core::Message&& msg )
+bool WorkerPiped<Model>::handle_coordinator_message( core::Message&& msg )
 {
 
   LOG( INFO ) << "(Coordinator) Incoming message: " << msg.info();
@@ -196,10 +219,18 @@ bool Worker<Model>::handle_coordinator_message( core::Message&& msg )
       // TODO(sadjad): eventually allow for loading different models
       // const auto& model_name = proto.model_name();
 
-      setup_compute_kernel( model_root_, proto.start_layer(), proto.end_layer(), proto.concurrency_size() );
+      setup_compute_kernel( model_root_,
+                            proto.start_layer(),
+                            proto.end_layer(),
+                            proto.concurrency_pre_att_size(),
+                            proto.concurrency_att_size(),
+                            proto.concurrency_post_att_size(),
+                            proto.max_context_count(),
+                            proto.randomize() );
+
       setup_blobstore( proto.blobstore_uri() );
 
-      LOG( INFO ) << "Worker initialized.";
+      LOG( INFO ) << "WorkerPiped initialized.";
       break;
     }
 
@@ -292,7 +323,7 @@ bool Worker<Model>::handle_coordinator_message( core::Message&& msg )
 
       // also run the completion commiting thread
       if ( not completion_commit_thread_.joinable() ) {
-        completion_commit_thread_ = thread( bind( &Worker<Model>::completion_commit_thread_func, this ) );
+        completion_commit_thread_ = thread( bind( &WorkerPiped<Model>::completion_commit_thread_func, this ) );
       }
 
       break;
@@ -323,12 +354,12 @@ bool Worker<Model>::handle_coordinator_message( core::Message&& msg )
 
       // make sure the prompt preparation thread is running
       if ( not prompt_preparation_thread_.joinable() ) {
-        prompt_preparation_thread_ = thread( bind( &Worker<Model>::prompt_preparation_thread_func, this ) );
+        prompt_preparation_thread_ = thread( bind( &WorkerPiped<Model>::prompt_preparation_thread_func, this ) );
       }
 
       // also run the completion commiting thread
       if ( not completion_commit_thread_.joinable() ) {
-        completion_commit_thread_ = thread( bind( &Worker<Model>::completion_commit_thread_func, this ) );
+        completion_commit_thread_ = thread( bind( &WorkerPiped<Model>::completion_commit_thread_func, this ) );
       }
 
       break;
@@ -344,7 +375,7 @@ bool Worker<Model>::handle_coordinator_message( core::Message&& msg )
 }
 
 template<typename Model>
-void Worker<Model>::handle_compute_kernel_event()
+void WorkerPiped<Model>::handle_compute_kernel_event()
 {
   this->compute_kernel_->event_fd().read_event();
 
@@ -379,7 +410,7 @@ void Worker<Model>::handle_compute_kernel_event()
 }
 
 template<typename Model>
-bool Worker<Model>::handle_peer_message( core::Message&& msg )
+bool WorkerPiped<Model>::handle_peer_message( core::Message&& msg )
 {
   DLOG( INFO ) << "(Peer) Incoming message: " << msg.info();
 
@@ -392,8 +423,8 @@ bool Worker<Model>::handle_peer_message( core::Message&& msg )
 
       this->compute_kernel_->check_finished( state );
 
-      if ( state.next_layer() == 0 ) {
-        // We are the first layer & stage: if this inference state contains a generated token, we should save it.
+      if ( state.next_layer() == 0 and state.next_stage() == models::InferenceState::Stage::PreAttention ) {
+        // We are the first layer: if this inference state contains a generated token, we should save it.
         // otherwise, we load the next token from the prompt.
 
         if ( state.token_pos() > 0 ) {
@@ -437,7 +468,7 @@ bool Worker<Model>::handle_peer_message( core::Message&& msg )
 }
 
 template<typename Model>
-void Worker<Model>::handle_stats()
+void WorkerPiped<Model>::handle_stats()
 {
   stats_timer_.read_event();
   if ( telegraf_logger_ != nullptr ) {
@@ -453,13 +484,13 @@ void Worker<Model>::handle_stats()
 }
 
 template<typename Model>
-void Worker<Model>::run()
+void WorkerPiped<Model>::run()
 {
   while ( event_loop_.wait_next_event( -1 ) != EventLoop::Result::Exit ) {}
 }
 
 template<typename Model>
-void Worker<Model>::prompt_preparation_thread_func()
+void WorkerPiped<Model>::prompt_preparation_thread_func()
 {
   while ( running_ ) {
     vector<InferenceState> states {};
@@ -493,7 +524,7 @@ void Worker<Model>::prompt_preparation_thread_func()
 }
 
 template<typename Model>
-void Worker<Model>::completion_commit_thread_func()
+void WorkerPiped<Model>::completion_commit_thread_func()
 {
   while ( running_ ) {
     completion_manager_->commit();
@@ -504,9 +535,9 @@ void Worker<Model>::completion_commit_thread_func()
 }
 
 template<typename Model>
-Worker<Model>::~Worker()
+WorkerPiped<Model>::~WorkerPiped()
 {
-  LOG( INFO ) << "Worker shutting down.";
+  LOG( INFO ) << "WorkerPiped shutting down.";
   running_ = false;
 
   if ( prompt_preparation_thread_.joinable() ) {
@@ -523,25 +554,25 @@ namespace glinthawk::core {
 #if defined( TARGET_PLATFORM_AMD64 )
 namespace models = glinthawk::models::llama2::amd64;
 
-template class Worker<models::Llama2_7B_Chat<_Float16>>;
-template class Worker<models::Llama2_13B_Chat<_Float16>>;
-template class Worker<models::Llama2_70B_Chat<_Float16>>;
-template class Worker<models::Stories_110M<_Float16>>;
-template class Worker<models::Llama2_7B_Chat<float>>;
-template class Worker<models::Llama2_13B_Chat<float>>;
-template class Worker<models::Llama2_70B_Chat<float>>;
-template class Worker<models::Stories_110M<float>>;
+template class WorkerPiped<models::Llama2_7B_Chat<_Float16>>;
+template class WorkerPiped<models::Llama2_13B_Chat<_Float16>>;
+template class WorkerPiped<models::Llama2_70B_Chat<_Float16>>;
+template class WorkerPiped<models::Stories_110M<_Float16>>;
+template class WorkerPiped<models::Llama2_7B_Chat<float>>;
+template class WorkerPiped<models::Llama2_13B_Chat<float>>;
+template class WorkerPiped<models::Llama2_70B_Chat<float>>;
+template class WorkerPiped<models::Stories_110M<float>>;
 #elif defined( TARGET_PLATFORM_CUDA )
 namespace models = glinthawk::models::llama2::cuda;
 
-template class Worker<models::Llama2_7B_Chat<__half>>;
-template class Worker<models::Llama2_13B_Chat<__half>>;
-template class Worker<models::Llama2_70B_Chat<__half>>;
-template class Worker<models::Stories_110M<__half>>;
-template class Worker<models::Llama2_7B_Chat<float>>;
-template class Worker<models::Llama2_13B_Chat<float>>;
-template class Worker<models::Llama2_70B_Chat<float>>;
-template class Worker<models::Stories_110M<float>>;
+template class WorkerPiped<models::Llama2_7B_Chat<__half>>;
+template class WorkerPiped<models::Llama2_13B_Chat<__half>>;
+template class WorkerPiped<models::Llama2_70B_Chat<__half>>;
+template class WorkerPiped<models::Stories_110M<__half>>;
+template class WorkerPiped<models::Llama2_7B_Chat<float>>;
+template class WorkerPiped<models::Llama2_13B_Chat<float>>;
+template class WorkerPiped<models::Llama2_70B_Chat<float>>;
+template class WorkerPiped<models::Stories_110M<float>>;
 #endif
 
 } // namespace glinthawk::core

@@ -9,7 +9,7 @@
 #include <optional>
 #include <thread>
 
-#include "compute/kernel.hh"
+#include "compute/kernel_pipes.hh"
 #include "message/handler.hh"
 #include "message/message.hh"
 #include "models/llama2/base.hh"
@@ -27,15 +27,15 @@
 namespace glinthawk::core {
 
 template<typename Model>
-class Worker
+class WorkerPiped
 {
 private:
   class Peer
   {
   public:
     net::Address address;
-    core::MessageHandler<net::TCPSession> message_handler;
     std::vector<models::InferenceState> outgoing_states {};
+    core::MessageHandler<net::TCPSession> message_handler;
 
     Peer( const net::Address& addr, net::TCPSocket&& socket )
       : address( addr )
@@ -56,7 +56,7 @@ private:
 
   std::map<net::Address, Peer> peers_ {};
   std::filesystem::path model_root_;
-  std::unique_ptr<compute::ComputeKernel<Model>> compute_kernel_ { nullptr };
+  std::unique_ptr<compute::ComputeKernelPiped<Model>> compute_kernel_ { nullptr };
 
   std::shared_ptr<glinthawk::storage::BlobStore> blobstore_ { nullptr };
   std::unique_ptr<glinthawk::prompt::PromptManager> prompt_manager_ { nullptr };
@@ -92,7 +92,11 @@ private:
   void setup_compute_kernel( const std::filesystem::path& model_root,
                              const int start_layer,
                              const int end_layer,
-                             const int concurrency_size );
+                             const int concurrency_size_pre_attention,
+                             const int concurrency_size_attention,
+                             const int concurrency_size_post_attention,
+                             const int max_context_count,
+                             const bool randomize );
   void setup_stats_handler();
 
   void listen_callback();
@@ -110,11 +114,11 @@ public:
   /// \param worker_address The address of the worker
   /// \param coordinator_address The address of the coordinator
   /// \param model_root The root directory of the model
-  Worker( const net::Address& worker_address,
-          const net::Address& coordinator_address,
-          const std::filesystem::path& model_root );
+  WorkerPiped( const net::Address& worker_address,
+               const net::Address& coordinator_address,
+               const std::filesystem::path& model_root );
 
-  ~Worker();
+  ~WorkerPiped();
 
   void run();
 };

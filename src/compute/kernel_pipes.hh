@@ -1,7 +1,9 @@
 #pragma once
 
+#include <array>
 #include <atomic>
 #include <condition_variable>
+#include <deque>
 #include <memory>
 #include <mutex>
 #include <queue>
@@ -10,52 +12,131 @@
 
 #include "kernel.hh"
 #include "models/common/model.hh"
+#include "monitoring/measurement.hh"
 #include "prompt/prompt.hh"
 #include "util/eventfd.hh"
 
 namespace glinthawk::compute {
 
 template<typename Model>
+class ContextManagerPreAllocated
+{
+private:
+  std::deque<std::shared_ptr<typename Model::ContextType>> free_contexts_ {};
+  std::unordered_map<glinthawk::PromptID, std::shared_ptr<typename Model::ContextType>> assigned_contexts_ {};
+  const typename Model::SettingsType settings_ {};
+  int empty_contexts { 0 };
+
+public:
+  ContextManagerPreAllocated( const typename Model::SettingsType& settings )
+    : settings_( settings )
+  {
+    uint64_t i;
+    for ( i = 0; i < settings_.max_context_count; i++ ) {
+      auto context = std::make_shared<typename Model::ContextType>( settings_ );
+
+      if ( not context.get()->empty() ) {
+        free_contexts_.push_back( context );
+      } else {
+        break;
+      }
+    }
+
+    LOG( INFO ) << "Allocated " << i << " contexts";
+  }
+
+  size_t size() const { return free_contexts_.size(); }
+
+  std::shared_ptr<typename Model::ContextType> get_context( const glinthawk::PromptID& prompt_id,
+                                                            const bool emplace_empty = false )
+  {
+    auto it = assigned_contexts_.find( prompt_id );
+    if ( it != assigned_contexts_.end() ) {
+      return it->second;
+    }
+
+    std::shared_ptr<typename Model::ContextType> context;
+
+    if ( free_contexts_.empty() ) {
+      context = std::make_shared<typename Model::ContextType>( settings_, true );
+
+      if ( emplace_empty ) {
+        assigned_contexts_.emplace( prompt_id, context );
+        empty_contexts += 1;
+      }
+    } else {
+      context = free_contexts_.front();
+      free_contexts_.pop_front();
+      assigned_contexts_.emplace( prompt_id, context );
+      DLOG( INFO ) << "(size: " << assigned_contexts_.size() - empty_contexts << "/"
+                   << assigned_contexts_.size() + free_contexts_.size() - empty_contexts << ") Added context for "
+                   << prompt_id;
+    }
+
+    return context;
+  }
+
+  bool release( const glinthawk::PromptID& prompt_id )
+  {
+    auto pair_freed = assigned_contexts_.find( prompt_id );
+    // If a context was assigned to this prompt, release it
+    // and if it's non-empty, add it back to unallocated contexts
+    if ( pair_freed != assigned_contexts_.end() ) {
+      if ( not pair_freed->second->empty() ) {
+        free_contexts_.push_back( pair_freed->second );
+      } else if ( pair_freed->second->empty() ) {
+        empty_contexts -= 1;
+      }
+
+      assigned_contexts_.erase( pair_freed );
+
+      DLOG( INFO ) << "(size: " << assigned_contexts_.size() - empty_contexts << "/"
+                   << assigned_contexts_.size() + free_contexts_.size() - empty_contexts << ") Released context for "
+                   << prompt_id;
+      return true;
+    }
+    return false;
+  }
+};
+
+template<typename Model>
 class ComputeKernelPiped
 {
 private:
+  using ContextPtr = std::shared_ptr<typename Model::ContextType>;
+  using StateContextPair = std::pair<models::InferenceState, ContextPtr>;
+
   std::unique_ptr<Model> model_;
-  ContextManager<Model> context_manager_;
+  ContextManagerPreAllocated<Model> context_manager_;
 
   const uint64_t target_conc_pre_size_;
   const uint64_t target_conc_att_size_;
   const uint64_t target_conc_post_size_;
 
+  const bool process_pre_;
+  const bool process_att_;
+  const bool process_post_;
+
+  const uint64_t start_layer_;
+  const uint64_t end_layer_;
   const uint64_t n_layers_;
 
-  uint64_t released_;
+  std::vector<std::queue<StateContextPair>> processing_pre_attention_;
+  std::vector<std::queue<models::InferenceState>> processing_post_attention_;
 
-  std::vector<std::queue<std::pair<glinthawk::models::InferenceState, std::shared_ptr<typename Model::ContextType>>>>
-    processing_pre_attention_, processing_attention_ {};
-  std::vector<std::queue<glinthawk::models::InferenceState>> waiting_attention_ {}, processing_post_attention_ {};
+  std::queue<StateContextPair> processing_attention_ {};
+  std::queue<models::InferenceState> incoming_ {}, waiting_attention_ {}, outgoing_ {};
 
-  std::queue<glinthawk::models::InferenceState> incoming_, outgoing_ {};
+  std::mutex ctx_mgr_mutex_ {}, outgoing_mutex_ {}, incoming_mutex_ {}, waiting_attention_mutex_ {},
+    processing_mutex_ {};
 
-  std::vector<std::mutex> processing_pre_attention_mutex_ {};
-  std::vector<std::mutex> processing_attention_mutex_ {}, waiting_attention_mutex_ {};
-  std::vector<std::mutex> processing_post_attention_mutex_ {};
-
-  std::mutex ctx_mgr_mutex_ {}, outgoing_mutex_ {}, incoming_mutex_ {};
-
-  std::vector<std::condition_variable> incoming_pre_attention_cv_ {}, processing_pre_attention_cv_ {};
-  std::vector<std::condition_variable> processing_attention_cv_ {}, waiting_attention_cv_ {};
-
-  std::condition_variable incoming_cv_{}, processing_cv_ {};
+  std::condition_variable ctx_mgr_cv_ {}, incoming_cv_ {}, processing_cv_ {}, waiting_attention_cv_ {};
 
   EventFD event_fd_ {};
 
   std::atomic<bool> running_ { true };
 
-  // TODO: how many threads do we need?
-  // TODO: how are we going to make locks works with these many queues
-  // TODO: how are we going to make CVs work?
-  // TODO: do we need many incomings?
-  // TODO: do we need many backlogs?
+  Measurement& __stats__ { global_measurement() };
 
   void execution_thread_func();
   void bookkeeping_thread_func();
@@ -70,14 +151,21 @@ public:
                       const uint64_t target_conc_pre_size,
                       const uint64_t target_conc_att_size,
                       const uint64_t target_conc_post_size,
-                      const uint64_t n_layers )
+                      const uint64_t start_layer,
+                      const uint64_t end_layer )
     : model_( std::move( model ) )
-    , context_manager_( model_->config() )
+    , context_manager_( model_->settings() )
     , target_conc_pre_size_( target_conc_pre_size )
     , target_conc_att_size_( target_conc_att_size )
     , target_conc_post_size_( target_conc_post_size )
-    , n_layers_( n_layers )
-    , released_( 0 )
+    , process_pre_( target_conc_pre_size > 0 )
+    , process_att_( target_conc_att_size > 0 )
+    , process_post_( target_conc_post_size > 0 )
+    , start_layer_( start_layer )
+    , end_layer_( end_layer )
+    , n_layers_( end_layer_ - start_layer_ + 1 )
+    , processing_pre_attention_( n_layers_ )
+    , processing_post_attention_( n_layers_ )
     , running_( true )
     , execution_thread_( &ComputeKernelPiped::execution_thread_func, this )
     , bookkeeping_thread_( &ComputeKernelPiped::bookkeeping_thread_func, this )
@@ -120,20 +208,10 @@ public:
   void push_finished( glinthawk::models::InferenceState&& state )
   {
     // Release the context
-    bool released;
     {
       std::lock_guard lock( ctx_mgr_mutex_ );
-      released = context_manager_.release( state.prompt_id() );
-    }
-
-    // if released, notify waiting prompts
-    if ( released ) {
-      {
-        std::lock_guard lock( waiting_mutex_ );
-        released_ += 1;
-      }
-
-      waiting_cv_.notify_one();
+      context_manager_.release( state.prompt_id() );
+      ctx_mgr_cv_.notify_one();
     }
 
     // do a "fake" forward: remove self from propagation list and set next worker
@@ -141,7 +219,7 @@ public:
 
     if ( state.layer_workers().empty() ) {
       // drop release message as it has fully propagated
-      LOG( INFO ) << "Dropping empty (release) inference state: " << state.to_string();
+      DLOG( INFO ) << "Dropping empty (release) inference state: " << state.to_string();
     } else {
       // propagate the release message to the next worker
       {
@@ -155,9 +233,9 @@ public:
 
   void check_finished( glinthawk::models::InferenceState& state )
   {
+    //    LOG (INFO) << "got this in check_finished: " << state;
     if ( model_->is_finished( state ) ) {
       state.set_finished();
-      // TODO: should we send the finished message back to the coordinator?
     }
   }
 
@@ -171,5 +249,303 @@ public:
     backlog_thread_.join();
   }
 };
+
+template<typename Model>
+void ComputeKernelPiped<Model>::execution_thread_func()
+{
+  LOG( INFO ) << "ComputeKernelPiped execution thread started.";
+
+  while ( running_ ) {
+    std::vector<models::InferenceState> input_states;
+    std::vector<std::shared_ptr<typename Model::ContextType>> contexts;
+    models::InferenceState::Stage next_stage;
+    uint32_t next_layer_idx;
+    {
+      // hold lock until one queue has enough data for one batch
+      std::unique_lock<std::mutex> lock( processing_mutex_ );
+      processing_cv_.wait( lock, [this, &next_stage, &next_layer_idx] {
+        if ( processing_attention_.size() >= target_conc_att_size_ and process_att_ ) {
+          next_stage = models::InferenceState::Stage::Attention;
+          return true;
+        }
+        for ( int layer_idx = static_cast<int>( n_layers_ - 1 ); layer_idx >= 0; layer_idx-- ) {
+          if ( processing_pre_attention_[layer_idx].size() >= target_conc_pre_size_ and process_pre_ ) {
+            next_stage = models::InferenceState::Stage::PreAttention;
+            next_layer_idx = static_cast<uint32_t>( layer_idx );
+            return true;
+          }
+          if ( processing_post_attention_[layer_idx].size() >= target_conc_post_size_ and process_post_ ) {
+            next_stage = models::InferenceState::Stage::PostAttention;
+            next_layer_idx = static_cast<uint32_t>( layer_idx );
+            return true;
+          }
+        }
+        return false;
+      } );
+
+      // TODO: With splitting KV cache to in-context and out-context, will we be memed by batch size?
+      // TODO: Right now we reserve GPU memory for all of the layers we host. Is that a good way, if we want to use a
+      // TODO: smaller subset of these layers?
+      // TODO: Right now the attention cpu machines do not need to know about layers for reserving context. Will they
+      // TODO: work that way right now?
+      // TODO: any reason we shouldn't always use max batch size?
+      // TODO: context state?
+
+      // TODO: fix partial model loading
+      // TODO: route is very long, long messages (adds 3x32x11=1056 bytes).
+      // TODO: either make parallel tokens in one prompt work, or remove the feature altogether (and put protections in
+      //       place).
+
+      // find the queue and pop the data to input_states and possibly contexts
+      switch ( next_stage ) {
+        case models::InferenceState::Stage::PreAttention: {
+          for ( size_t j = 0; j < target_conc_pre_size_; j++ ) {
+            StateContextPair action = std::move( processing_pre_attention_[next_layer_idx].front() );
+            // LOG_EVERY_N( INFO, 384 ) << "got this in processing: " << action.first;
+            processing_pre_attention_[next_layer_idx].pop();
+            input_states.push_back( std::move( action.first ) );
+            contexts.push_back( action.second );
+          }
+          break;
+        }
+        case models::InferenceState::Stage::Attention: {
+          for ( size_t j = 0; j < target_conc_att_size_; j++ ) {
+            StateContextPair action = std::move( processing_attention_.front() );
+            // LOG_EVERY_N( INFO, 384 ) << "got this in processing: " << action.first;
+            processing_attention_.pop();
+            input_states.push_back( std::move( action.first ) );
+            contexts.push_back( action.second );
+          }
+          break;
+        }
+        case models::InferenceState::Stage::PostAttention: {
+          for ( size_t j = 0; j < target_conc_post_size_; j++ ) {
+            models::InferenceState action_post = std::move( processing_post_attention_[next_layer_idx].front() );
+            // LOG_EVERY_N( INFO, 384 ) << "got this in processing: " << action_post;
+            processing_post_attention_[next_layer_idx].pop();
+            input_states.push_back( std::move( action_post ) );
+          }
+          break;
+        }
+      }
+    }
+
+    const auto start = std::chrono::steady_clock::now();
+    std::vector<models::InferenceState> results;
+    switch ( next_stage ) {
+      case models::InferenceState::Stage::PreAttention: {
+        results = model_->pre_attention_forward( std::move( input_states ), contexts );
+        const auto duration
+          = std::chrono::duration_cast<std::chrono::microseconds>( std::chrono::steady_clock::now() - start );
+        __stats__.add_point<IntDistributions::KernelPreAttentionForwardTime>( duration.count() );
+      } break;
+      case models::InferenceState::Stage::Attention: {
+        results = model_->attention_forward( std::move( input_states ), contexts );
+        const auto duration
+          = std::chrono::duration_cast<std::chrono::microseconds>( std::chrono::steady_clock::now() - start );
+        __stats__.add_point<IntDistributions::KernelAttentionForwardTime>( duration.count() );
+      } break;
+      case models::InferenceState::Stage::PostAttention: {
+        results = model_->post_attention_forward( std::move( input_states ) );
+        const auto duration
+          = std::chrono::duration_cast<std::chrono::microseconds>( std::chrono::steady_clock::now() - start );
+        __stats__.add_point<IntDistributions::KernelPostAttentionForwardTime>( duration.count() );
+      } break;
+    }
+
+    std::vector<models::InferenceState> outgoing_states;
+    std::vector<StateContextPair> processing_states;
+    switch ( next_stage ) {
+      case models::InferenceState::Stage::PreAttention:
+        // the next stage is attention, so if we hold the context and serve attention, add it directly to processing
+        for ( size_t j = 0; j < target_conc_pre_size_; j++ ) {
+          if ( process_att_ and !contexts[j].get()->empty() ) {
+            processing_states.emplace_back( std::move( results[j] ), contexts[j] );
+          } else {
+            outgoing_states.emplace_back( std::move( results[j] ) );
+          }
+        }
+        break;
+      case models::InferenceState::Stage::Attention:
+        // the next stage is post-attention, so if we serve that specific layer, add it directly to processing
+        for ( size_t j = 0; j < target_conc_att_size_; j++ ) {
+          if ( process_post_ and results[j].next_layer() <= end_layer_ and results[j].next_layer() >= start_layer_ ) {
+            processing_states.emplace_back( std::move( results[j] ), contexts[j] );
+          } else {
+            outgoing_states.emplace_back( std::move( results[j] ) );
+          }
+        }
+        break;
+      case models::InferenceState::Stage::PostAttention:
+        // the next stage is pre-attention, so if we serve that specific layer, get context and add it directly to
+        // processing
+        for ( size_t j = 0; j < target_conc_post_size_; j++ ) {
+          check_finished( results[j] );
+          if ( process_pre_ and results[j].next_layer() <= end_layer_ and results[j].next_layer() >= start_layer_
+               and !results[j].finished() and results[j].next_layer() != 0 ) {
+            std::lock_guard lock( ctx_mgr_mutex_ );
+            processing_states.emplace_back( std::move( results[j] ),
+                                            context_manager_.get_context( results[j].prompt_id(), true ) );
+          } else {
+            outgoing_states.emplace_back( std::move( results[j] ) );
+          }
+        }
+        break;
+    }
+
+    {
+      std::lock_guard lock( outgoing_mutex_ );
+      for ( auto& state : outgoing_states ) {
+        outgoing_.emplace( std::move( state ) );
+      }
+    }
+
+    if ( outgoing_states.size() > 0 ) {
+      event_fd_.write_event();
+    }
+
+    {
+      std::lock_guard lock( processing_mutex_ );
+      switch ( next_stage ) {
+        case models::InferenceState::Stage::PreAttention:
+          for ( auto& action_loop : processing_states ) {
+            processing_attention_.emplace( std::move( action_loop.first ), action_loop.second );
+          }
+          break;
+        case models::InferenceState::Stage::Attention:
+          for ( auto& action_loop : processing_states ) {
+            processing_post_attention_[action_loop.first.next_layer() - start_layer_].emplace(
+              std::move( action_loop.first ) );
+          }
+          break;
+        case models::InferenceState::Stage::PostAttention:
+          for ( auto& action_loop : processing_states ) {
+            processing_pre_attention_[action_loop.first.next_layer() - start_layer_].emplace(
+              std::move( action_loop.first ), action_loop.second );
+          }
+          break;
+      }
+    }
+  }
+}
+
+template<typename Model>
+void ComputeKernelPiped<Model>::bookkeeping_thread_func()
+{
+  LOG( INFO ) << "ComputeKernelPiped bookkeeping thread started.";
+
+  while ( running_ ) {
+    models::InferenceState action;
+    // let's get an action from the incoming_
+    {
+      std::unique_lock<std::mutex> lock( incoming_mutex_ );
+      incoming_cv_.wait( lock, [this] { return !incoming_.empty(); } );
+      action = std::move( incoming_.front() );
+      incoming_.pop();
+    }
+
+    //    LOG (INFO) << "got this in incoming: " << action;
+    // make sure this action is for our serving layers
+    const uint32_t next_layer_index = action.next_layer() - start_layer_;
+    CHECK_LT( next_layer_index, n_layers_ )
+      << "InferenceState can not be processed in this machine, original next layer was: " << action.next_layer()
+      << ", but we host " << start_layer_ << " to " << end_layer_;
+
+    switch ( action.next_stage() ) {
+      case models::InferenceState::Stage::PreAttention: {
+        // for action in pre-attention stage, get (try to create) context and just push to compute.
+        CHECK_EQ( process_pre_, true ) << "This machine does not service the PreAttention pipeline";
+        ContextPtr context;
+        {
+          // let's get the context for this action, but it doesn't matter if it's empty
+          std::lock_guard lock( ctx_mgr_mutex_ );
+          context = context_manager_.get_context( action.prompt_id(), true );
+        }
+        {
+          std::lock_guard lock( processing_mutex_ );
+          processing_pre_attention_[next_layer_index].emplace( std::move( action ), context );
+        }
+
+        processing_cv_.notify_one();
+        break;
+      }
+
+      case models::InferenceState::Stage::Attention: {
+        // for action in attention stage, get non-empty context and just push to compute.
+        // if the context doesn't exist, just wait
+        CHECK_EQ( process_att_, true ) << "This machine does not service the Attention pipeline";
+        ContextPtr context;
+        {
+          // let's get the context for this action
+          std::lock_guard lock( ctx_mgr_mutex_ );
+          context = context_manager_.get_context( action.prompt_id(), false );
+        }
+        if ( not context.get()->empty() ) {
+          {
+            std::lock_guard lock( processing_mutex_ );
+            processing_attention_.emplace( std::move( action ), context );
+          }
+
+          processing_cv_.notify_one();
+        } else {
+          {
+            std::lock_guard lock( waiting_attention_mutex_ );
+            waiting_attention_.emplace( std::move( action ) );
+          }
+
+          waiting_attention_cv_.notify_one();
+        }
+        break;
+      }
+
+      case models::InferenceState::Stage::PostAttention: {
+        // for action in post-attention stage, push to compute without context
+        // if the context doesn't exist, just wait
+        CHECK_EQ( process_post_, true ) << "This machine does not service the PostAttention pipeline";
+        {
+          std::lock_guard lock( processing_mutex_ );
+          processing_post_attention_[next_layer_index].emplace( std::move( action ) );
+        }
+
+        processing_cv_.notify_one();
+        break;
+      }
+    }
+  }
+}
+
+template<typename Model>
+void ComputeKernelPiped<Model>::backlog_thread_func()
+{
+  LOG( INFO ) << "ComputeKernelPiped backlog thread started.";
+
+  while ( running_ ) {
+    models::InferenceState action;
+    ContextPtr context;
+
+    // let's get an action from the waiting_attention_
+    {
+      std::unique_lock<std::mutex> lock( waiting_attention_mutex_ );
+      waiting_attention_cv_.wait( lock, [this] { return !waiting_attention_.empty(); } );
+      action = std::move( waiting_attention_.front() );
+      waiting_attention_.pop();
+    }
+
+    // let's get a free context from context_manager_
+    {
+      std::unique_lock<std::mutex> lock( ctx_mgr_mutex_ );
+      ctx_mgr_cv_.wait( lock, [this] { return context_manager_.size() > 0; } );
+      context = context_manager_.get_context( action.prompt_id(), false );
+    }
+
+    CHECK_EQ( context.get()->empty(), false ) << "Context should not be empty";
+    {
+      std::lock_guard lock( processing_mutex_ );
+      processing_attention_.emplace( std::move( action ), context );
+    }
+
+    processing_cv_.notify_one();
+  }
+}
 
 } // namespace glinthawk::compute

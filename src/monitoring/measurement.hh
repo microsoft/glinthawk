@@ -35,6 +35,9 @@ enum class IntDistributions
 {
   PromptLength,
   KernelForwardTime,
+  KernelPreAttentionForwardTime,
+  KernelAttentionForwardTime,
+  KernelPostAttentionForwardTime,
 
   _Count
 };
@@ -59,6 +62,9 @@ constexpr std::array<std::string_view, static_cast<size_t>( Counters::_Count )> 
 constexpr std::array<std::string_view, static_cast<size_t>( IntDistributions::_Count )> int_dist_keys {
   "prompt_length",
   "kernel_forward_time",
+  "kernel_pre_attention_forward_time",
+  "kernel_attention_forward_time",
+  "kernel_post_attention_forward_time",
 };
 
 constexpr std::array<std::string_view, static_cast<size_t>( FloatDistributions::_Count )> float_dist_keys {};

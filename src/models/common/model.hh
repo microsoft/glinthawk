@@ -39,7 +39,7 @@ private:
   DataBuffer activations_ {};
 
   // mapping from layer to worker address for this inference state
-  std::map<uint32_t, glinthawk::net::Address> layer_workers_ {};
+  std::map<std::pair<uint32_t, Stage>, glinthawk::net::Address> layer_workers_ {};
 
   size_t serialized_size() const;
 
@@ -91,7 +91,9 @@ public:
   void set_finished() { finished_ = true; }
 
   glinthawk::net::Address next_worker() const;
-  void erase_from_workers( const uint32_t next_layer );
+
+  void loop_till_next_worker( const uint32_t n_layers );
+  void erase_from_workers( const uint32_t next_layer, const Stage next_stage );
 };
 
 template<typename Context>
@@ -123,3 +125,4 @@ public:
 std::ostream& operator<<( std::ostream& os, const glinthawk::DataType& v );
 std::ostream& operator<<( std::ostream& os, const glinthawk::DataBuffer& v );
 std::ostream& operator<<( std::ostream& os, const glinthawk::models::InferenceState::Stage& v );
+std::ostream& operator<<( std::ostream& os, const glinthawk::models::InferenceState& v );

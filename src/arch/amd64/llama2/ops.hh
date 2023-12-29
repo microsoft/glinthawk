@@ -50,8 +50,7 @@ public:
   void soft_sample( DType* v, const std::vector<float>& temp_s, const uint64_t batch_size );
 
   void copy_kv_cache( typename ContextType::TokenContextType token_contexts[],
-                      const DType* state_k,
-                      const DType* state_v,
+                      const DType* state_kv,
                       const uint64_t batch_size );
 
   template<typename DTypeDst, typename DTypeSrc>
@@ -67,7 +66,7 @@ private:
 
 public:
   using llama2::Context<Config, DType>::Context;
-  Context( const Settings<Config>& settings );
+  Context( const Settings<Config>& settings, const bool make_empty = false );
 };
 
 static_assert(
@@ -77,12 +76,18 @@ static_assert(
   LlamaOperationsConcept<LlamaOperations<configs::Stories_110M, _Float16>, _Float16, Settings<configs::Stories_110M>> );
 
 template<typename Config, typename DType>
-Context<Config, DType>::Context( const Settings<Config>& settings )
-  : llama2::Context<Config, DType>( settings, nullptr )
+Context<Config, DType>::Context( const Settings<Config>& settings, const bool make_empty )
+  : storage_( [&]() -> decltype( storage_ ) {
+    DType* ptr;
+    if ( make_empty ) {
+      ptr = nullptr;
+    } else {
+      ptr = reinterpret_cast<DType*>( new ( std::nothrow )
+                                        uint8_t[Context<Config, DType>::max_size( settings.n_layers_loaded() )] );
+    }
+    return decltype( storage_ ) { ptr };
+  }() )
 {
-  this->storage_.reset(
-    reinterpret_cast<DType*>( new uint8_t[Context<Config, DType>::max_size( settings.n_layers_loaded() )] ) );
-
   this->buffer_ = storage_.get();
 }
 
@@ -336,8 +341,7 @@ void LlamaOperations<Config, DType, ContextType>::soft_sample( DType* v,
 template<typename Config, typename DType, typename ContextType>
 void LlamaOperations<Config, DType, ContextType>::copy_kv_cache(
   typename ContextType::TokenContextType context_pointers[],
-  const DType* state_k,
-  const DType* state_v,
+  const DType* state_kv,
   const uint64_t batch_size )
 {
   uint64_t i;
@@ -347,11 +351,9 @@ void LlamaOperations<Config, DType, ContextType>::copy_kv_cache(
       continue;
     }
 
-    DType* k_cache_pos = context_pointers[i].key();
-    DType* v_cache_pos = context_pointers[i].value();
+    DType* kv_cache_pos = context_pointers[i].key();
 
-    memcpy( k_cache_pos, state_k + i * Config::kv_dim, Config::kv_dim * sizeof( DType ) );
-    memcpy( v_cache_pos, state_v + i * Config::kv_dim, Config::kv_dim * sizeof( DType ) );
+    memcpy( kv_cache_pos, state_kv + i * Config::kv_dim * 2, Config::kv_dim * sizeof( DType ) * 2 );
   }
 }
 

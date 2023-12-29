@@ -31,6 +31,7 @@ struct Settings
             const uint32_t start_layer,
             const uint32_t end_layer,
             const uint64_t concurrency_limit,
+            const uint64_t max_context_count,
             const bool randomize_parameters );
 
   std::string to_string() const;
@@ -42,6 +43,7 @@ struct Settings
   uint64_t start_layer_num {};
   uint64_t end_layer_num {};
   uint64_t concurrency_limit { 1 }; // max concurrent inference size
+  uint64_t max_context_count { 1 }; // max number of contexts
   bool randomize_parameters { false };
 };
 
@@ -113,10 +115,9 @@ struct LayerWeights
   const DType* rms_ffn_weight { nullptr }; // (dim)
 
   // weights for matmuls
-  const DType* wq { nullptr }; // (dim, dim)
-  const DType* wk { nullptr }; // (dim, dim)
-  const DType* wv { nullptr }; // (dim, dim)
-  const DType* wo { nullptr }; // (dim, dim)
+  const DType* wq { nullptr };  // (dim, dim)
+  const DType* wkv { nullptr }; // (dim, 2*kv_dim)
+  const DType* wo { nullptr };  // (dim, dim)
 
   // weights for ffn
   const DType* w1 { nullptr }; // (hidden_dim, dim)
@@ -144,8 +145,7 @@ struct RunState
   DType* xb {};           // same, but inside a residual branch (B, dim)
   DType* xb2 {};          // an additional buffer just for convenience (B, dim)
   DType* q {};            // query (B, dim)
-  DType* k {};            // key (B, kv_dim)
-  DType* v {};            // value (B, kv_dim)
+  DType* kv {};           // key and value (B, kv_dim, 2)
   DType* hb {};           // buffer for hidden dimension in the ffn (B, hidden_dim)
   DType* hb2 {};          // buffer for hidden dimension in the ffn (B, hidden_dim)
   DType* att {};          // buffer for scores/attention values (B, n_heads, seq_len)
@@ -179,8 +179,10 @@ Settings<T>::Settings( const std::filesystem::path& config_file,
                        const uint32_t start_layer,
                        const uint32_t end_layer,
                        const uint64_t concurrency_limit_,
+                       const uint64_t max_context_count_,
                        const bool randomize_parameters_ )
   : concurrency_limit( concurrency_limit_ )
+  , max_context_count( max_context_count_ )
   , randomize_parameters( randomize_parameters_ )
 {
   std::ifstream fin { config_file, std::ios::binary };
@@ -263,6 +265,7 @@ std::string Settings<T>::to_string() const
   oss << "seq_len: " << T::seq_len << ", ";
   oss << "wcls_present: " << T::wcls_present << ", ";
   oss << "concurrency_limit: " << concurrency_limit << ", ";
+  oss << "max_context_count: " << max_context_count << ", ";
   oss << "start_layer_num: " << start_layer_num << ", ";
   oss << "end_layer_num: " << end_layer_num;
   oss << " }";
@@ -294,8 +297,7 @@ LayerWeights<Config, DType>::LayerWeights( const DType* model )
   // base pointers
   this->rms_att_weight = _advance_pointer( ptr, Config::dim );
   this->wq = _advance_pointer( ptr, Config::dim * Config::dim );
-  this->wk = _advance_pointer( ptr, Config::dim * Config::kv_dim );
-  this->wv = _advance_pointer( ptr, Config::dim * Config::kv_dim );
+  this->wkv = _advance_pointer( ptr, Config::dim * Config::kv_dim * 2 );
   this->wo = _advance_pointer( ptr, Config::dim * Config::dim );
   this->rms_ffn_weight = _advance_pointer( ptr, Config::dim );
   this->w1 = _advance_pointer( ptr, Config::dim * Config::hidden_dim );
@@ -305,7 +307,6 @@ LayerWeights<Config, DType>::LayerWeights( const DType* model )
 
 /* RUN STATE */
 
-// TODO: optimize run state memory usage
 template<typename Config, typename DType, typename ContextType>
 RunState<Config, DType, ContextType>::RunState( const Settings<Config>& settings, DType* buffer )
   : buffer_( buffer )
@@ -313,9 +314,8 @@ RunState<Config, DType, ContextType>::RunState( const Settings<Config>& settings
   , xb( buffer_ + Config::dim * settings.concurrency_limit )
   , xb2( xb + Config::dim * settings.concurrency_limit )
   , q( xb2 + Config::dim * settings.concurrency_limit )
-  , k( q + Config::dim * settings.concurrency_limit )
-  , v( k + Config::kv_dim * settings.concurrency_limit )
-  , hb( v + Config::kv_dim * settings.concurrency_limit )
+  , kv( q + Config::dim * settings.concurrency_limit )
+  , hb( kv + Config::kv_dim * 2 * settings.concurrency_limit )
   , hb2( hb + Config::hidden_dim * settings.concurrency_limit )
   , att( hb2 + Config::hidden_dim * settings.concurrency_limit )
   , logits( att + Config::n_heads * Config::seq_len * settings.concurrency_limit )
