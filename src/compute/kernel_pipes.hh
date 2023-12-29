@@ -22,8 +22,10 @@ template<typename Model>
 class ContextManagerPreAllocated
 {
 private:
-  std::deque<std::shared_ptr<typename Model::ContextType>> free_contexts_ {};
-  std::unordered_map<glinthawk::PromptID, std::shared_ptr<typename Model::ContextType>> assigned_contexts_ {};
+  using ContextPtr = std::shared_ptr<typename Model::ContextType>;
+
+  std::deque<ContextPtr> free_contexts_ {};
+  std::unordered_map<glinthawk::PromptID, ContextPtr> assigned_contexts_ {};
   const typename Model::SettingsType settings_ {};
   int empty_contexts { 0 };
 
@@ -47,15 +49,14 @@ public:
 
   size_t size() const { return free_contexts_.size(); }
 
-  std::shared_ptr<typename Model::ContextType> get_context( const glinthawk::PromptID& prompt_id,
-                                                            const bool emplace_empty = false )
+  ContextPtr get_context( const glinthawk::PromptID& prompt_id, const bool emplace_empty = false )
   {
     auto it = assigned_contexts_.find( prompt_id );
     if ( it != assigned_contexts_.end() ) {
       return it->second;
     }
 
-    std::shared_ptr<typename Model::ContextType> context;
+    ContextPtr context;
 
     if ( free_contexts_.empty() ) {
       context = std::make_shared<typename Model::ContextType>( settings_, true );
@@ -105,6 +106,10 @@ template<typename Model>
 class ComputeKernelPiped
 {
 private:
+  using State = glinthawk::models::InferenceState;
+  using ContextPtr = std::shared_ptr<typename Model::ContextType>;
+  using StateContextPair = std::pair<State, ContextPtr>;
+
   std::unique_ptr<Model> model_;
   ContextManagerPreAllocated<Model> context_manager_;
 
@@ -120,13 +125,11 @@ private:
   const uint64_t end_layer_;
   const uint64_t n_layers_;
 
-  std::vector<std::queue<std::pair<glinthawk::models::InferenceState, std::shared_ptr<typename Model::ContextType>>>>
-    processing_pre_attention_;
-  std::vector<std::queue<glinthawk::models::InferenceState>> processing_post_attention_;
+  std::vector<std::queue<StateContextPair>> processing_pre_attention_;
+  std::vector<std::queue<State>> processing_post_attention_;
 
-  std::queue<std::pair<glinthawk::models::InferenceState, std::shared_ptr<typename Model::ContextType>>>
-    processing_attention_ {};
-  std::queue<glinthawk::models::InferenceState> incoming_ {}, waiting_attention_ {}, outgoing_ {};
+  std::queue<StateContextPair> processing_attention_ {};
+  std::queue<State> incoming_ {}, waiting_attention_ {}, outgoing_ {};
 
   std::mutex ctx_mgr_mutex_ {}, outgoing_mutex_ {}, incoming_mutex_ {}, waiting_attention_mutex_ {},
     processing_mutex_ {};
