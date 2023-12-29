@@ -12,24 +12,28 @@
 namespace glinthawk::models::llama2::amd64 {
 
 template<typename Config, typename DType>
+class Context;
+
+template<typename Config, typename DType, typename Ctx = Context<Config, DType>>
 requires ModelConfig<Config>
 class LlamaOperations : public common::amd64::Operations<DType>
 {
 public:
   using common::amd64::Operations<DType>::DeviceUniquePtr;
+  using ContextType = Ctx;
 
 public:
   LlamaOperations( const Settings<Config>& ) {}
   ~LlamaOperations() {}
 
   void attention_0_gemm( const DType* query,
-                         const DType* const context_pointers[],
+                         const typename ContextType::LayerContextType layer_contexts[],
                          DType* att,
                          const uint64_t batch_size,
                          const uint32_t* token_positions );
 
   void attention_2_gemm( const DType* att,
-                         const DType* const context_pointers[],
+                         const typename ContextType::LayerContextType layer_contexts[],
                          DType* xb,
                          const uint64_t batch_size,
                          const uint32_t* token_positions );
@@ -41,27 +45,28 @@ public:
                    const DType* freq_cis_real,
                    const DType* freq_cis_imag,
                    DType* state_q,
-                   DType* context_pointers[] );
+                   typename ContextType::TokenContextType token_contexts[] );
 
   void soft_sample( DType* v, const std::vector<float>& temp_s, const uint64_t batch_size );
 
-  void copy_kv_cache( DType* context_pointers[],
+  void copy_kv_cache( typename ContextType::TokenContextType token_contexts[],
                       const DType* state_k,
                       const DType* state_v,
-                      const uint64_t batch_size,
-                      const uint32_t* token_positions );
+                      const uint64_t batch_size );
 
   template<typename DTypeDst, typename DTypeSrc>
   void convert_and_copy( DTypeDst* dst, const DTypeSrc* src, const uint64_t size, const CopyType );
 };
 
+// platform-specific context
 template<typename Config, typename DType>
-class Context : public InferenceContext<Config, DType>
+class Context : public llama2::Context<Config, DType>
 {
 private:
-  typename LlamaOperations<Config, DType>::DeviceUniquePtr storage_;
+  typename common::amd64::Operations<DType>::DeviceUniquePtr storage_ {};
 
 public:
+  using llama2::Context<Config, DType>::Context;
   Context( const Settings<Config>& settings );
 };
 
@@ -73,8 +78,11 @@ static_assert(
 
 template<typename Config, typename DType>
 Context<Config, DType>::Context( const Settings<Config>& settings )
-  : storage_( reinterpret_cast<DType*>( new uint8_t[Context<Config, DType>::context_size( settings )] ) )
+  : llama2::Context<Config, DType>( settings, nullptr )
 {
+  this->storage_.reset(
+    reinterpret_cast<DType*>( new uint8_t[Context<Config, DType>::max_size( settings.n_layers_loaded() )] ) );
+
   this->buffer_ = storage_.get();
 }
 
@@ -157,20 +165,19 @@ void gumbel_fix( DType* array, float temp )
 
 }
 
-template<typename Config, typename DType>
-void LlamaOperations<Config, DType>::attention_0_gemm( const DType* query,
-                                                       const DType* const context_pointers[],
-                                                       DType* att,
-                                                       const uint64_t batch_size,
-                                                       const uint32_t* token_positions )
+template<typename Config, typename DType, typename ContextType>
+void LlamaOperations<Config, DType, ContextType>::attention_0_gemm(
+  const DType* query,
+  const typename ContextType::LayerContextType layer_contexts[],
+  DType* att,
+  const uint64_t batch_size,
+  const uint32_t* token_positions )
 {
   const float scale = 1.0f / sqrtf( Config::head_size );
 
-  constexpr uint64_t ld_key = Config::n_kv_heads * Config::head_size * 2;
   constexpr uint64_t ld_qry = Config::head_size;
   constexpr uint64_t ld_att = Config::seq_len;
 
-  constexpr uint64_t stride_key = Config::head_size;
   constexpr uint64_t stride_qry = Config::head_size * Config::gqa_size;
   constexpr uint64_t stride_att = Config::seq_len * Config::gqa_size;
 
@@ -180,14 +187,14 @@ void LlamaOperations<Config, DType>::attention_0_gemm( const DType* query,
   uint64_t i;
   uint64_t kv_head;
 
-#pragma omp parallel for private( i, kv_head ) shared( token_positions, context_pointers, att, query ) collapse( 2 )
+#pragma omp parallel for private( i, kv_head ) shared( token_positions, layer_contexts, att, query ) collapse( 2 )
   for ( i = 0; i < batch_size; i++ ) {
     for ( kv_head = 0; kv_head < Config::n_kv_heads; kv_head++ ) {
       const DType* current_query = query + i * dim_ + kv_head * stride_qry;
       DType* current_att = att + i * att_dim_ + kv_head * stride_att;
-      const DType* current_key = context_pointers[i] + kv_head * stride_key;
 
       for ( uint64_t key_pos = 0; key_pos < token_positions[i] + 1; key_pos++ ) {
+        const DType* current_key = layer_contexts[i].token( key_pos ).key_head( kv_head );
 
         float sum_s[Config::gqa_size] = { 0.0 };
 
@@ -205,45 +212,44 @@ void LlamaOperations<Config, DType>::attention_0_gemm( const DType* query,
         }
 
         current_att += 1;
-        current_key += ld_key;
       }
     }
   }
 }
 
-template<typename Config, typename DType>
-void LlamaOperations<Config, DType>::attention_2_gemm( const DType* att,
-                                                       const DType* const context_pointers[],
-                                                       DType* xb,
-                                                       const uint64_t batch_size,
-                                                       const uint32_t* token_positions )
+template<typename Config, typename DType, typename ContextType>
+void LlamaOperations<Config, DType, ContextType>::attention_2_gemm(
+  const DType* att,
+  const typename ContextType::LayerContextType layer_contexts[],
+  DType* xb,
+  const uint64_t batch_size,
+  const uint32_t* token_positions )
 {
-  constexpr uint64_t ld_val = Config::n_kv_heads * Config::head_size * 2;
   constexpr uint64_t ld_att = Config::seq_len;
 
   constexpr uint64_t stride_val = Config::head_size;
   constexpr uint64_t stride_att = Config::seq_len * Config::gqa_size;
   constexpr uint64_t stride_xb = Config::head_size * Config::gqa_size;
 
-  constexpr uint64_t kv_dim_ = Config::head_size * Config::n_kv_heads;
   constexpr uint64_t dim_ = Config::head_size * Config::n_kv_heads * Config::gqa_size;
   constexpr uint64_t att_dim_ = Config::seq_len * Config::n_kv_heads * Config::gqa_size;
 
   uint64_t i;
   uint64_t kv_head;
 
-  CHECK_EQ( Config::n_kv_heads % Config::attention_rounds, 0 ) << "Remainders are bad";
+  static_assert( Config::n_kv_heads % Config::attention_rounds == 0, "Remainders are bad" );
 
-#pragma omp parallel for private( i, kv_head ) shared( xb, token_positions, context_pointers, att ) collapse( 2 )
+#pragma omp parallel for private( i, kv_head ) shared( xb, token_positions, layer_contexts, att ) collapse( 2 )
   for ( i = 0; i < batch_size; i++ ) {
     for ( kv_head = 0; kv_head < Config::n_kv_heads; kv_head += Config::attention_rounds ) {
 
       float sum_s[Config::attention_rounds * Config::gqa_size * Config::head_size];
       std::memset( sum_s, 0, sizeof( float ) * Config::attention_rounds * Config::gqa_size * Config::head_size );
       const DType* current_att = att + i * att_dim_ + kv_head * stride_att;
-      const DType* current_value = context_pointers[i] + kv_dim_ + kv_head * stride_val;
 
       for ( uint64_t p = 0; p < token_positions[i] + 1; ++p ) {
+        const DType* current_value = layer_contexts[i].token( p ).value_head( kv_head );
+
         for ( uint64_t round_index = 0; round_index < Config::attention_rounds; round_index++ ) {
           for ( uint64_t att_gqa_head = 0; att_gqa_head < Config::gqa_size; att_gqa_head++ ) {
             const float b_value = current_att[round_index * stride_att + att_gqa_head * ld_att + p];
@@ -254,8 +260,8 @@ void LlamaOperations<Config, DType>::attention_2_gemm( const DType* att,
             }
           }
         }
-        current_value += ld_val;
       }
+
       DType* current_xb = xb + i * dim_ + kv_head * stride_xb;
       for ( uint64_t val_pos = 0; val_pos < Config::attention_rounds * Config::gqa_size * Config::head_size;
             val_pos++ ) {
@@ -265,11 +271,11 @@ void LlamaOperations<Config, DType>::attention_2_gemm( const DType* att,
   }
 }
 
-template<typename Config, typename DType>
-void LlamaOperations<Config, DType>::attention_softmax( DType* att,
-                                                        const uint32_t* token_positions,
-                                                        DType*,
-                                                        const uint64_t batch_size )
+template<typename Config, typename DType, typename ContextType>
+void LlamaOperations<Config, DType, ContextType>::attention_softmax( DType* att,
+                                                                     const uint32_t* token_positions,
+                                                                     DType*,
+                                                                     const uint64_t batch_size )
 {
   uint64_t i;
   uint64_t j;
@@ -282,13 +288,13 @@ void LlamaOperations<Config, DType>::attention_softmax( DType* att,
   }
 }
 
-template<typename Config, typename DType>
-void LlamaOperations<Config, DType>::apply_rope( const uint64_t batch_size,
-                                                 const uint32_t* token_positions,
-                                                 const DType* freq_cis_real,
-                                                 const DType* freq_cis_imag,
-                                                 DType* state_q,
-                                                 DType* context_pointers[] )
+template<typename Config, typename DType, typename ContextType>
+void LlamaOperations<Config, DType, ContextType>::apply_rope( const uint64_t batch_size,
+                                                              const uint32_t* token_positions,
+                                                              const DType* freq_cis_real,
+                                                              const DType* freq_cis_imag,
+                                                              DType* state_q,
+                                                              typename ContextType::TokenContextType token_contexts[] )
 {
   uint64_t i;
   uint64_t j;
@@ -304,7 +310,7 @@ void LlamaOperations<Config, DType>::apply_rope( const uint64_t batch_size,
           freq_cis_real + token_positions[i] * Config::head_size / 2,
           freq_cis_imag + token_positions[i] * Config::head_size / 2,
           state_q + i * Config::n_kv_heads * Config::gqa_size * Config::head_size,
-          context_pointers[i] + token_positions[i] * Config::n_kv_heads * Config::head_size * 2,
+          token_contexts[i].key(),
           head_q_num,
           head_k_num,
           elem_idx );
@@ -313,10 +319,10 @@ void LlamaOperations<Config, DType>::apply_rope( const uint64_t batch_size,
   }
 }
 
-template<typename Config, typename DType>
-void LlamaOperations<Config, DType>::soft_sample( DType* v,
-                                                  const std::vector<float>& temp_s,
-                                                  const uint64_t batch_size )
+template<typename Config, typename DType, typename ContextType>
+void LlamaOperations<Config, DType, ContextType>::soft_sample( DType* v,
+                                                               const std::vector<float>& temp_s,
+                                                               const uint64_t batch_size )
 {
   uint64_t i;
 #pragma omp parallel for private( i )
@@ -327,34 +333,34 @@ void LlamaOperations<Config, DType>::soft_sample( DType* v,
   }
 }
 
-template<typename Config, typename DType>
-void LlamaOperations<Config, DType>::copy_kv_cache( DType* context_pointers[],
-                                                    const DType* state_k,
-                                                    const DType* state_v,
-                                                    const uint64_t batch_size,
-                                                    const uint32_t* token_positions )
+template<typename Config, typename DType, typename ContextType>
+void LlamaOperations<Config, DType, ContextType>::copy_kv_cache(
+  typename ContextType::TokenContextType context_pointers[],
+  const DType* state_k,
+  const DType* state_v,
+  const uint64_t batch_size )
 {
   uint64_t i;
 #pragma omp parallel for private( i )
   for ( i = 0; i < batch_size; i++ ) {
-    if ( context_pointers[i] == nullptr ) {
+    if ( context_pointers[i].empty() ) {
       continue;
     }
 
-    DType* k_cache_pos = context_pointers[i] + token_positions[i] * Config::kv_dim * 2;
-    DType* v_cache_pos = k_cache_pos + Config::kv_dim;
+    DType* k_cache_pos = context_pointers[i].key();
+    DType* v_cache_pos = context_pointers[i].value();
 
     memcpy( k_cache_pos, state_k + i * Config::kv_dim, Config::kv_dim * sizeof( DType ) );
     memcpy( v_cache_pos, state_v + i * Config::kv_dim, Config::kv_dim * sizeof( DType ) );
   }
 }
 
-template<typename Config, typename DType>
+template<typename Config, typename DType, typename ContextType>
 template<typename DTypeDst, typename DTypeSrc>
-void LlamaOperations<Config, DType>::convert_and_copy( DTypeDst* dst,
-                                                       const DTypeSrc* src,
-                                                       const uint64_t size,
-                                                       const CopyType )
+void LlamaOperations<Config, DType, ContextType>::convert_and_copy( DTypeDst* dst,
+                                                                    const DTypeSrc* src,
+                                                                    const uint64_t size,
+                                                                    const CopyType )
 {
   if constexpr ( std::is_same_v<DTypeSrc, DTypeDst> ) {
     memcpy( dst, src, sizeof( DTypeSrc ) * size );

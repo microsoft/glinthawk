@@ -69,8 +69,10 @@ void randomize_buffer( DType* buffer, size_t len, const float min, const float m
   }
 }
 
-template<typename Config, typename DType, typename LlamaOperations>
-void extract_batch_token( LlamaOperations& ops, RunState<Config, DType>& state, const std::vector<float>& temp )
+template<typename Config, typename DType, typename LlamaOperations, typename Context>
+void extract_batch_token( LlamaOperations& ops,
+                          RunState<Config, DType, Context>& state,
+                          const std::vector<float>& temp )
 {
   ops.soft_sample( state.logits, temp, temp.size() );
   ops.template argmax<Config::vocab_size>( state.argmax_pos, state.logits, state.x, temp.size() );
@@ -87,7 +89,7 @@ Llama2<Config, DType, LlamaOperations, Context>::Llama2( const std::filesystem::
   : settings_( model_dir / "CONFIG", start_layer, end_layer, concurrency_limit, randomize_parameters )
   , base_weights_buffer_( ops_.device_allocate( BaseWeights<Config, DType>::base_size() ) )
   , layers_buffer_( ops_.device_allocate( LayerWeights<Config, DType>::layer_size() * settings_.n_layers_loaded() ) )
-  , run_state_buffer_( ops_.device_allocate( RunState<Config, DType>::state_size( settings_ ) ) )
+  , run_state_buffer_( ops_.device_allocate( RunState<Config, DType, Context>::state_size( settings_ ) ) )
   , base_weights_( base_weights_buffer_.get() )
   , layer_weights_( [&] {
     std::array<LayerWeights<Config, DType>, Config::n_layers> layers {};
@@ -232,11 +234,7 @@ void Llama2<Config, DType, LlamaOperations, Context>::pre_attention_ops( const i
   ops_.template matmul<Config::dim, Config::kv_dim>( this->state_.v, this->state_.xb, layer_weights.wv, batch_size );
 
   // save key, value at each time step (pos) to our kv cache, if the context resides on memory
-  ops_.copy_kv_cache( this->state_.batch_context_pointers,
-                      this->state_.k,
-                      this->state_.v,
-                      batch_size,
-                      this->state_.batch_token_positions );
+  ops_.copy_kv_cache( this->state_.batch_token_contexts, this->state_.k, this->state_.v, batch_size );
 }
 
 template<typename Config, typename DType, typename LlamaOperations, typename Context>
@@ -249,12 +247,12 @@ void Llama2<Config, DType, LlamaOperations, Context>::attention_ops()
                    this->base_weights_.freq_cis_real,
                    this->base_weights_.freq_cis_imag,
                    this->state_.q,
-                   this->state_.batch_context_pointers );
+                   this->state_.batch_token_contexts );
 
   // <multihead attention> for each head and for each token up to and including the current one
 
   ops_.attention_0_gemm( this->state_.q,
-                         this->state_.batch_context_pointers,
+                         this->state_.batch_layer_contexts,
                          this->state_.att,
                          batch_size,
                          this->state_.batch_token_positions );
@@ -263,7 +261,7 @@ void Llama2<Config, DType, LlamaOperations, Context>::attention_ops()
   ops_.attention_softmax( this->state_.att, this->state_.batch_token_positions, this->state_.temp_softmax, batch_size );
 
   ops_.attention_2_gemm( this->state_.att,
-                         this->state_.batch_context_pointers,
+                         this->state_.batch_layer_contexts,
                          this->state_.xb,
                          batch_size,
                          this->state_.batch_token_positions );
@@ -329,14 +327,11 @@ void Llama2<Config, DType, LlamaOperations, Context>::forward_prelude(
   this->state_.curr_concurrency_size = states.size();
   const uint32_t next_layer_batch = states[0].next_layer();
 
-  // fill in the batch **token positions**
-  std::transform(
-    states.begin(), states.end(), this->state_.batch_token_positions, []( auto& state ) { return state.token_pos(); } );
-
-  // fill in the batch **context pointers**
-  std::transform( contexts.begin(), contexts.end(), this->state_.batch_context_pointers, [&]( auto& context ) {
-    return context->key( this->settings_, next_layer_batch, 0 );
-  } );
+  for ( size_t i = 0; i < contexts.size(); i++ ) {
+    this->state_.batch_token_positions[i] = states[i].token_pos();
+    this->state_.batch_layer_contexts[i] = contexts[i]->layer( next_layer_batch );
+    this->state_.batch_token_contexts[i] = contexts[i]->layer( next_layer_batch ).token( states[i].token_pos() );
+  }
 
   if ( next_layer_batch == 0 ) {
     /* THE FIRST LAYER, just read the tokens */
@@ -400,14 +395,15 @@ std::vector<InferenceState> Llama2<Config, DType, LlamaOperations, Context>::for
 template<typename Config, typename DType, typename LlamaOperations, typename Context>
 std::vector<InferenceState> Llama2<Config, DType, LlamaOperations, Context>::forward(
   std::vector<InferenceState>&& states,
-  const std::vector<std::shared_ptr<Context>>& contexts )
+  const ContextVector& contexts )
 {
   forward_prelude( states, contexts );
 
   for ( size_t layer_num = states[0].next_layer(); layer_num <= this->settings_.end_layer_num; layer_num++ ) {
-    std::transform( contexts.begin(), contexts.end(), this->state_.batch_context_pointers, [&]( auto& context ) {
-      return context->key( this->settings_, layer_num, 0 );
-    } );
+    for ( size_t i = 0; i < contexts.size(); i++ ) {
+      this->state_.batch_layer_contexts[i] = contexts[i]->layer( layer_num );
+      this->state_.batch_token_contexts[i] = contexts[i]->layer( layer_num ).token( states[i].token_pos() );
+    }
 
     pre_attention_ops( layer_num );
     attention_ops();
@@ -458,7 +454,7 @@ std::vector<InferenceState> Llama2<Config, DType, LlamaOperations, Context>::pre
 template<typename Config, typename DType, typename LlamaOperations, typename Context>
 std::vector<InferenceState> Llama2<Config, DType, LlamaOperations, Context>::attention_forward(
   std::vector<InferenceState>&& states,
-  const std::vector<std::shared_ptr<Context>>& contexts )
+  const ContextVector& contexts )
 {
   this->check_batch( states, contexts, InferenceState::Stage::Attention );
   this->state_.curr_concurrency_size = states.size();
@@ -467,7 +463,8 @@ std::vector<InferenceState> Llama2<Config, DType, LlamaOperations, Context>::att
     auto& state = states[i];
 
     this->state_.batch_token_positions[i] = state.token_pos();
-    this->state_.batch_context_pointers[i] = contexts[i]->key( this->settings_, state.next_layer(), 0 );
+    this->state_.batch_layer_contexts[i] = contexts[i]->layer( state.next_layer() );
+    this->state_.batch_token_contexts[i] = contexts[i]->layer( state.next_layer() ).token( state.token_pos() );
 
     // load the activations
     auto activation_data = state.activations().data();
@@ -484,7 +481,7 @@ std::vector<InferenceState> Llama2<Config, DType, LlamaOperations, Context>::att
         // if KV is not already in context, put it there
         if ( activation_len > Config::dim * DataTypeSize( state.dtype() ) ) {
           ops_.template convert_and_copy(
-            contexts[i]->key( this->settings_, state.next_layer(), state.token_pos() ),
+            contexts[i]->layer( state.next_layer() ).token( state.token_pos() ).key(),
             reinterpret_cast<LlamaOperations::Float16*>( activation_data + Config::dim * sizeof( DType ) ),
             Config::kv_dim * 2,
             CopyType::HostToDevice );
@@ -501,7 +498,7 @@ std::vector<InferenceState> Llama2<Config, DType, LlamaOperations, Context>::att
         // if KV is not already in context, put it there
         if ( activation_len > Config::dim * DataTypeSize( state.dtype() ) ) {
           ops_.template convert_and_copy(
-            contexts[i]->key( this->settings_, state.next_layer(), state.token_pos() ),
+            contexts[i]->layer( state.next_layer() ).token( state.token_pos() ).key(),
             reinterpret_cast<LlamaOperations::Float32*>( activation_data + Config::dim * sizeof( DType ) ),
             Config::kv_dim * 2,
             CopyType::HostToDevice );

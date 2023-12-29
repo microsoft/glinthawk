@@ -9,11 +9,17 @@
 
 namespace glinthawk::models::llama2::cuda {
 
+// platform-specific context
 template<typename Config, typename DType>
+class Context;
+
+template<typename Config, typename DType, typename Ctx = Context<Config, DType>>
+requires ModelConfig<Config> && ContextConcept<Ctx, DType>
 class LlamaOperations : public common::cuda::Operations<DType>
 {
 public:
   using common::cuda::Operations<DType>::DeviceUniquePtr;
+  using ContextType = Ctx;
 
 private:
   std::unique_ptr<curandState, models::common::cuda::CUDADeleter<curandState>> rng_state { nullptr };
@@ -24,13 +30,13 @@ public:
   ~LlamaOperations() {}
 
   void attention_0_gemm( const DType* query,
-                         const DType* const context_pointers[],
+                         const typename ContextType::LayerContextType layer_contexts[],
                          DType* att,
                          const uint64_t batch_size,
                          const uint32_t* token_positions );
 
   void attention_2_gemm( const DType* att,
-                         const DType* const context_pointers[],
+                         const typename ContextType::LayerContextType layer_contexts[],
                          DType* xb,
                          const uint64_t batch_size,
                          const uint32_t* token_positions );
@@ -42,18 +48,28 @@ public:
                    const DType* freq_cis_real,
                    const DType* freq_cis_imag,
                    DType* state_q,
-                   DType* context_pointers[] );
+                   typename ContextType::TokenContextType token_contexts[] );
 
   void soft_sample( DType* v, const std::vector<float>& temp_s, const uint64_t batch_size );
 
-  void copy_kv_cache( DType* context_pointers[],
+  void copy_kv_cache( typename ContextType::TokenContextType token_contexts[],
                       const DType* state_k,
                       const DType* state_v,
-                      const uint64_t batch_size,
-                      const uint32_t* token_positions );
+                      const uint64_t batch_size );
 
   template<typename DTypeDst, typename DTypeSrc>
   void convert_and_copy( DTypeDst* dst, const DTypeSrc* src, const uint64_t size, const CopyType );
+};
+
+template<typename Config, typename DType>
+class Context : public llama2::Context<Config, DType>
+{
+private:
+  typename common::cuda::Operations<DType>::DeviceUniquePtr storage_;
+
+public:
+  using llama2::Context<Config, DType>::Context;
+  Context( const Settings<Config>& settings );
 };
 
 static_assert(
@@ -61,16 +77,6 @@ static_assert(
 
 static_assert(
   LlamaOperationsConcept<LlamaOperations<configs::Stories_110M, __half>, __half, Settings<configs::Stories_110M>> );
-
-template<typename Config, typename DType>
-class Context : public InferenceContext<Config, DType>
-{
-private:
-  typename LlamaOperations<Config, DType>::DeviceUniquePtr storage_;
-
-public:
-  Context( const Settings<Config>& settings );
-};
 
 namespace {
 
@@ -90,8 +96,7 @@ template<typename Config, typename DType>
 Context<Config, DType>::Context( const Settings<Config>& settings )
   : storage_( [&]() -> decltype( storage_ ) {
     DType* ptr;
-    const cudaError_t err = cudaMalloc( &ptr, Context<Config, DType>::context_size( settings ) );
-
+    const cudaError_t err = cudaMalloc( &ptr, Context<Config, DType>::max_size( settings.n_layers_loaded() ) );
     if ( err == cudaSuccess ) {
       return decltype( storage_ ) { ptr };
     } else {
@@ -234,8 +239,8 @@ __global__ void setup_rng_kernel( curandState* state, unsigned long seed )
 
 }
 
-template<typename Config, typename DType>
-LlamaOperations<Config, DType>::LlamaOperations( const Settings<Config>& settings )
+template<typename Config, typename DType, typename ContextType>
+LlamaOperations<Config, DType, ContextType>::LlamaOperations( const Settings<Config>& settings )
   : common::cuda::Operations<DType>( settings.concurrency_limit )
 {
   setup_rng( 1234ul, Config::vocab_size, settings.concurrency_limit );
@@ -277,13 +282,16 @@ LlamaOperations<Config, DType>::LlamaOperations( const Settings<Config>& setting
                               + div_ceil( div_ceil( Config::vocab_size, 2 * AMRBS ), 2 * AMRBS ) ) ) ); // (k)
 }
 
-template<typename Config, typename DType>
-void LlamaOperations<Config, DType>::attention_0_gemm( const DType* query,
-                                                       const DType* const context_pointers[],
-                                                       DType* att,
-                                                       const uint64_t batch_size,
-                                                       const uint32_t* token_positions )
+template<typename Config, typename DType, typename ContextType>
+void LlamaOperations<Config, DType, ContextType>::attention_0_gemm(
+  const DType* query,
+  const typename ContextType::LayerContextType layer_contexts[],
+  DType* att,
+  const uint64_t batch_size,
+  const uint32_t* token_positions )
 {
+  static_assert( ContextType::LayerContextType::is_contiguous(), "ContextType::LayerContextType must be contiguous" );
+
   constexpr cudaDataType_t cuda_arg_type = std::is_same_v<DType, __half> ? CUDA_R_16F : CUDA_R_32F;
   const float scale = 1.0f / sqrtf( Config::head_size );
   constexpr uint64_t k = Config::head_size;
@@ -307,7 +315,7 @@ void LlamaOperations<Config, DType>::attention_0_gemm( const DType* query,
                                                             n,
                                                             k,
                                                             &scale,
-                                                            context_pointers[i],
+                                                            layer_contexts[i].token( 0 ).key(),
                                                             cuda_arg_type,
                                                             lda,
                                                             strideA,
@@ -326,13 +334,16 @@ void LlamaOperations<Config, DType>::attention_0_gemm( const DType* query,
   }
 }
 
-template<typename Config, typename DType>
-void LlamaOperations<Config, DType>::attention_2_gemm( const DType* att,
-                                                       const DType* const context_pointers[],
-                                                       DType* xb,
-                                                       const uint64_t batch_size,
-                                                       const uint32_t* token_positions )
+template<typename Config, typename DType, typename ContextType>
+void LlamaOperations<Config, DType, ContextType>::attention_2_gemm(
+  const DType* att,
+  const ContextType::LayerContextType layer_contexts[],
+  DType* xb,
+  const uint64_t batch_size,
+  const uint32_t* token_positions )
 {
+  static_assert( ContextType::LayerContextType::is_contiguous(), "ContextType::LayerContextType must be contiguous" );
+
   constexpr cudaDataType_t cuda_arg_type = std::is_same_v<DType, __half> ? CUDA_R_16F : CUDA_R_32F;
 
   constexpr uint64_t m = Config::head_size;
@@ -362,7 +373,7 @@ void LlamaOperations<Config, DType>::attention_2_gemm( const DType* att,
                                                             n,
                                                             k,
                                                             &this->alpha,
-                                                            context_pointers[i] + kv_dim,
+                                                            layer_contexts[i].token( 0 ).value(),
                                                             cuda_arg_type,
                                                             lda,
                                                             strideA,
@@ -381,11 +392,11 @@ void LlamaOperations<Config, DType>::attention_2_gemm( const DType* att,
   }
 }
 
-template<typename Config, typename DType>
-void LlamaOperations<Config, DType>::attention_softmax( DType* att,
-                                                        const uint32_t* token_positions,
-                                                        DType* temp_buffer,
-                                                        const uint64_t batch_size )
+template<typename Config, typename DType, typename ContextType>
+void LlamaOperations<Config, DType, ContextType>::attention_softmax( DType* att,
+                                                                     const uint32_t* token_positions,
+                                                                     DType* temp_buffer,
+                                                                     const uint64_t batch_size )
 {
   for ( uint64_t i = 0; i < batch_size; i++ ) {
     DType* this_att = att + i * Config::n_heads * Config::seq_len;
@@ -409,13 +420,13 @@ void LlamaOperations<Config, DType>::attention_softmax( DType* att,
   }
 }
 
-template<typename Config, typename DType>
-void LlamaOperations<Config, DType>::apply_rope( const uint64_t curr_batch_size,
-                                                 const uint32_t* token_positions,
-                                                 const DType* freq_cis_real,
-                                                 const DType* freq_cis_imag,
-                                                 DType* state_q,
-                                                 DType* context_pointers[] )
+template<typename Config, typename DType, typename ContextType>
+void LlamaOperations<Config, DType, ContextType>::apply_rope( const uint64_t curr_batch_size,
+                                                              const uint32_t* token_positions,
+                                                              const DType* freq_cis_real,
+                                                              const DType* freq_cis_imag,
+                                                              DType* state_q,
+                                                              typename ContextType::TokenContextType token_contexts[] )
 {
   for ( uint64_t i = 0; i < curr_batch_size; i++ ) {
     do_rope<DType, Config::head_size, Config::gqa_size>
@@ -423,14 +434,14 @@ void LlamaOperations<Config, DType>::apply_rope( const uint64_t curr_batch_size,
         freq_cis_real + token_positions[i] * Config::head_size / 2,
         freq_cis_imag + token_positions[i] * Config::head_size / 2,
         state_q + i * Config::n_kv_heads * Config::gqa_size * Config::head_size,
-        context_pointers[i] + token_positions[i] * Config::n_kv_heads * Config::head_size * 2 );
+        token_contexts[i].key() );
   }
 }
 
-template<typename Config, typename DType>
-void LlamaOperations<Config, DType>::soft_sample( DType* v,
-                                                  const std::vector<float>& temp_s,
-                                                  const uint64_t batch_size )
+template<typename Config, typename DType, typename ContextType>
+void LlamaOperations<Config, DType, ContextType>::soft_sample( DType* v,
+                                                               const std::vector<float>& temp_s,
+                                                               const uint64_t batch_size )
 {
   for ( uint64_t i = 0; i < batch_size; i++ ) {
     if ( temp_s[i] > 0 ) {
@@ -440,20 +451,20 @@ void LlamaOperations<Config, DType>::soft_sample( DType* v,
   }
 }
 
-template<typename Config, typename DType>
-void LlamaOperations<Config, DType>::copy_kv_cache( DType* context_pointers[],
-                                                    const DType* state_k,
-                                                    const DType* state_v,
-                                                    const uint64_t batch_size,
-                                                    const uint32_t* token_positions )
+template<typename Config, typename DType, typename ContextType>
+void LlamaOperations<Config, DType, ContextType>::copy_kv_cache(
+  typename ContextType::TokenContextType token_contexts[],
+  const DType* state_k,
+  const DType* state_v,
+  const uint64_t batch_size )
 {
   for ( size_t i = 0; i < batch_size; i++ ) {
-    if ( context_pointers[i] == nullptr ) {
+    if ( token_contexts[i].empty() ) {
       continue;
     }
 
-    DType* k_cache_pos = context_pointers[i] + token_positions[i] * Config::kv_dim * 2;
-    DType* v_cache_pos = k_cache_pos + Config::kv_dim;
+    DType* k_cache_pos = token_contexts[i].key();
+    DType* v_cache_pos = token_contexts[i].value();
 
     // XXX why not just one memcpy?
     common::cuda::CHECK_CUDA( cudaMemcpyAsync(
@@ -464,12 +475,12 @@ void LlamaOperations<Config, DType>::copy_kv_cache( DType* context_pointers[],
   }
 }
 
-template<typename Config, typename DType>
+template<typename Config, typename DType, typename ContextType>
 template<typename DTypeDst, typename DTypeSrc>
-void LlamaOperations<Config, DType>::convert_and_copy( DTypeDst* dst,
-                                                       const DTypeSrc* src,
-                                                       const uint64_t size,
-                                                       const CopyType type )
+void LlamaOperations<Config, DType, ContextType>::convert_and_copy( DTypeDst* dst,
+                                                                    const DTypeSrc* src,
+                                                                    const uint64_t size,
+                                                                    const CopyType type )
 {
   switch ( type ) {
     case CopyType::DeviceToHost: {
@@ -503,8 +514,10 @@ void LlamaOperations<Config, DType>::convert_and_copy( DTypeDst* dst,
   LOG( FATAL ) << "Invalid copy type";
 }
 
-template<typename Config, typename DType>
-void LlamaOperations<Config, DType>::setup_rng( unsigned long seed, const uint64_t size, const uint64_t batch_size )
+template<typename Config, typename DType, typename ContextType>
+void LlamaOperations<Config, DType, ContextType>::setup_rng( unsigned long seed,
+                                                             const uint64_t size,
+                                                             const uint64_t batch_size )
 {
   curandState* rng_state_ptr = nullptr;
   common::cuda::CHECK_CUDA( cudaMalloc( &rng_state_ptr, size * batch_size * sizeof( curandState ) ) );

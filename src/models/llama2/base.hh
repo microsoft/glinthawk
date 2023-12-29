@@ -12,6 +12,7 @@
 #include <unordered_map>
 #include <vector>
 
+#include "context.hh"
 #include "models/common/model.hh"
 #include "models/llama2/ops/concept.hh"
 #include "variants.hh"
@@ -124,7 +125,7 @@ struct LayerWeights
 };
 
 /// @brief This class acts as the scratchpad for the computations
-template<typename Config, typename DType>
+template<typename Config, typename DType, typename ContextType>
 requires ModelConfig<Config>
 struct RunState
 {
@@ -157,20 +158,8 @@ struct RunState
   // information about the current batch
   uint64_t curr_concurrency_size { 1 };
   uint32_t batch_token_positions[MAX_BATCH_SIZE] {};
-  DType* batch_context_pointers[MAX_BATCH_SIZE] {};
-};
-
-/// @brief InferenceContext for Llama2 model is the KV-cache
-template<typename Config, typename DType>
-requires ModelConfig<Config>
-struct InferenceContext
-{
-  static size_t context_size( const Settings<Config>& settings );
-  DType* key( const Settings<Config>& settings, int layer_num, const int token_pos, const int head = 0 );
-  DType* value( const Settings<Config>& settings, int layer_num, const int token_pos, const int head = 0 );
-  bool empty() const { return buffer_ == nullptr; }
-
-  DType* buffer_ { nullptr };
+  typename ContextType::LayerContextType batch_layer_contexts[MAX_BATCH_SIZE] {};
+  typename ContextType::TokenContextType batch_token_contexts[MAX_BATCH_SIZE] {};
 };
 
 namespace {
@@ -317,8 +306,8 @@ LayerWeights<Config, DType>::LayerWeights( const DType* model )
 /* RUN STATE */
 
 // TODO: optimize run state memory usage
-template<typename Config, typename DType>
-RunState<Config, DType>::RunState( const Settings<Config>& settings, DType* buffer )
+template<typename Config, typename DType, typename ContextType>
+RunState<Config, DType, ContextType>::RunState( const Settings<Config>& settings, DType* buffer )
   : buffer_( buffer )
   , x( buffer_ )
   , xb( buffer_ + Config::dim * settings.concurrency_limit )
@@ -334,44 +323,12 @@ RunState<Config, DType>::RunState( const Settings<Config>& settings, DType* buff
 {
 }
 
-template<typename Config, typename DType>
-size_t RunState<Config, DType>::state_size( const Settings<Config>& settings )
+template<typename Config, typename DType, typename ContextType>
+size_t RunState<Config, DType, ContextType>::state_size( const Settings<Config>& settings )
 {
   return sizeof( DType ) * settings.concurrency_limit
          * ( Config::dim * 4 + Config::kv_dim * 2 + Config::hidden_dim * 2 + Config::n_heads * Config::seq_len
              + Config::vocab_size + Config::n_heads );
-}
-
-/* InferenceContext */
-
-template<typename Config, typename DType>
-size_t InferenceContext<Config, DType>::context_size( const Settings<Config>& settings )
-{
-  return sizeof( DType ) * Config::seq_len * Config::kv_dim * 2 * settings.n_layers_loaded();
-}
-
-template<typename Config, typename DType>
-DType* InferenceContext<Config, DType>::key( const Settings<Config>& settings,
-                                             int layer_num,
-                                             const int token_num,
-                                             const int head_num )
-{
-  if ( empty() )
-    return nullptr;
-  return buffer_ + ( layer_num - settings.start_layer_num ) * ( Config::seq_len * Config::kv_dim * 2 )
-         + token_num * ( Config::kv_dim * 2 ) + head_num * ( Config::dim / Config::n_heads );
-}
-
-template<typename Config, typename DType>
-DType* InferenceContext<Config, DType>::value( const Settings<Config>& settings,
-                                               int layer_num,
-                                               const int token_num,
-                                               const int head_num )
-{
-  if ( empty() )
-    return nullptr;
-
-  return key( settings, layer_num, token_num, head_num ) + Config::kv_dim;
 }
 
 } // namespace glinthawk::models::llama2

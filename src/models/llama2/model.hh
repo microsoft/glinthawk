@@ -14,6 +14,7 @@ namespace glinthawk::models::llama2 {
 
 template<typename Config, typename DType, typename LlamaOperations, typename Context>
 requires ModelConfig<Config> && LlamaOperationsConcept<LlamaOperations, DType, Settings<Config>>
+         && ContextConcept<Context, DType>
 class Llama2 : public glinthawk::models::Model<Context>
 {
 public:
@@ -37,7 +38,7 @@ protected:
 
   BaseWeights<Config, DType> base_weights_;
   std::array<LayerWeights<Config, DType>, Config::n_layers> layer_weights_;
-  RunState<Config, DType> state_;
+  RunState<Config, DType, Context> state_;
 
   // Checking if the inference states are safe to pass to the model
   void check_batch( const StateVector& inference_states,
@@ -79,10 +80,11 @@ public:
 
 #define DECLARE_MODEL( PLATFORM, MODEL_NAME )                                                                          \
   template<typename DType>                                                                                             \
-  using MODEL_NAME = Llama2<configs::MODEL_NAME,                                                                       \
-                            DType,                                                                                     \
-                            PLATFORM::LlamaOperations<configs::MODEL_NAME, DType>,                                     \
-                            PLATFORM::Context<configs::MODEL_NAME, DType>>
+  using MODEL_NAME                                                                                                     \
+    = Llama2<configs::MODEL_NAME,                                                                                      \
+             DType,                                                                                                    \
+             PLATFORM::LlamaOperations<configs::MODEL_NAME, DType, PLATFORM::Context<configs::MODEL_NAME, DType>>,     \
+             PLATFORM::Context<configs::MODEL_NAME, DType>>
 
 #if defined( TARGET_PLATFORM_AMD64 )
 namespace amd64 {
