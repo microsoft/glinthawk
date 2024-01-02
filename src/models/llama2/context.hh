@@ -132,6 +132,9 @@ protected:
   size_t nlayers_loaded_;
   size_t start_layer_num_;
   DType* buffer_;
+  // TODO: Is there a benefit to maintaining context state (such as token count)?
+  // TODO: The CPU attention machines do not need to know about layers for reserving context. Should we redesign them
+  //  that way?
 
 public:
   using LayerContextType = LayerContext<Config, DType>;

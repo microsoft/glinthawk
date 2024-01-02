@@ -29,6 +29,7 @@ namespace glinthawk::core {
 template<typename Model>
 class WorkerPiped
 {
+  // TODO: merge this with worker
 private:
   class Peer
   {
@@ -95,6 +96,7 @@ private:
                              const int concurrency_size_pre_attention,
                              const int concurrency_size_attention,
                              const int concurrency_size_post_attention,
+                             const int concurrency_size_classification,
                              const int max_context_count,
                              const bool randomize );
   void setup_stats_handler();

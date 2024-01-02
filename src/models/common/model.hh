@@ -20,7 +20,8 @@ public:
   {
     PreAttention,
     Attention,
-    PostAttention
+    PostAttention,
+    Classification
   };
 
 private:
@@ -38,6 +39,7 @@ private:
   DataType dtype_ { DataType::Float32 };
   DataBuffer activations_ {};
 
+  // TODO: The route is very long, and adds a big overhead to messages (adds 3x32x11=1056 bytes).
   // mapping from layer to worker address for this inference state
   std::map<std::pair<uint32_t, Stage>, glinthawk::net::Address> layer_workers_ {};
 
@@ -113,11 +115,13 @@ public:
   virtual InferenceState pre_attention_forward( InferenceState&& inference_state, ContextPtr context ) = 0;
   virtual InferenceState attention_forward( InferenceState&& inference_state, ContextPtr context ) = 0;
   virtual InferenceState post_attention_forward( InferenceState&& inference_state ) = 0;
+  virtual InferenceState classify_forward( InferenceState&& inference_state ) = 0;
 
   virtual StateVector forward( StateVector&& inference_states, const ContextVector& contexts ) = 0;
   virtual StateVector pre_attention_forward( StateVector&& inference_states, const ContextVector& contexts ) = 0;
   virtual StateVector attention_forward( StateVector&& inference_states, const ContextVector& contexts ) = 0;
   virtual StateVector post_attention_forward( StateVector&& inference_states ) = 0;
+  virtual StateVector classify_forward( StateVector&& inference_states ) = 0;
 };
 
 } // namespace glinthawk::models

@@ -38,6 +38,7 @@ enum class IntDistributions
   KernelPreAttentionForwardTime,
   KernelAttentionForwardTime,
   KernelPostAttentionForwardTime,
+  KernelClassificationForwardTime,
 
   _Count
 };
@@ -65,6 +66,7 @@ constexpr std::array<std::string_view, static_cast<size_t>( IntDistributions::_C
   "kernel_pre_attention_forward_time",
   "kernel_attention_forward_time",
   "kernel_post_attention_forward_time",
+  "kernel_classification_forward_time",
 };
 
 constexpr std::array<std::string_view, static_cast<size_t>( FloatDistributions::_Count )> float_dist_keys {};

@@ -107,6 +107,7 @@ void WorkerPiped<Model>::setup_compute_kernel( const filesystem::path& model_roo
                                                const int concurrency_size_pre_attention,
                                                const int concurrency_size_attention,
                                                const int concurrency_size_post_attention,
+                                               const int concurrency_size_classification,
                                                const int max_context_count,
                                                const bool randomize )
 {
@@ -117,12 +118,13 @@ void WorkerPiped<Model>::setup_compute_kernel( const filesystem::path& model_roo
       model_root,
       start_layer,
       end_layer,
-      std::max( { concurrency_size_pre_attention, concurrency_size_attention, concurrency_size_post_attention } ),
+      std::max( { concurrency_size_pre_attention, concurrency_size_attention, concurrency_size_post_attention, concurrency_size_classification } ),
       max_context_count,
       randomize ),
     concurrency_size_pre_attention,
     concurrency_size_attention,
     concurrency_size_post_attention,
+    concurrency_size_classification,
     start_layer,
     end_layer );
 
@@ -225,6 +227,7 @@ bool WorkerPiped<Model>::handle_coordinator_message( core::Message&& msg )
                             proto.concurrency_pre_att_size(),
                             proto.concurrency_att_size(),
                             proto.concurrency_post_att_size(),
+                            proto.concurrency_cls_size(),
                             proto.max_context_count(),
                             proto.randomize() );
 
@@ -258,6 +261,9 @@ bool WorkerPiped<Model>::handle_coordinator_message( core::Message&& msg )
           case protobuf::SetRoute::LayerToAddress::Attention: next_stage = InferenceState::Stage::Attention; break;
           case protobuf::SetRoute::LayerToAddress::PostAttention:
             next_stage = InferenceState::Stage::PostAttention;
+            break;
+          case protobuf::SetRoute::LayerToAddress::Classification:
+            next_stage = InferenceState::Stage::Classification;
             break;
           default: throw std::runtime_error( "invalid stage" );
         }
@@ -384,10 +390,6 @@ void WorkerPiped<Model>::handle_compute_kernel_event()
     __stats__.increment<Counters::StatesProcessed>();
 
     DLOG( INFO ) << "Got state from compute kernel: " << state.to_string();
-
-    // little hack to test pull queue on one GPU without running out of memory.
-    // if (state.next_layer() == 10)
-    //   state.set_next_layer( 22 );
 
     const auto& next_worker = state.next_worker();
     auto peer_it = peers_.find( next_worker );

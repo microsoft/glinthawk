@@ -30,6 +30,7 @@ ostream& operator<<( ostream& os, const glinthawk::models::InferenceState::Stage
     case InferenceState::Stage::PreAttention: os << "Pre"; break;
     case InferenceState::Stage::Attention: os << "Att"; break;
     case InferenceState::Stage::PostAttention: os << "Post"; break;
+    case InferenceState::Stage::Classification: os << "Cls"; break;
   }
   return os;
 }
@@ -120,11 +121,18 @@ void InferenceState::loop_till_next_worker( const uint32_t n_layers )
       case InferenceState::Stage::PreAttention: next_stage_ = InferenceState::Stage::Attention; break;
       case InferenceState::Stage::Attention: next_stage_ = InferenceState::Stage::PostAttention; break;
       case InferenceState::Stage::PostAttention:
-        next_stage_ = InferenceState::Stage::PreAttention;
-        next_layer_++;
-        if ( next_layer_ == n_layers )
-          next_layer_ = 0;
+        if ( next_layer_ == n_layers - 1 ) {
+          next_stage_ = InferenceState::Stage::Classification;
+        } else {
+          next_stage_ = InferenceState::Stage::PreAttention;
+          next_layer_++;
+        }
         break;
+      case InferenceState::Stage::Classification:
+        next_stage_ = InferenceState::Stage::PreAttention;
+        next_layer_ = 0;
+        break;
+      default: LOG( FATAL ) << "Invalid stage";
     }
   }
 }
@@ -171,11 +179,18 @@ string InferenceState::serialize() const
 string InferenceState::to_string() const
 {
   ostringstream oss;
-  oss << "InferenceState(" << "prompt_id=" << prompt_id_.base58digest().substr( 0, 8 ) << ", " << "token=" << token_
-      << ", " << "token_pos=" << token_pos_ << ", " << "next_layer=" << next_layer_ << ", "
-      << "next_stage=" << next_stage_ << ", " << "prompt_len=" << prompt_length_ << ", "
-      << "temperature=" << temperature_ << ", " << "finished=" << finished_ << ", " << "dtype=" << dtype_ << ", "
-      << "activations.len=" << activations_ << ", " << "peers={";
+  oss << "InferenceState("
+      << "prompt_id=" << prompt_id_.base58digest().substr( 0, 8 ) << ", "
+      << "token=" << token_ << ", "
+      << "token_pos=" << token_pos_ << ", "
+      << "next_layer=" << next_layer_ << ", "
+      << "next_stage=" << next_stage_ << ", "
+      << "prompt_len=" << prompt_length_ << ", "
+      << "temperature=" << temperature_ << ", "
+      << "finished=" << finished_ << ", "
+      << "dtype=" << dtype_ << ", "
+      << "activations.len=" << activations_ << ", "
+      << "peers={";
 
   for ( auto& [layer_stage, address] : layer_workers_ ) {
     oss << " (" << layer_stage.first << "-" << layer_stage.second << " -> " << address.to_string() << ")";

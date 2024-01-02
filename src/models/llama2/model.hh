@@ -45,14 +45,16 @@ protected:
                     const ContextVector& contexts,
                     const InferenceState::Stage stage ) const;
 
-  void pass_begin( const std::vector<uint32_t>& token );
-  void pass_end();
+  void load_embedding( const StateVector& inference_state );
 
   void forward_prelude( StateVector& inference_state, const ContextVector& contexts );
   void pre_attention_ops( const int32_t layer_num );
   void attention_ops();
   void post_attention_ops( const int32_t layer_num );
-  [[nodiscard]] StateVector forward_postlude( StateVector&& inference_state, const int32_t most_recent_layer_num );
+  void classify_ops();
+  [[nodiscard]] StateVector forward_postlude( StateVector&& inference_state,
+                                              const int32_t most_recent_layer_num,
+                                              const bool classified );
 
 public:
   Llama2( const std::filesystem::path& model_dir,
@@ -66,12 +68,14 @@ public:
   [[nodiscard]] InferenceState pre_attention_forward( InferenceState&& inference_state, ContextPtr context ) override;
   [[nodiscard]] InferenceState attention_forward( InferenceState&& inference_state, ContextPtr context ) override;
   [[nodiscard]] InferenceState post_attention_forward( InferenceState&& inference_state ) override;
+  [[nodiscard]] InferenceState classify_forward( InferenceState&& inference_state ) override;
 
   [[nodiscard]] StateVector forward( StateVector&& inference_states, const ContextVector& contexts ) override;
   [[nodiscard]] StateVector pre_attention_forward( StateVector&& inference_states,
                                                    const ContextVector& contexts ) override;
   [[nodiscard]] StateVector attention_forward( StateVector&& inference_states, const ContextVector& contexts ) override;
   [[nodiscard]] StateVector post_attention_forward( StateVector&& inference_states ) override;
+  [[nodiscard]] StateVector classify_forward( StateVector&& inference_states ) override;
 
   void dummy_forward( InferenceState& inference_state ) override;
   bool is_finished( const InferenceState& inference_state ) override;

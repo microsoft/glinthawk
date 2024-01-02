@@ -11,9 +11,10 @@ message InitializeWorker
   uint32 concurrency_pre_att_size = 5;
   uint32 concurrency_att_size = 6;
   uint32 concurrency_post_att_size = 7;
-  uint32 max_context_count = 8;
-  bool randomize = 9;
-  string blobstore_uri = 10;
+  uint32 concurrency_cls_size = 8;
+  uint32 max_context_count = 9;
+  bool randomize = 10;
+  string blobstore_uri = 11;
 }
 
 message ProcessPrompts { repeated string prompt_ids = 1; }
@@ -29,6 +30,7 @@ message SetRoute
         PreAttention = 0;
         Attention = 1;
         PostAttention = 2;
+        Classification = 3;
       }
     uint32 layer_num = 1;
     ProtoStage stage = 2;

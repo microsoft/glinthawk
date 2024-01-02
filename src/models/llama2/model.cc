@@ -191,7 +191,7 @@ void Llama2<Config, DType, LlamaOperations, Context>::check_batch(
   CHECK_GT( states.size(), 0 );
   CHECK_LE( states.size(), settings_.concurrency_limit );
 
-  if ( stage != InferenceState::Stage::PostAttention ) {
+  if ( stage == InferenceState::Stage::PreAttention or stage == InferenceState::Stage::Attention ) {
     CHECK_EQ( states.size(), contexts.size() );
   }
 
@@ -211,12 +211,13 @@ void Llama2<Config, DType, LlamaOperations, Context>::check_batch(
 }
 
 template<typename Config, typename DType, typename LlamaOperations, typename Context>
-void Llama2<Config, DType, LlamaOperations, Context>::pass_begin( const std::vector<uint32_t>& token )
+void Llama2<Config, DType, LlamaOperations, Context>::load_embedding( const std::vector<InferenceState>& states )
 {
-  for ( size_t i = 0; i < token.size(); i++ ) {
-    CHECK_LT( token[i], Config::vocab_size );
+  for ( size_t i = 0; i < states.size(); i++ ) {
+    const auto token = states[i].token();
+    CHECK_LT( token, Config::vocab_size );
 
-    const DType* content_row = this->base_weights_.token_embedding_table + token[i] * Config::dim;
+    const DType* content_row = this->base_weights_.token_embedding_table + token * Config::dim;
     ops_.copy( this->state_.x + i * Config::dim, content_row, Config::dim * sizeof( DType ), CopyType::HostToDevice );
   }
 }
@@ -224,28 +225,31 @@ void Llama2<Config, DType, LlamaOperations, Context>::pass_begin( const std::vec
 template<typename Config, typename DType, typename LlamaOperations, typename Context>
 void Llama2<Config, DType, LlamaOperations, Context>::pre_attention_ops( const int32_t layer_num )
 {
-  const uint64_t batch_size = this->state_.curr_concurrency_size;
   const auto& layer_weights = this->layer_weights_[layer_num];
 
   // attention rmsnorm
-  ops_.template rmsnorm<Config::dim>(
-    this->state_.xb, this->state_.x, this->state_.xb2, layer_weights.rms_att_weight, batch_size );
+  ops_.template rmsnorm<Config::dim>( this->state_.xb,
+                                      this->state_.x,
+                                      this->state_.xb2,
+                                      layer_weights.rms_att_weight,
+                                      this->state_.curr_concurrency_size );
 
   // qkv matmuls for this position
-  ops_.template matmul<Config::dim, Config::dim>( this->state_.q, this->state_.xb, layer_weights.wq, batch_size );
+  ops_.template matmul<Config::dim, Config::dim>(
+    this->state_.q, this->state_.xb, layer_weights.wq, this->state_.curr_concurrency_size );
   ops_.template matmul<Config::dim, Config::kv_dim * 2>(
-    this->state_.kv, this->state_.xb, layer_weights.wkv, batch_size );
+    this->state_.kv, this->state_.xb, layer_weights.wkv, this->state_.curr_concurrency_size );
 
   // save key, value at each time step (pos) to our kv cache, if the context resides on memory
-  ops_.copy_kv_cache( this->state_.batch_token_contexts, this->state_.kv, batch_size );
+  ops_.copy_kv_cache( this->state_.batch_token_contexts, this->state_.kv, this->state_.curr_concurrency_size );
 }
 
 template<typename Config, typename DType, typename LlamaOperations, typename Context>
 void Llama2<Config, DType, LlamaOperations, Context>::attention_ops()
 {
-  const uint64_t batch_size = this->state_.curr_concurrency_size;
-
-  ops_.apply_rope( batch_size,
+  // TODO: We should either make parallel tokens in one prompt work, or remove the feature altogether (and put
+  //  protections in place).
+  ops_.apply_rope( this->state_.curr_concurrency_size,
                    this->state_.batch_token_positions,
                    this->base_weights_.freq_cis_real,
                    this->base_weights_.freq_cis_imag,
@@ -257,16 +261,19 @@ void Llama2<Config, DType, LlamaOperations, Context>::attention_ops()
   ops_.attention_0_gemm( this->state_.q,
                          this->state_.batch_layer_contexts,
                          this->state_.att,
-                         batch_size,
+                         this->state_.curr_concurrency_size,
                          this->state_.batch_token_positions );
 
   // softmax
-  ops_.attention_softmax( this->state_.att, this->state_.batch_token_positions, this->state_.temp_softmax, batch_size );
+  ops_.attention_softmax( this->state_.att,
+                          this->state_.batch_token_positions,
+                          this->state_.temp_softmax,
+                          this->state_.curr_concurrency_size );
 
   ops_.attention_2_gemm( this->state_.att,
                          this->state_.batch_layer_contexts,
                          this->state_.xb,
-                         batch_size,
+                         this->state_.curr_concurrency_size,
                          this->state_.batch_token_positions );
 
   // </multihead attention>
@@ -275,38 +282,41 @@ void Llama2<Config, DType, LlamaOperations, Context>::attention_ops()
 template<typename Config, typename DType, typename LlamaOperations, typename Context>
 void Llama2<Config, DType, LlamaOperations, Context>::post_attention_ops( const int32_t layer_num )
 {
-  const uint64_t batch_size = this->state_.curr_concurrency_size;
   const auto& layer_weights = this->layer_weights_[layer_num];
 
   // final matmul to get the output of the attention
-  ops_.template matmul<Config::dim, Config::dim>( this->state_.xb2, this->state_.xb, layer_weights.wo, batch_size );
+  ops_.template matmul<Config::dim, Config::dim>(
+    this->state_.xb2, this->state_.xb, layer_weights.wo, this->state_.curr_concurrency_size );
 
   // residual connection back into x
-  ops_.template accum<Config::dim>( this->state_.x, this->state_.xb2, batch_size );
+  ops_.template accum<Config::dim>( this->state_.x, this->state_.xb2, this->state_.curr_concurrency_size );
 
   // ffn rmsnorm
-  ops_.template rmsnorm<Config::dim>(
-    this->state_.xb, this->state_.x, this->state_.xb2, layer_weights.rms_ffn_weight, batch_size );
+  ops_.template rmsnorm<Config::dim>( this->state_.xb,
+                                      this->state_.x,
+                                      this->state_.xb2,
+                                      layer_weights.rms_ffn_weight,
+                                      this->state_.curr_concurrency_size );
 
   // now for ffn in we have: self.w2(F.silu(self.w1(x)) * self.w3(x))
   // first calculate self.w1(x) and self.w3(x)
   ops_.template matmul<Config::dim, Config::hidden_dim>(
-    this->state_.hb, this->state_.xb, layer_weights.w1, batch_size );
+    this->state_.hb, this->state_.xb, layer_weights.w1, this->state_.curr_concurrency_size );
   ops_.template matmul<Config::dim, Config::hidden_dim>(
-    this->state_.hb2, this->state_.xb, layer_weights.w3, batch_size );
+    this->state_.hb2, this->state_.xb, layer_weights.w3, this->state_.curr_concurrency_size );
 
-  ops_.template silu<Config::hidden_dim>( this->state_.hb, this->state_.hb2, batch_size );
+  ops_.template silu<Config::hidden_dim>( this->state_.hb, this->state_.hb2, this->state_.curr_concurrency_size );
 
   // final matmul to get the output of the ffn
   ops_.template matmul<Config::hidden_dim, Config::dim>(
-    this->state_.xb, this->state_.hb, layer_weights.w2, batch_size );
+    this->state_.xb, this->state_.hb, layer_weights.w2, this->state_.curr_concurrency_size );
 
   // residual connection
-  ops_.template accum<Config::dim>( this->state_.x, this->state_.xb, batch_size );
+  ops_.template accum<Config::dim>( this->state_.x, this->state_.xb, this->state_.curr_concurrency_size );
 }
 
 template<typename Config, typename DType, typename LlamaOperations, typename Context>
-void Llama2<Config, DType, LlamaOperations, Context>::pass_end()
+void Llama2<Config, DType, LlamaOperations, Context>::classify_ops()
 {
   // final rmsnorm
   ops_.template rmsnorm<Config::dim>( this->state_.x,
@@ -338,9 +348,7 @@ void Llama2<Config, DType, LlamaOperations, Context>::forward_prelude(
 
   if ( next_layer_batch == 0 ) {
     /* THE FIRST LAYER, just read the tokens */
-    std::vector<uint32_t> token_vector( states.size() );
-    std::transform( states.begin(), states.end(), token_vector.begin(), []( auto& state ) { return state.token(); } );
-    pass_begin( token_vector );
+    load_embedding( states );
   } else {
     /* NOT THE FIRST LAYER, load the activations */
     for ( size_t i = 0; i < states.size(); i++ ) {
@@ -356,12 +364,14 @@ void Llama2<Config, DType, LlamaOperations, Context>::forward_prelude(
 template<typename Config, typename DType, typename LlamaOperations, typename Context>
 std::vector<InferenceState> Llama2<Config, DType, LlamaOperations, Context>::forward_postlude(
   std::vector<InferenceState>&& states,
-  const int32_t most_recent_layer_num )
+  const int32_t most_recent_layer_num,
+  const bool classified )
 {
   std::vector<InferenceState> output_states;
+  output_states.reserve( states.size() );
 
-  if ( most_recent_layer_num == Config::n_layers - 1 ) {
-    pass_end();
+  if ( classified ) {
+    CHECK_EQ( most_recent_layer_num, Config::n_layers - 1 );
 
     std::vector<float> batch_temps;
     for ( size_t i = 0; i < states.size(); i++ )
@@ -386,8 +396,12 @@ std::vector<InferenceState> Llama2<Config, DType, LlamaOperations, Context>::for
                  Config::dim * sizeof( DType ),
                  CopyType::DeviceToHost );
 
-      states[i].set_next_stage( InferenceState::Stage::PreAttention );
-      states[i].set_next_layer( most_recent_layer_num + 1 );
+      if ( most_recent_layer_num == Config::n_layers - 1 ) {
+        states[i].set_next_stage( InferenceState::Stage::Classification );
+      } else {
+        states[i].set_next_stage( InferenceState::Stage::PreAttention );
+        states[i].set_next_layer( most_recent_layer_num + 1 );
+      }
       states[i].set_activations( std::move( activations ) );
       output_states.push_back( std::move( states[i] ) );
     }
@@ -414,7 +428,12 @@ std::vector<InferenceState> Llama2<Config, DType, LlamaOperations, Context>::for
     post_attention_ops( layer_num );
   }
 
-  return forward_postlude( std::move( states ), this->settings_.end_layer_num );
+  if ( this->settings_.end_layer_num == Config::n_layers - 1 ) {
+    classify_ops();
+    return forward_postlude( std::move( states ), this->settings_.end_layer_num, true );
+  } else {
+    return forward_postlude( std::move( states ), this->settings_.end_layer_num, false );
+  }
 }
 
 template<typename Config, typename DType, typename LlamaOperations, typename Context>
@@ -426,6 +445,7 @@ std::vector<InferenceState> Llama2<Config, DType, LlamaOperations, Context>::pre
   pre_attention_ops( states[0].next_layer() );
 
   std::vector<InferenceState> output_states;
+  output_states.reserve( states.size() );
   for ( size_t i = 0; i < states.size(); i++ ) {
     size_t len_activation = 2 * Config::dim;
     if ( contexts[i]->empty() ) {
@@ -580,7 +600,27 @@ std::vector<InferenceState> Llama2<Config, DType, LlamaOperations, Context>::pos
 
   post_attention_ops( states[0].next_layer() );
 
-  return forward_postlude( std::move( states ), states[0].next_layer() );
+  return forward_postlude( std::move( states ), states[0].next_layer(), false );
+}
+
+template<typename Config, typename DType, typename LlamaOperations, typename Context>
+std::vector<InferenceState> Llama2<Config, DType, LlamaOperations, Context>::classify_forward(
+  std::vector<InferenceState>&& states )
+{
+  this->check_batch( states, {}, InferenceState::Stage::Classification );
+  this->state_.curr_concurrency_size = states.size();
+
+  for ( size_t i = 0; i < states.size(); i++ ) {
+    // load the activations
+    ops_.copy( this->state_.x + i * Config::dim,
+               reinterpret_cast<DType*>( states[i].activations().data() ),
+               Config::dim * sizeof( DType ),
+               CopyType::HostToDevice );
+  }
+
+  classify_ops();
+
+  return forward_postlude( std::move( states ), states[0].next_layer(), true );
 }
 
 template<typename Config, typename DType, typename LlamaOperations, typename Context>
@@ -617,6 +657,14 @@ InferenceState Llama2<Config, DType, LlamaOperations, Context>::post_attention_f
   std::vector<InferenceState> states;
   states.push_back( std::move( state ) );
   return std::move( post_attention_forward( std::move( states ) ).at( 0 ) );
+}
+
+template<typename Config, typename DType, typename LlamaOperations, typename Context>
+InferenceState Llama2<Config, DType, LlamaOperations, Context>::classify_forward( InferenceState&& state )
+{
+  std::vector<InferenceState> states;
+  states.push_back( std::move( state ) );
+  return std::move( classify_forward( std::move( states ) ).at( 0 ) );
 }
 
 #define INSTANTIATE_MODEL( PLATFORM, MODEL, DTYPE )                                                                    \

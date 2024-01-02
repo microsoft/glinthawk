@@ -112,10 +112,12 @@ private:
   const uint64_t target_conc_pre_size_;
   const uint64_t target_conc_att_size_;
   const uint64_t target_conc_post_size_;
+  const uint64_t target_conc_cls_size_;
 
   const bool process_pre_;
   const bool process_att_;
   const bool process_post_;
+  const bool process_cls_;
 
   const uint64_t start_layer_;
   const uint64_t end_layer_;
@@ -125,7 +127,7 @@ private:
   std::vector<std::queue<models::InferenceState>> processing_post_attention_;
 
   std::queue<StateContextPair> processing_attention_ {};
-  std::queue<models::InferenceState> incoming_ {}, waiting_attention_ {}, outgoing_ {};
+  std::queue<models::InferenceState> incoming_ {}, waiting_attention_ {}, outgoing_ {}, processing_classification_ {};
 
   std::mutex ctx_mgr_mutex_ {}, outgoing_mutex_ {}, incoming_mutex_ {}, waiting_attention_mutex_ {},
     processing_mutex_ {};
@@ -151,6 +153,7 @@ public:
                       const uint64_t target_conc_pre_size,
                       const uint64_t target_conc_att_size,
                       const uint64_t target_conc_post_size,
+                      const uint64_t target_conc_cls_size,
                       const uint64_t start_layer,
                       const uint64_t end_layer )
     : model_( std::move( model ) )
@@ -158,9 +161,11 @@ public:
     , target_conc_pre_size_( target_conc_pre_size )
     , target_conc_att_size_( target_conc_att_size )
     , target_conc_post_size_( target_conc_post_size )
+    , target_conc_cls_size_( target_conc_cls_size )
     , process_pre_( target_conc_pre_size > 0 )
     , process_att_( target_conc_att_size > 0 )
     , process_post_( target_conc_post_size > 0 )
+    , process_cls_( target_conc_cls_size > 0 )
     , start_layer_( start_layer )
     , end_layer_( end_layer )
     , n_layers_( end_layer_ - start_layer_ + 1 )
@@ -233,7 +238,6 @@ public:
 
   void check_finished( glinthawk::models::InferenceState& state )
   {
-    //    LOG (INFO) << "got this in check_finished: " << state;
     if ( model_->is_finished( state ) ) {
       state.set_finished();
     }
@@ -263,9 +267,17 @@ void ComputeKernelPiped<Model>::execution_thread_func()
     {
       // hold lock until one queue has enough data for one batch
       std::unique_lock<std::mutex> lock( processing_mutex_ );
+      // TODO: With splitting KV cache to in-context and out-context, will large batch sizes cause deadlocks?
+      // TODO: Is there any reason we shouldn't always use the best batch size for any pipe?
       processing_cv_.wait( lock, [this, &next_stage, &next_layer_idx] {
+        if ( processing_classification_.size() >= target_conc_cls_size_ and process_cls_ ) {
+          next_stage = models::InferenceState::Stage::Classification;
+          next_layer_idx = static_cast<uint32_t>( -1 );
+          return true;
+        }
         if ( processing_attention_.size() >= target_conc_att_size_ and process_att_ ) {
           next_stage = models::InferenceState::Stage::Attention;
+          next_layer_idx = static_cast<uint32_t>( -1 );
           return true;
         }
         for ( int layer_idx = static_cast<int>( n_layers_ - 1 ); layer_idx >= 0; layer_idx-- ) {
@@ -283,25 +295,12 @@ void ComputeKernelPiped<Model>::execution_thread_func()
         return false;
       } );
 
-      // TODO: With splitting KV cache to in-context and out-context, will we be memed by batch size?
-      // TODO: Right now we reserve GPU memory for all of the layers we host. Is that a good way, if we want to use a
-      // TODO: smaller subset of these layers?
-      // TODO: Right now the attention cpu machines do not need to know about layers for reserving context. Will they
-      // TODO: work that way right now?
-      // TODO: any reason we shouldn't always use max batch size?
-      // TODO: context state?
-
-      // TODO: fix partial model loading
-      // TODO: route is very long, long messages (adds 3x32x11=1056 bytes).
-      // TODO: either make parallel tokens in one prompt work, or remove the feature altogether (and put protections in
-      //       place).
-
       // find the queue and pop the data to input_states and possibly contexts
       switch ( next_stage ) {
         case models::InferenceState::Stage::PreAttention: {
           for ( size_t j = 0; j < target_conc_pre_size_; j++ ) {
             StateContextPair action = std::move( processing_pre_attention_[next_layer_idx].front() );
-            // LOG_EVERY_N( INFO, 384 ) << "got this in processing: " << action.first;
+            //            LOG_EVERY_N( INFO, 384 ) << "got this in processing: " << action.first;
             processing_pre_attention_[next_layer_idx].pop();
             input_states.push_back( std::move( action.first ) );
             contexts.push_back( action.second );
@@ -311,7 +310,7 @@ void ComputeKernelPiped<Model>::execution_thread_func()
         case models::InferenceState::Stage::Attention: {
           for ( size_t j = 0; j < target_conc_att_size_; j++ ) {
             StateContextPair action = std::move( processing_attention_.front() );
-            // LOG_EVERY_N( INFO, 384 ) << "got this in processing: " << action.first;
+            //            LOG_EVERY_N( INFO, 384 ) << "got this in processing: " << action.first;
             processing_attention_.pop();
             input_states.push_back( std::move( action.first ) );
             contexts.push_back( action.second );
@@ -320,13 +319,23 @@ void ComputeKernelPiped<Model>::execution_thread_func()
         }
         case models::InferenceState::Stage::PostAttention: {
           for ( size_t j = 0; j < target_conc_post_size_; j++ ) {
-            models::InferenceState action_post = std::move( processing_post_attention_[next_layer_idx].front() );
-            // LOG_EVERY_N( INFO, 384 ) << "got this in processing: " << action_post;
+            models::InferenceState action = std::move( processing_post_attention_[next_layer_idx].front() );
+            //            LOG_EVERY_N( INFO, 384 ) << "got this in processing: " << action;
             processing_post_attention_[next_layer_idx].pop();
-            input_states.push_back( std::move( action_post ) );
+            input_states.push_back( std::move( action ) );
           }
           break;
         }
+        case models::InferenceState::Stage::Classification: {
+          for ( size_t j = 0; j < target_conc_cls_size_; j++ ) {
+            models::InferenceState action = std::move( processing_classification_.front() );
+            //            LOG_EVERY_N( INFO, 384 ) << "got this in processing: " << action;
+            processing_classification_.pop();
+            input_states.push_back( std::move( action ) );
+          }
+          break;
+        }
+        default: LOG( FATAL ) << "Invalid stage";
       }
     }
 
@@ -351,6 +360,13 @@ void ComputeKernelPiped<Model>::execution_thread_func()
           = std::chrono::duration_cast<std::chrono::microseconds>( std::chrono::steady_clock::now() - start );
         __stats__.add_point<IntDistributions::KernelPostAttentionForwardTime>( duration.count() );
       } break;
+      case models::InferenceState::Stage::Classification: {
+        results = model_->classify_forward( std::move( input_states ) );
+        const auto duration
+          = std::chrono::duration_cast<std::chrono::microseconds>( std::chrono::steady_clock::now() - start );
+        __stats__.add_point<IntDistributions::KernelClassificationForwardTime>( duration.count() );
+      } break;
+      default: LOG( FATAL ) << "Invalid stage";
     }
 
     std::vector<models::InferenceState> outgoing_states;
@@ -367,7 +383,7 @@ void ComputeKernelPiped<Model>::execution_thread_func()
         }
         break;
       case models::InferenceState::Stage::Attention:
-        // the next stage is post-attention, so if we serve that specific layer, add it directly to processing
+        // The next stage is post-attention, so if we serve that specific layer, add it directly to processing
         for ( size_t j = 0; j < target_conc_att_size_; j++ ) {
           if ( process_post_ and results[j].next_layer() <= end_layer_ and results[j].next_layer() >= start_layer_ ) {
             processing_states.emplace_back( std::move( results[j] ), contexts[j] );
@@ -377,20 +393,35 @@ void ComputeKernelPiped<Model>::execution_thread_func()
         }
         break;
       case models::InferenceState::Stage::PostAttention:
-        // the next stage is pre-attention, so if we serve that specific layer, get context and add it directly to
-        // processing
-        for ( size_t j = 0; j < target_conc_post_size_; j++ ) {
-          check_finished( results[j] );
-          if ( process_pre_ and results[j].next_layer() <= end_layer_ and results[j].next_layer() >= start_layer_
-               and !results[j].finished() and results[j].next_layer() != 0 ) {
-            std::lock_guard lock( ctx_mgr_mutex_ );
+        if ( results[0].next_stage() == models::InferenceState::Stage::PreAttention and process_pre_
+             and results[0].next_layer() <= end_layer_ and results[0].next_layer() >= start_layer_ ) {
+          // If the next stage is pre-attention, and we serve that layer, get context and add it directly to processing
+          std::lock_guard lock( ctx_mgr_mutex_ );
+          for ( size_t j = 0; j < target_conc_post_size_; j++ ) {
             processing_states.emplace_back( std::move( results[j] ),
                                             context_manager_.get_context( results[j].prompt_id(), true ) );
-          } else {
+          }
+        } else if ( results[0].next_stage() == models::InferenceState::Stage::Classification and process_cls_ ) {
+          // If next stage is classification, and we serve it, add it directly to processing
+          for ( size_t j = 0; j < target_conc_post_size_; j++ ) {
+            processing_states.emplace_back( std::move( results[j] ), nullptr );
+          }
+        } else {
+          for ( size_t j = 0; j < target_conc_post_size_; j++ ) {
             outgoing_states.emplace_back( std::move( results[j] ) );
           }
         }
+
         break;
+      case models::InferenceState::Stage::Classification:
+        // the next stage is pre-attention in layer 0, so we have to return the state from the kernel path for logging
+        for ( size_t j = 0; j < target_conc_cls_size_; j++ ) {
+          check_finished( results[j] );
+          CHECK_EQ( results[j].next_layer(), 0 );
+          outgoing_states.emplace_back( std::move( results[j] ) );
+        }
+        break;
+      default: LOG( FATAL ) << "Invalid stage";
     }
 
     {
@@ -408,22 +439,36 @@ void ComputeKernelPiped<Model>::execution_thread_func()
       std::lock_guard lock( processing_mutex_ );
       switch ( next_stage ) {
         case models::InferenceState::Stage::PreAttention:
-          for ( auto& action_loop : processing_states ) {
-            processing_attention_.emplace( std::move( action_loop.first ), action_loop.second );
+          for ( auto& action : processing_states ) {
+            processing_attention_.emplace( std::move( action.first ), action.second );
           }
           break;
         case models::InferenceState::Stage::Attention:
-          for ( auto& action_loop : processing_states ) {
-            processing_post_attention_[action_loop.first.next_layer() - start_layer_].emplace(
-              std::move( action_loop.first ) );
+          for ( auto& action : processing_states ) {
+            processing_post_attention_[action.first.next_layer() - start_layer_].emplace( std::move( action.first ) );
           }
           break;
         case models::InferenceState::Stage::PostAttention:
-          for ( auto& action_loop : processing_states ) {
-            processing_pre_attention_[action_loop.first.next_layer() - start_layer_].emplace(
-              std::move( action_loop.first ), action_loop.second );
+          if ( processing_states.size() > 0 ) {
+            switch ( processing_states[0].first.next_stage() ) {
+              case models::InferenceState::Stage::PreAttention:
+                for ( auto& action : processing_states ) {
+                  processing_pre_attention_[action.first.next_layer() - start_layer_].emplace(
+                    std::move( action.first ), action.second );
+                }
+                break;
+              case models::InferenceState::Stage::Classification:
+                for ( auto& action : processing_states ) {
+                  processing_classification_.emplace( std::move( action.first ) );
+                }
+                break;
+              default: LOG( FATAL ) << "Invalid stage";
+            }
           }
           break;
+          // we should not fast-path states after classification, otherwise they won't be logged
+        case models::InferenceState::Stage::Classification: break;
+        default: LOG( FATAL ) << "Invalid stage";
       }
     }
   }
@@ -500,7 +545,6 @@ void ComputeKernelPiped<Model>::bookkeeping_thread_func()
 
       case models::InferenceState::Stage::PostAttention: {
         // for action in post-attention stage, push to compute without context
-        // if the context doesn't exist, just wait
         CHECK_EQ( process_post_, true ) << "This machine does not service the PostAttention pipeline";
         {
           std::lock_guard lock( processing_mutex_ );
@@ -510,6 +554,19 @@ void ComputeKernelPiped<Model>::bookkeeping_thread_func()
         processing_cv_.notify_one();
         break;
       }
+
+      case models::InferenceState::Stage::Classification: {
+        // for action in classification stage, push to compute without context
+        CHECK_EQ( process_cls_, true ) << "This machine does not service the Classification pipeline";
+        {
+          std::lock_guard lock( processing_mutex_ );
+          processing_classification_.emplace( std::move( action ) );
+        }
+
+        processing_cv_.notify_one();
+        break;
+      }
+      default: LOG( FATAL ) << "Invalid stage";
     }
   }
 }

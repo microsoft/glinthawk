@@ -65,6 +65,7 @@ template<typename Config, typename DType>
 requires ModelConfig<Config>
 struct BaseWeights
 {
+  // TODO: We should have partial model loading
   BaseWeights() = default;
   BaseWeights( const DType* base_weights );
 
