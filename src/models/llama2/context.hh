@@ -107,8 +107,18 @@ public:
 
   LayerContext() {}
 
-  TokenContextType token( const int token_num ) { return { buffer_ + token_num * Config::kv_dim * 2 }; }
-  const TokenContextType token( const int token_num ) const { return { buffer_ + token_num * Config::kv_dim * 2 }; }
+  TokenContextType token( const int token_num )
+  {
+    if ( buffer_ == nullptr )
+      return { nullptr };
+    return { buffer_ + token_num * Config::kv_dim * 2 };
+  }
+  const TokenContextType token( const int token_num ) const
+  {
+    if ( buffer_ == nullptr )
+      return { nullptr };
+    return { buffer_ + token_num * Config::kv_dim * 2 };
+  }
 
   constexpr static size_t max_size() { return Config::seq_len * TokenContext<Config, DType>::size(); }
   constexpr static bool is_contiguous() { return true; } // i.e., all kv-pairs for a layer are contiguous in memory
@@ -134,6 +144,13 @@ public:
   {
   }
 
+  Context( const Settings<Config>& settings )
+    : nlayers_loaded_( settings.n_layers_loaded() )
+    , start_layer_num_( settings.start_layer_num )
+    , buffer_( nullptr )
+  {
+  }
+
   Context()
     : nlayers_loaded_( 0 )
     , start_layer_num_( 0 )
@@ -143,6 +160,8 @@ public:
 
   LayerContextType layer( const int layer_num ) const
   {
+    if ( buffer_ == nullptr )
+      return { nullptr };
     return { buffer_ + ( layer_num - start_layer_num_ ) * LayerContextType::max_size() / sizeof( DType ) };
   }
 

@@ -93,7 +93,8 @@ constexpr size_t AMRBS = 128; /* argmax reduce block size */
 
 template<typename Config, typename DType>
 Context<Config, DType>::Context( const Settings<Config>& settings, const bool make_empty )
-  : storage_( [&]() -> decltype( storage_ ) {
+  : llama2::Context<Config, DType>( settings )
+  , storage_( [&]() -> decltype( storage_ ) {
     DType* ptr;
     if ( make_empty ) {
       ptr = nullptr;
@@ -506,9 +507,9 @@ void LlamaOperations<Config, DType, ContextType>::convert_and_copy( DTypeDst* ds
           cudaMemcpy( dst, dst_host.get(), size * sizeof( DTypeSrc ), cudaMemcpyHostToDevice ) );
       }
     } break;
-  }
 
-  LOG( FATAL ) << "Invalid copy type";
+    default: LOG( FATAL ) << "Invalid copy type";
+  }
 }
 
 template<typename Config, typename DType, typename ContextType>

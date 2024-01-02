@@ -52,7 +52,7 @@ protected:
   void pre_attention_ops( const int32_t layer_num );
   void attention_ops();
   void post_attention_ops( const int32_t layer_num );
-  [[nodiscard]] StateVector forward_postlude( StateVector&& inference_state );
+  [[nodiscard]] StateVector forward_postlude( StateVector&& inference_state, const int32_t most_recent_layer_num );
 
 public:
   Llama2( const std::filesystem::path& model_dir,

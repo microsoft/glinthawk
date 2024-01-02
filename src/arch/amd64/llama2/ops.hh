@@ -77,7 +77,8 @@ static_assert(
 
 template<typename Config, typename DType>
 Context<Config, DType>::Context( const Settings<Config>& settings, const bool make_empty )
-  : storage_( [&]() -> decltype( storage_ ) {
+  : llama2::Context<Config, DType>( settings )
+  , storage_( [&]() -> decltype( storage_ ) {
     DType* ptr;
     if ( make_empty ) {
       ptr = nullptr;
@@ -178,7 +179,7 @@ void LlamaOperations<Config, DType, ContextType>::attention_0_gemm(
   const uint64_t batch_size,
   const uint32_t* token_positions )
 {
-  const float scale = 1.0f / sqrtf( Config::head_size );
+  constexpr float scale = 1.0f / sqrtf( Config::head_size );
 
   constexpr uint64_t ld_qry = Config::head_size;
   constexpr uint64_t ld_att = Config::seq_len;

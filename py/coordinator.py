@@ -243,7 +243,7 @@ class Coordinator:
                     )
 
                     self.logger.info(
-                        f"Layer 0 is at {socket.inet_ntoa(self.layer_workers[0].ip)}:{self.layer_workers[0].port};"
+                        f"Layer 0 is at {socket.inet_ntoa(self.layer_gpu_workers[0].ip)}:{self.layer_gpu_workers[0].port};"
                         "completions can be found there."
                     )
 
@@ -283,7 +283,7 @@ class Coordinator:
                 self.logger.warning(f"Generating {gen_count} dummy prompts.")
                 self.outgoing_messages.put_nowait(
                     [
-                        self.layer_workers[0],
+                        self.layer_gpu_workers[0],
                         Message(
                             Message.OpCode.PushDummyPrompts,
                             str(gen_count).encode(),

@@ -201,10 +201,12 @@ void Llama2<Config, DType, LlamaOperations, Context>::check_batch(
   CHECK_LE( next_layer_batch, settings_.end_layer_num );
 
   for ( auto& item : states ) {
-    CHECK_DTYPE<DType>( item.dtype() );
-    CHECK_EQ( item.next_layer(), next_layer_batch );
-    CHECK_LT( item.token_pos(), Config::seq_len );
     CHECK( item.next_stage() == stage );
+    if ( stage != InferenceState::Stage::Attention ) {
+      CHECK_DTYPE<DType>( item.dtype() );
+      CHECK_EQ( item.next_layer(), next_layer_batch );
+    }
+    CHECK_LT( item.token_pos(), Config::seq_len );
   }
 }
 
@@ -353,11 +355,12 @@ void Llama2<Config, DType, LlamaOperations, Context>::forward_prelude(
 
 template<typename Config, typename DType, typename LlamaOperations, typename Context>
 std::vector<InferenceState> Llama2<Config, DType, LlamaOperations, Context>::forward_postlude(
-  std::vector<InferenceState>&& states )
+  std::vector<InferenceState>&& states,
+  const int32_t most_recent_layer_num )
 {
   std::vector<InferenceState> output_states;
 
-  if ( this->settings_.end_layer_num == Config::n_layers - 1 ) {
+  if ( most_recent_layer_num == Config::n_layers - 1 ) {
     pass_end();
 
     std::vector<float> batch_temps;
@@ -384,7 +387,7 @@ std::vector<InferenceState> Llama2<Config, DType, LlamaOperations, Context>::for
                  CopyType::DeviceToHost );
 
       states[i].set_next_stage( InferenceState::Stage::PreAttention );
-      states[i].set_next_layer( states[i].next_layer() + 1 );
+      states[i].set_next_layer( most_recent_layer_num + 1 );
       states[i].set_activations( std::move( activations ) );
       output_states.push_back( std::move( states[i] ) );
     }
@@ -411,7 +414,7 @@ std::vector<InferenceState> Llama2<Config, DType, LlamaOperations, Context>::for
     post_attention_ops( layer_num );
   }
 
-  return forward_postlude( std::move( states ) );
+  return forward_postlude( std::move( states ), this->settings_.end_layer_num );
 }
 
 template<typename Config, typename DType, typename LlamaOperations, typename Context>
@@ -560,6 +563,7 @@ std::vector<InferenceState> Llama2<Config, DType, LlamaOperations, Context>::pos
   std::vector<InferenceState>&& states )
 {
   this->check_batch( states, {}, InferenceState::Stage::PostAttention );
+  this->state_.curr_concurrency_size = states.size();
 
   for ( size_t i = 0; i < states.size(); i++ ) {
     // load the activations
@@ -576,7 +580,7 @@ std::vector<InferenceState> Llama2<Config, DType, LlamaOperations, Context>::pos
 
   post_attention_ops( states[0].next_layer() );
 
-  return forward_postlude( std::move( states ) );
+  return forward_postlude( std::move( states ), states[0].next_layer() );
 }
 
 template<typename Config, typename DType, typename LlamaOperations, typename Context>
