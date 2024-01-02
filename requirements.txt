@@ -23,7 +23,6 @@ cryptography==41.0.5
 Django==4.2.6
 django-filter==23.3
 django-storages==1.14.2
-djangorestframework==3.14.0
 frozenlist==1.4.0
 humanize==4.8.0
 idna==3.4
