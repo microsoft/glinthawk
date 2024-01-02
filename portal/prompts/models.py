@@ -21,17 +21,17 @@ class Job(models.Model):
         FAILED = 5, "Failed"
 
     class LanguageModel(models.TextChoices):
-        LLAMA2_7B = "llama2_7b", "LLaMa2 7B"
-        LLAMA2_7B_CHAT = "llama2_7b_chat", "LLaMa2 7B Chat"
-        LLAMA2_70B = "llama2_70b", "LLaMa2 70B"
-        LLAMA2_70B_CHAT = "llama2_70b_chat", "LLaMa2 70B Chat"
+        STORIES_110M = "stories-110m", "Stories 110M"
+        LLAMA2_7B_CHAT = "llama2-7b-chat", "LLaMa2 7B Chat"
+        LLAMA2_13B_CHAT = "llama2-13b-chat", "LLaMa2 13B Chat"
+        LLAMA2_70B_CHAT = "llama2-70b-chat", "LLaMa2 70B Chat"
 
     uuid = models.UUIDField(
         unique=True, editable=False, primary_key=True, default=uuid.uuid4
     )
 
     language_model = models.CharField(
-        max_length=32, choices=LanguageModel.choices, default=LanguageModel.LLAMA2_7B
+        max_length=32, choices=LanguageModel.choices, default=LanguageModel.LLAMA2_70B_CHAT
     )
 
     file = models.FileField(
@@ -56,9 +56,11 @@ class Job(models.Model):
 class Prompt(models.Model):
     class Status(models.IntegerChoices):
         SUBMITTED = 1, "Submitted"
-        PROCESSING = 2, "Processing"
-        COMPLETED = 3, "Completed"
-        FAILED = 4, "Failed"
+        PREPROCESSED = 2, "Preprocessed"
+        QUEUED = 3, "Queued"
+        STARTED = 4, "Started"
+        COMPLETED = 5, "Completed"
+        FAILED = 6, "Failed"
 
     uuid = models.UUIDField(
         unique=True, editable=False, primary_key=True, default=uuid.uuid4
@@ -68,4 +70,6 @@ class Prompt(models.Model):
     hash = models.CharField(max_length=64)
     status = models.IntegerField(choices=Status.choices, default=Status.SUBMITTED)
     preprocessed_at = models.DateTimeField(null=True, blank=True)
+    queued_at = models.DateTimeField(null=True, blank=True)
+    started_at = models.DateTimeField(null=True, blank=True)
     completed_at = models.DateTimeField(null=True, blank=True)
