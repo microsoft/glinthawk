@@ -51,7 +51,8 @@ void Worker<Model>::setup_stats_handler()
   if ( filesystem::is_socket( telegraf_socket, err ) ) {
     LOG( INFO ) << "Telegraf socket found at " << telegraf_socket.string();
     telegraf_logger_ = make_unique<monitoring::TelegrafLogger>( telegraf_socket );
-    telegraf_logger_->install_rules( event_loop_, telegraf_rule_categories_, []( auto&& ) { return true; }, [] {} );
+    telegraf_logger_->install_rules(
+      event_loop_, telegraf_rule_categories_, []( auto&& ) { return true; }, [] {} );
   } else {
     LOG( WARNING ) << "Telegraf socket not found at " << telegraf_socket.string();
   }
@@ -103,12 +104,31 @@ template<typename Model>
 void Worker<Model>::setup_compute_kernel( const filesystem::path& model_root,
                                           const int start_layer,
                                           const int end_layer,
-                                          const int concurrency_size )
+                                          const int concurrency_size_pre_attention,
+                                          const int concurrency_size_attention,
+                                          const int concurrency_size_post_attention,
+                                          const int concurrency_size_classification,
+                                          const int max_context_count,
+                                          const bool randomize )
 {
   CHECK_LE( start_layer, end_layer ) << "start_layer must be less than or equal to end_layer";
 
-  compute_kernel_ = make_unique<compute::ComputeKernel<Model>>(
-    make_unique<Model>( model_root, start_layer, end_layer, concurrency_size, 1 ), concurrency_size );
+  const int max_concurrency_size = std::max( { concurrency_size_pre_attention,
+                                           concurrency_size_attention,
+                                           concurrency_size_post_attention,
+                                           concurrency_size_classification } );
+
+  //  compute_kernel_ = make_unique<compute::ComputeKernel<Model>>(
+  //    make_unique<Model>( model_root, start_layer, end_layer, max_concurrency_size, max_context_count, randomize ),
+  //    max_concurrency_size );
+  compute_kernel_ = make_unique<compute::ComputeKernelPiped<Model>>(
+    make_unique<Model>( model_root, start_layer, end_layer, max_concurrency_size, max_context_count, randomize ),
+    concurrency_size_pre_attention,
+    concurrency_size_attention,
+    concurrency_size_post_attention,
+    concurrency_size_classification,
+    start_layer,
+    end_layer );
 
   event_loop_.add_rule( "Compute Kernel",
                         Direction::In,
@@ -196,7 +216,16 @@ bool Worker<Model>::handle_coordinator_message( core::Message&& msg )
       // TODO(sadjad): eventually allow for loading different models
       // const auto& model_name = proto.model_name();
 
-      setup_compute_kernel( model_root_, proto.start_layer(), proto.end_layer(), proto.concurrency_size() );
+      setup_compute_kernel( model_root_,
+                            proto.start_layer(),
+                            proto.end_layer(),
+                            proto.concurrency_pre_att_size(),
+                            proto.concurrency_att_size(),
+                            proto.concurrency_post_att_size(),
+                            proto.concurrency_cls_size(),
+                            proto.max_context_count(),
+                            proto.randomize() );
+
       setup_blobstore( proto.blobstore_uri() );
 
       LOG( INFO ) << "Worker initialized.";
@@ -227,6 +256,9 @@ bool Worker<Model>::handle_coordinator_message( core::Message&& msg )
           case protobuf::SetRoute::LayerToAddress::Attention: next_stage = InferenceState::Stage::Attention; break;
           case protobuf::SetRoute::LayerToAddress::PostAttention:
             next_stage = InferenceState::Stage::PostAttention;
+            break;
+          case protobuf::SetRoute::LayerToAddress::Classification:
+            next_stage = InferenceState::Stage::Classification;
             break;
           default: throw std::runtime_error( "invalid stage" );
         }
@@ -354,10 +386,6 @@ void Worker<Model>::handle_compute_kernel_event()
 
     DLOG( INFO ) << "Got state from compute kernel: " << state.to_string();
 
-    // little hack to test pull queue on one GPU without running out of memory.
-    // if (state.next_layer() == 10)
-    //   state.set_next_layer( 22 );
-
     const auto& next_worker = state.next_worker();
     auto peer_it = peers_.find( next_worker );
     bool peer_new = false;
@@ -392,8 +420,8 @@ bool Worker<Model>::handle_peer_message( core::Message&& msg )
 
       this->compute_kernel_->check_finished( state );
 
-      if ( state.next_layer() == 0 ) {
-        // We are the first layer & stage: if this inference state contains a generated token, we should save it.
+      if ( state.next_layer() == 0 and state.next_stage() == models::InferenceState::Stage::PreAttention ) {
+        // We are the first layer: if this inference state contains a generated token, we should save it.
         // otherwise, we load the next token from the prompt.
 
         if ( state.token_pos() > 0 ) {
