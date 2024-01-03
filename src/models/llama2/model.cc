@@ -118,23 +118,24 @@ Llama2<Config, DType, LlamaOperations, Context>::Llama2( const std::filesystem::
 
   // Load the model
   // (1) loading the base weights
-  if ( not randomize_parameters ) {
-    CHECK_EQ( std::filesystem::file_size( base_path ), base_size ) << "Base weights are not the expected size.";
-    FileDescriptor base_fd { CHECK_SYSCALL( "open", open( base_path.c_str(), O_RDONLY ) ) };
-    MMap_Region base_mmap { nullptr, base_size, PROT_READ, MAP_PRIVATE, base_fd.fd_num(), 0 };
+  //  if ( not randomize_parameters ) {
+  // XXX(pouya): avoid randomizing weights right now so CPU doesn't overload
+  CHECK_EQ( std::filesystem::file_size( base_path ), base_size ) << "Base weights are not the expected size.";
+  FileDescriptor base_fd { CHECK_SYSCALL( "open", open( base_path.c_str(), O_RDONLY ) ) };
+  MMap_Region base_mmap { nullptr, base_size, PROT_READ, MAP_PRIVATE, base_fd.fd_num(), 0 };
 
-    ops_.copy(
-      base_weights_buffer_.get(), reinterpret_cast<DType*>( base_mmap.addr() ), base_size, CopyType::HostToDevice );
+  ops_.copy(
+    base_weights_buffer_.get(), reinterpret_cast<DType*>( base_mmap.addr() ), base_size, CopyType::HostToDevice );
 
-    LOG( INFO ) << "Loaded base weights (" << base_size << " bytes).";
-  } else {
-    LOG( WARNING ) << "Randomizing BASEWEIGHTS...";
-    std::unique_ptr<DType[]> base { new DType[base_size / sizeof( DType )] };
-    randomize_buffer(
-      base.get(), base_size / sizeof( DType ), -10.0 / sqrt( Config::dim ), 10.0 / sqrt( Config::dim ) );
-
-    ops_.copy( base_weights_buffer_.get(), base.get(), base_size, CopyType::HostToDevice );
-  }
+  LOG( INFO ) << "Loaded base weights (" << base_size << " bytes).";
+  //  } else {
+  //    LOG( WARNING ) << "Randomizing BASEWEIGHTS...";
+  //    std::unique_ptr<DType[]> base { new DType[base_size / sizeof( DType )] };
+  //    randomize_buffer(
+  //      base.get(), base_size / sizeof( DType ), -10.0 / sqrt( Config::dim ), 10.0 / sqrt( Config::dim ) );
+  //
+  //    ops_.copy( base_weights_buffer_.get(), base.get(), base_size, CopyType::HostToDevice );
+  //  }
 
   // (2) load the layers
   if ( not randomize_parameters ) {
