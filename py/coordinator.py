@@ -1,24 +1,19 @@
 #!/usr/bin/env python3
+import sys
 from typing import List, Dict
 
 import settings
 
-import sys
-
 if sys.version_info < (3, 10):
     sys.exit("Python 3.10 or newer is required to run this program.")
 
-import io
 import enum
-import json
 import click
 import socket
-import signal
 import asyncio
 import logging
 import datetime
 import itertools
-import functools
 
 from enum import Enum
 from dataclasses import dataclass, field
@@ -91,20 +86,25 @@ class Coordinator:
     def __init__(self, **kwargs):
         self.workers: List[Worker] = []
         self.cls_gpu_worker: Worker = None
-        self.layer_gpu_workers: Dict[int, Worker] = {}
-        self.layer_cpu_workers: Dict[int, Worker] = {}
+        self.ip_port_to_index: Dict[bytes, int] = {}
+        self.layer_workers: Dict[int, List[Worker, Worker]] = {}
         self.incoming_messages = asyncio.Queue()
         self.outgoing_messages = asyncio.Queue()
+        self.model = ModelInfo(
+            name="llama2-70b-chat",
+            n_layers=kwargs.get("n_layers", 80),
+            layers_per_worker=kwargs.get("layers_per_worker", 1),
+        )
         # self.model = ModelInfo(
         #     name="llama2-7b-chat",
         #     n_layers=kwargs.get("n_layers", 12),
         #     layers_per_worker=kwargs.get("layers_per_worker", 6),
         # )
-        self.model = ModelInfo(
-            name="stories-110m",
-            n_layers=kwargs.get("n_layers", 12),
-            layers_per_worker=kwargs.get("layers_per_worker", 6),
-        )
+        # self.model = ModelInfo(
+        #     name="stories-110m",
+        #     n_layers=kwargs.get("n_layers", 12),
+        #     layers_per_worker=kwargs.get("layers_per_worker", 6),
+        # )
 
         # Dummy prompt generation
         self.initial_dummy_count = kwargs.get("dummy_count", 0)
@@ -124,27 +124,27 @@ class Coordinator:
         message = glinthawk_pb.SetRoute()
 
         for newest_layer in range(self.model.n_layers):
-            layer = max([i for i in self.layer_cpu_workers.keys() if i <= newest_layer])
+            layer = max([i for i in self.layer_workers.keys() if i <= newest_layer])
             # Pre Attention
             sub_msg = glinthawk_pb.SetRoute.LayerToAddress()
             sub_msg.layer_num = newest_layer
             sub_msg.stage = glinthawk_pb.SetRoute.LayerToAddress.ProtoStage.PreAttention
-            sub_msg.ip = socket.inet_ntoa(self.layer_gpu_workers[layer].ip)
-            sub_msg.port = self.layer_gpu_workers[layer].port
+            sub_msg.ip = socket.inet_ntoa(self.layer_workers[layer][0].ip)
+            sub_msg.port = self.layer_workers[layer][0].port
             message.layer_to_address.append(sub_msg)
             # Attention
             sub_msg = glinthawk_pb.SetRoute.LayerToAddress()
             sub_msg.layer_num = newest_layer
             sub_msg.stage = glinthawk_pb.SetRoute.LayerToAddress.ProtoStage.Attention
-            sub_msg.ip = socket.inet_ntoa(self.layer_cpu_workers[layer].ip)
-            sub_msg.port = self.layer_cpu_workers[layer].port
+            sub_msg.ip = socket.inet_ntoa(self.layer_workers[layer][1].ip)
+            sub_msg.port = self.layer_workers[layer][1].port
             message.layer_to_address.append(sub_msg)
             # Post Attention
             sub_msg = glinthawk_pb.SetRoute.LayerToAddress()
             sub_msg.layer_num = newest_layer
             sub_msg.stage = glinthawk_pb.SetRoute.LayerToAddress.ProtoStage.PostAttention
-            sub_msg.ip = socket.inet_ntoa(self.layer_gpu_workers[layer].ip)
-            sub_msg.port = self.layer_gpu_workers[layer].port
+            sub_msg.ip = socket.inet_ntoa(self.layer_workers[layer][0].ip)
+            sub_msg.port = self.layer_workers[layer][0].port
             message.layer_to_address.append(sub_msg)
         # Classification
         sub_msg = glinthawk_pb.SetRoute.LayerToAddress()
@@ -195,23 +195,25 @@ class Coordinator:
                 ip, port = address.split(":")
                 worker.ip = socket.inet_aton(ip)
                 worker.port = int(port)
+                if worker.ip not in self.ip_port_to_index:
+                    self.ip_port_to_index[worker.ip] = len(self.ip_port_to_index)
                 self.logger.info(f"Worker {worker.id} is at {ip}:{port}, and sent {message.opcode}.")
 
                 # assigning layers to this worker
                 context_count = 0
                 if message.opcode == Message.OpCode.HeyCPU:
-                    worker.start_layer = len(self.layer_cpu_workers) * self.model.layers_per_worker
-                    worker.end_layer = (len(self.layer_cpu_workers) + 1) * self.model.layers_per_worker - 1
+                    worker.start_layer = self.ip_port_to_index[worker.ip] * self.model.layers_per_worker
+                    worker.end_layer = (self.ip_port_to_index[worker.ip] + 1) * self.model.layers_per_worker - 1
                     worker.max_concurrency_size_pre = 0
                     worker.max_concurrency_size_att = self.concurrency_size_att
                     worker.max_concurrency_size_post = 0
-                    context_count = 32
+                    context_count = 32 * 81 * 2
                 else:
-                    if len(self.layer_gpu_workers) < self.model.n_layers / self.model.layers_per_worker:
-                        worker.start_layer = len(self.layer_gpu_workers) * self.model.layers_per_worker
-                        worker.end_layer = (len(self.layer_gpu_workers) + 1) * self.model.layers_per_worker - 1
+                    if len(self.ip_port_to_index) < self.model.n_layers / self.model.layers_per_worker:
+                        worker.start_layer = self.ip_port_to_index[worker.ip] * self.model.layers_per_worker
+                        worker.end_layer = (self.ip_port_to_index[worker.ip] + 1) * self.model.layers_per_worker - 1
                         worker.max_concurrency_size_cls = 0
-                        context_count = 32
+                        context_count = 16 * 81
                     else:
                         worker.start_layer = self.model.n_layers - 1
                         worker.end_layer = self.model.n_layers - 1
@@ -245,21 +247,21 @@ class Coordinator:
                 )
 
                 if message.opcode == Message.OpCode.HeyCPU:
-                    self.layer_cpu_workers[worker.start_layer] = worker
+                    self.layer_workers[worker.start_layer][1] = worker
                 else:
-                    if len(self.layer_gpu_workers) < self.model.n_layers / self.model.layers_per_worker:
-                        self.layer_gpu_workers[worker.start_layer] = worker
+                    if len(self.layer_workers) < self.model.n_layers / self.model.layers_per_worker:
+                        self.layer_workers[worker.start_layer][0] = worker
                     else:
                         self.cls_gpu_worker = worker
 
-                if (len(self.layer_cpu_workers) == self.model.n_layers / self.model.layers_per_worker) and (
-                    len(self.layer_gpu_workers) == len(self.layer_cpu_workers) and self.cls_gpu_worker is not None
-                ):
+                if len(self.layer_workers) == self.model.n_layers / self.model.layers_per_worker and \
+                        all(len(self.layer_workers[key]) == 2 for key in self.layer_workers) and \
+                        self.cls_gpu_worker is not None:
                     # all layers have been assigned
                     # setting the route for the first worker
                     self.outgoing_messages.put_nowait(
                         [
-                            self.layer_gpu_workers[0],
+                            self.layer_workers[0][0],
                             Message(
                                 Message.OpCode.SetRoute,
                                 self.create_routing_message().SerializeToString(),
@@ -268,7 +270,7 @@ class Coordinator:
                     )
 
                     self.logger.info(
-                        f"Layer 0 is at {socket.inet_ntoa(self.layer_gpu_workers[0].ip)}:{self.layer_gpu_workers[0].port};"
+                        f"Layer 0 is at {socket.inet_ntoa(self.layer_workers[0][0].ip)}:{self.layer_workers[0][0].port};"
                         "completions can be found there."
                     )
 
@@ -276,7 +278,7 @@ class Coordinator:
                     if self.initial_dummy_count:
                         self.outgoing_messages.put_nowait(
                             [
-                                self.layer_gpu_workers[0],
+                                self.layer_workers[0][0],
                                 Message(
                                     Message.OpCode.PushDummyPrompts,
                                     str(self.initial_dummy_count).encode(),
@@ -308,7 +310,7 @@ class Coordinator:
                 self.logger.warning(f"Generating {gen_count} dummy prompts.")
                 self.outgoing_messages.put_nowait(
                     [
-                        self.layer_gpu_workers[0],
+                        self.layer_workers[0][0],
                         Message(
                             Message.OpCode.PushDummyPrompts,
                             str(gen_count).encode(),
