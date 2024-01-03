@@ -254,11 +254,15 @@ class Coordinator:
 
                 if message.opcode == Message.OpCode.HeyCPU:
                     if self.ip_port_to_index[worker.ip] < self.model.n_layers / self.model.layers_per_worker:
+                        if worker.start_layer not in self.layer_workers:
+                            self.layer_workers[worker.start_layer] = [None, None]
                         self.layer_workers[worker.start_layer][1] = worker
                     else:
                         pass
                 else:
                     if self.ip_port_to_index[worker.ip] < self.model.n_layers / self.model.layers_per_worker:
+                        if worker.start_layer not in self.layer_workers:
+                            self.layer_workers[worker.start_layer] = [None, None]
                         self.layer_workers[worker.start_layer][0] = worker
                     else:
                         self.cls_gpu_worker = worker
