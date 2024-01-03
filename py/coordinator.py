@@ -202,14 +202,20 @@ class Coordinator:
                 # assigning layers to this worker
                 context_count = 0
                 if message.opcode == Message.OpCode.HeyCPU:
-                    worker.start_layer = self.ip_port_to_index[worker.ip] * self.model.layers_per_worker
-                    worker.end_layer = (self.ip_port_to_index[worker.ip] + 1) * self.model.layers_per_worker - 1
-                    worker.max_concurrency_size_pre = 0
-                    worker.max_concurrency_size_att = self.concurrency_size_att
-                    worker.max_concurrency_size_post = 0
-                    context_count = 32 * 81 * 2
+                    if self.ip_port_to_index[worker.ip] < self.model.n_layers / self.model.layers_per_worker:
+                        worker.start_layer = self.ip_port_to_index[worker.ip] * self.model.layers_per_worker
+                        worker.end_layer = (self.ip_port_to_index[worker.ip] + 1) * self.model.layers_per_worker - 1
+                        worker.max_concurrency_size_pre = 0
+                        worker.max_concurrency_size_att = self.concurrency_size_att
+                        worker.max_concurrency_size_post = 0
+                        context_count = 32 * 81 * 2
+                    else:
+                        worker.start_layer = self.model.n_layers - 1
+                        worker.end_layer = self.model.n_layers - 1
+                        worker.max_concurrency_size_cls = self.concurrency_size_cls
+                        context_count = 0
                 else:
-                    if len(self.ip_port_to_index) < self.model.n_layers / self.model.layers_per_worker:
+                    if self.ip_port_to_index[worker.ip] < self.model.n_layers / self.model.layers_per_worker:
                         worker.start_layer = self.ip_port_to_index[worker.ip] * self.model.layers_per_worker
                         worker.end_layer = (self.ip_port_to_index[worker.ip] + 1) * self.model.layers_per_worker - 1
                         worker.max_concurrency_size_cls = 0
@@ -247,9 +253,12 @@ class Coordinator:
                 )
 
                 if message.opcode == Message.OpCode.HeyCPU:
-                    self.layer_workers[worker.start_layer][1] = worker
+                    if self.ip_port_to_index[worker.ip] < self.model.n_layers / self.model.layers_per_worker:
+                        self.layer_workers[worker.start_layer][1] = worker
+                    else:
+                        pass
                 else:
-                    if len(self.layer_workers) < self.model.n_layers / self.model.layers_per_worker:
+                    if self.ip_port_to_index[worker.ip] < self.model.n_layers / self.model.layers_per_worker:
                         self.layer_workers[worker.start_layer][0] = worker
                     else:
                         self.cls_gpu_worker = worker
