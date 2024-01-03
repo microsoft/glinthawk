@@ -51,8 +51,7 @@ void Worker<Model>::setup_stats_handler()
   if ( filesystem::is_socket( telegraf_socket, err ) ) {
     LOG( INFO ) << "Telegraf socket found at " << telegraf_socket.string();
     telegraf_logger_ = make_unique<monitoring::TelegrafLogger>( telegraf_socket );
-    telegraf_logger_->install_rules(
-      event_loop_, telegraf_rule_categories_, []( auto&& ) { return true; }, [] {} );
+    telegraf_logger_->install_rules( event_loop_, telegraf_rule_categories_, []( auto&& ) { return true; }, [] {} );
   } else {
     LOG( WARNING ) << "Telegraf socket not found at " << telegraf_socket.string();
   }
@@ -114,9 +113,9 @@ void Worker<Model>::setup_compute_kernel( const filesystem::path& model_root,
   CHECK_LE( start_layer, end_layer ) << "start_layer must be less than or equal to end_layer";
 
   const int max_concurrency_size = std::max( { concurrency_size_pre_attention,
-                                           concurrency_size_attention,
-                                           concurrency_size_post_attention,
-                                           concurrency_size_classification } );
+                                               concurrency_size_attention,
+                                               concurrency_size_post_attention,
+                                               concurrency_size_classification } );
 
   //  compute_kernel_ = make_unique<compute::ComputeKernel<Model>>(
   //    make_unique<Model>( model_root, start_layer, end_layer, max_concurrency_size, max_context_count, randomize ),
@@ -181,9 +180,15 @@ Worker<Model>::Worker( const Address& worker_address,
     [] { LOG( ERROR ) << "Worker stopped listening."; } );
 
   // Send "HEY" to coordinator
+#if defined( TARGET_PLATFORM_AMD64 )
   Message hey_message { Message::OpCode::HeyCPU, this->listen_address_.to_string() };
-  coordinator_.message_handler.push_message( move( hey_message ) );
+#elif defined( TARGET_PLATFORM_CUDA )
+  Message hey_message { Message::OpCode::HeyGPU, this->listen_address_.to_string() };
+#else
+#error "Unknown target platform"
+#endif
 
+  coordinator_.message_handler.push_message( move( hey_message ) );
   setup_stats_handler();
 }
 
