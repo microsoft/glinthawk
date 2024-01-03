@@ -268,7 +268,7 @@ class Coordinator:
                         self.cls_gpu_worker = worker
 
                 if len(self.layer_workers) == self.model.n_layers / self.model.layers_per_worker and \
-                        all(len(self.layer_workers[key]) == 2 for key in self.layer_workers) and \
+                        all(self.layer_workers[key][0] is not None and self.layer_workers[key][1] is not None for key in self.layer_workers) and \
                         self.cls_gpu_worker is not None:
                     # all layers have been assigned
                     # setting the route for the first worker
