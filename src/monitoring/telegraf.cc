@@ -47,7 +47,7 @@ void TelegrafLogger::read( RingBuffer& in )
   in.pop( in.readable_region().size() );
 }
 
-void TelegrafLogger::push_measurement( const Measurement& msg )
+void TelegrafLogger::push_measurement( Measurement& msg )
 {
   outgoing_.push_back( msg.to_string() );
 
