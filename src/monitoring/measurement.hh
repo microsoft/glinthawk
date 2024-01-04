@@ -125,8 +125,8 @@ private:
   template<class T>
   struct Distribution
   {
-    T min {};
-    T max {};
+    T min = std::numeric_limits<T>::max();
+    T max = std::numeric_limits<T>::min();
     T sum {};
     T sum_of_squares {};
     uint64_t count {};
