@@ -255,13 +255,14 @@ class Coordinator:
                     ]
                 )
 
+                ignore = False
                 if message.opcode == Message.OpCode.HeyCPU:
                     if self.ip_port_to_index[worker.ip] < self.model.n_layers / self.model.layers_per_worker:
                         if worker.start_layer not in self.layer_workers:
                             self.layer_workers[worker.start_layer] = [None, None]
                         self.layer_workers[worker.start_layer][1] = worker
                     else:
-                        pass
+                        ignore = True
                 else:
                     if self.ip_port_to_index[worker.ip] < self.model.n_layers / self.model.layers_per_worker:
                         if worker.start_layer not in self.layer_workers:
@@ -272,7 +273,7 @@ class Coordinator:
 
                 if len(self.layer_workers) == self.model.n_layers / self.model.layers_per_worker and \
                         all(self.layer_workers[key][0] is not None and self.layer_workers[key][1] is not None for key in self.layer_workers) and \
-                        self.cls_gpu_worker is not None:
+                        self.cls_gpu_worker is not None and not ignore:
                     # all layers have been assigned
                     # setting the route for the first worker
                     self.outgoing_messages.put_nowait(
