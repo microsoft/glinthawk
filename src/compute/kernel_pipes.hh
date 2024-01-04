@@ -572,6 +572,11 @@ void ComputeKernelPiped<Model>::bookkeeping_thread_func()
       }
 
       case models::InferenceState::Stage::PostAttention: {
+        {
+          const auto current_time = std::chrono::steady_clock::now().time_since_epoch().count();
+          __stats__.add_point<IntDistributions::IncomingKernelQueueingTime>( current_time - action.timestamp() );
+          action.set_timestamp( current_time );
+        }
         // for action in post-attention stage, push to compute without context
         CHECK_EQ( process_post_, true ) << "This machine does not service the PostAttention pipeline";
         {
