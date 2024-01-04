@@ -275,19 +275,24 @@ void ComputeKernelPiped<Model>::execution_thread_func()
           next_layer_idx = static_cast<uint32_t>( -1 );
           return true;
         }
+
+        for ( int layer_idx = static_cast<int>( n_layers_ - 1 ); layer_idx >= 0; layer_idx-- ) {
+          if ( processing_post_attention_[layer_idx].size() >= target_conc_post_size_ and process_post_ ) {
+            next_stage = models::InferenceState::Stage::PostAttention;
+            next_layer_idx = static_cast<uint32_t>( layer_idx );
+            return true;
+          }
+        }
+
         if ( processing_attention_.size() >= target_conc_att_size_ and process_att_ ) {
           next_stage = models::InferenceState::Stage::Attention;
           next_layer_idx = static_cast<uint32_t>( -1 );
           return true;
         }
+
         for ( int layer_idx = static_cast<int>( n_layers_ - 1 ); layer_idx >= 0; layer_idx-- ) {
           if ( processing_pre_attention_[layer_idx].size() >= target_conc_pre_size_ and process_pre_ ) {
             next_stage = models::InferenceState::Stage::PreAttention;
-            next_layer_idx = static_cast<uint32_t>( layer_idx );
-            return true;
-          }
-          if ( processing_post_attention_[layer_idx].size() >= target_conc_post_size_ and process_post_ ) {
-            next_stage = models::InferenceState::Stage::PostAttention;
             next_layer_idx = static_cast<uint32_t>( layer_idx );
             return true;
           }
@@ -344,11 +349,20 @@ void ComputeKernelPiped<Model>::execution_thread_func()
     switch ( next_stage ) {
       case models::InferenceState::Stage::PreAttention: {
         results = model_->pre_attention_forward( std::move( input_states ), contexts );
-        const auto duration
-          = std::chrono::duration_cast<std::chrono::microseconds>( std::chrono::steady_clock::now() - start );
+        const auto end = std::chrono::steady_clock::now();
+        const auto duration = std::chrono::duration_cast<std::chrono::microseconds>( end - start );
         __stats__.add_point<IntDistributions::KernelPreAttentionForwardTime>( duration.count() );
+        for ( auto& result : results ) {
+          result.set_timestamp( end.time_since_epoch().count() );
+        }
       } break;
       case models::InferenceState::Stage::Attention: {
+        if ( input_states[0].next_layer() == 0 ) {
+          for ( auto& state : input_states ) {
+            const auto queueing_time = start.time_since_epoch().count() - state.timestamp();
+            __stats__.add_point<IntDistributions::AttentionQueueingTime>( queueing_time );
+          }
+        }
         results = model_->attention_forward( std::move( input_states ), contexts );
         const auto duration
           = std::chrono::duration_cast<std::chrono::microseconds>( std::chrono::steady_clock::now() - start );
@@ -516,6 +530,12 @@ void ComputeKernelPiped<Model>::bookkeeping_thread_func()
       }
 
       case models::InferenceState::Stage::Attention: {
+        if ( action.next_layer() == 0 ) {
+          const auto current_time = std::chrono::steady_clock::now().time_since_epoch().count();
+          __stats__.add_point<IntDistributions::IncomingKernelQueueingTime>( current_time - action.timestamp() );
+          action.set_timestamp( current_time );
+        }
+
         // for action in attention stage, get non-empty context and just push to compute.
         // if the context doesn't exist, just wait
         CHECK_EQ( process_att_, true ) << "This machine does not service the Attention pipeline";

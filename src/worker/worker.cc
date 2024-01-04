@@ -78,6 +78,13 @@ void Worker<Model>::setup_peer( std::map<net::Address, Peer>::iterator peer_it )
     [this, peer_it] {
       for ( auto& state : peer_it->second.outgoing_states ) {
         DLOG( INFO ) << "Sending state to " << peer_it->first.to_string() << ": " << state.to_string();
+
+        if ( state.next_layer() == 0 and state.next_stage() == InferenceState::Stage::Attention ) {
+          const auto current_time = std::chrono::steady_clock::now().time_since_epoch().count();
+          __stats__.add_point<IntDistributions::OutgoingWorkerQueueingTime>( current_time - state.timestamp() );
+          state.set_timestamp( current_time );
+        }
+
         auto state_ser = state.serialize();
         peer_it->second.message_handler.push_message( Message( Message::OpCode::InferenceState, move( state_ser ) ) );
       }
@@ -232,6 +239,14 @@ bool Worker<Model>::handle_coordinator_message( core::Message&& msg )
                             proto.randomize() );
 
       setup_blobstore( proto.blobstore_uri() );
+
+      __stats__.tag( "start_layer", to_string( proto.start_layer() ) );
+      __stats__.tag( "end_layer", to_string( proto.end_layer() ) );
+#ifdef TARGET_PLATFORM_AMD64
+      __stats__.tag( "platform", "amd64" );
+#elif defined( TARGET_PLATFORM_CUDA )
+      __stats__.tag( "platform", "cuda" );
+#endif
 
       LOG( INFO ) << "Worker initialized.";
       break;
@@ -389,6 +404,12 @@ void Worker<Model>::handle_compute_kernel_event()
   while ( this->compute_kernel_->pop( state ) ) {
     __stats__.increment<Counters::StatesProcessed>();
 
+    if ( state.next_layer() == 0 and state.next_stage() == InferenceState::Stage::Attention ) {
+      const auto current_time = std::chrono::steady_clock::now().time_since_epoch().count();
+      __stats__.add_point<IntDistributions::OutgoingKernelQueueingTime>( current_time - state.timestamp() );
+      state.set_timestamp( current_time );
+    }
+
     DLOG( INFO ) << "Got state from compute kernel: " << state.to_string();
 
     const auto& next_worker = state.next_worker();
@@ -422,6 +443,12 @@ bool Worker<Model>::handle_peer_message( core::Message&& msg )
 
       auto state = models::InferenceState( msg.payload() );
       DLOG( INFO ) << "Inference state: " << state.to_string();
+
+      if ( state.next_layer() == 0 and state.next_stage() == InferenceState::Stage::Attention ) {
+        const auto current_time = std::chrono::steady_clock::now().time_since_epoch().count();
+        __stats__.add_point<IntDistributions::NetworkTime>( current_time - state.timestamp() );
+        state.set_timestamp( current_time );
+      }
 
       this->compute_kernel_->check_finished( state );
 
