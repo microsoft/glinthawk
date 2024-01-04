@@ -36,6 +36,7 @@ enum class Counters
 enum class IntDistributions
 {
   PromptLength,
+  PromptLatency,
   KernelForwardTime,
   KernelPreAttentionForwardTime,
   KernelAttentionForwardTime,
@@ -84,6 +85,7 @@ constexpr std::array<std::string_view, static_cast<size_t>( Counters::_Count )> 
 
 constexpr std::array<std::string_view, static_cast<size_t>( IntDistributions::_Count )> int_dist_keys {
   "prompt_length",
+  "prompt_latency",
   "kernel_forward_time",
   "kernel_pre_attention_forward_time",
   "kernel_attention_forward_time",

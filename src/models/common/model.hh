@@ -38,6 +38,7 @@ private:
 
   // XXX temporary hack for getting some measurements
   uint64_t timestamp_ { 0 };
+  uint64_t loop_start_timestamp_ { 0 };
 
   DataType dtype_ { DataType::Float32 };
   DataBuffer activations_ {};
@@ -80,6 +81,7 @@ public:
   const decltype( layer_workers_ )& layer_workers() const { return layer_workers_; }
   DataType dtype() const { return dtype_; }
   uint64_t timestamp() const { return timestamp_; }
+  uint64_t loop_start_timestamp() const { return loop_start_timestamp_; }
 
   DataBuffer& activations() { return activations_; }
   const DataBuffer& activations() const { return activations_; }
@@ -96,6 +98,7 @@ public:
   void set_layer_workers( const decltype( layer_workers_ )& layer_workers ) { layer_workers_ = layer_workers; }
   void set_finished() { finished_ = true; }
   void set_timestamp( const uint64_t timestamp ) { timestamp_ = timestamp; }
+  void set_loop_start_timestamp( const uint64_t loop_start_timestamp ) { loop_start_timestamp_ = loop_start_timestamp; }
 
   glinthawk::net::Address next_worker() const;
 
