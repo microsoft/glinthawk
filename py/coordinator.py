@@ -117,6 +117,9 @@ class Coordinator:
         self.concurrency_size_post = kwargs.get("concurrency_size_post", 16)
         self.concurrency_size_cls = kwargs.get("concurrency_size_cls", 16)
 
+        self.cpu_context_count = kwargs.get("cpu_context_count", 36*81*2)
+        self.gpu_context_count = kwargs.get("gpu_context_count", 18*81)
+
         self.logger = logging.getLogger("coordinator")
         self.logger.setLevel(logging.INFO)
 
@@ -208,7 +211,7 @@ class Coordinator:
                         worker.max_concurrency_size_pre = 0
                         worker.max_concurrency_size_att = self.concurrency_size_att
                         worker.max_concurrency_size_post = 0
-                        context_count = 32 * 81 * 2
+                        context_count = self.cpu_context_count
                     else:
                         worker.start_layer = self.model.n_layers - 1
                         worker.end_layer = self.model.n_layers - 1
@@ -219,7 +222,7 @@ class Coordinator:
                         worker.start_layer = self.ip_port_to_index[worker.ip] * self.model.layers_per_worker
                         worker.end_layer = (self.ip_port_to_index[worker.ip] + 1) * self.model.layers_per_worker - 1
                         worker.max_concurrency_size_cls = 0
-                        context_count = 16 * 81
+                        context_count = self.gpu_context_count
                     else:
                         worker.start_layer = self.model.n_layers - 1
                         worker.end_layer = self.model.n_layers - 1
@@ -355,6 +358,8 @@ class Coordinator:
     type=click.INT,
     default=0,
 )
+@click.option("--cpu_context_count", "-NCPU", type=click.INT, default=0)
+@click.option("--gpu_context_count", "-NGPU", type=click.INT, default=0)
 @click.option("--concurrency-size-pre", "-C1", type=click.INT, default=1)
 @click.option("--concurrency-size-att", "-C2", type=click.INT, default=1)
 @click.option("--concurrency-size-post", "-C3", type=click.INT, default=1)
