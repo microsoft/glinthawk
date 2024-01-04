@@ -369,9 +369,12 @@ void ComputeKernelPiped<Model>::execution_thread_func()
           __stats__.add_point<IntDistributions::AttentionQueueingTime>( queueing_time );
         }
         results = model_->attention_forward( std::move( input_states ), contexts );
-        const auto duration
-          = std::chrono::duration_cast<std::chrono::microseconds>( std::chrono::steady_clock::now() - start );
+        const auto end = std::chrono::steady_clock::now();
+        const auto duration = std::chrono::duration_cast<std::chrono::microseconds>( end - start );
         __stats__.add_point<IntDistributions::KernelAttentionForwardTime>( duration.count() );
+        for ( auto& result : results ) {
+          result.set_timestamp( end.time_since_epoch().count() );
+        }
       } break;
       case models::InferenceState::Stage::PostAttention: {
         results = model_->post_attention_forward( std::move( input_states ) );
