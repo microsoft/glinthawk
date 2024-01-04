@@ -36,6 +36,9 @@ private:
   float temperature_ { 0.0f };
   bool finished_ { false };
 
+  // XXX temporary hack for getting some measurements
+  uint64_t timestamp_ { 0 };
+
   DataType dtype_ { DataType::Float32 };
   DataBuffer activations_ {};
 
@@ -76,6 +79,7 @@ public:
   bool finished() const { return finished_; }
   const decltype( layer_workers_ )& layer_workers() const { return layer_workers_; }
   DataType dtype() const { return dtype_; }
+  uint64_t timestamp() const { return timestamp_; }
 
   DataBuffer& activations() { return activations_; }
   const DataBuffer& activations() const { return activations_; }
@@ -91,6 +95,7 @@ public:
   void set_activations( DataBuffer&& activations ) { activations_ = std::move( activations ); }
   void set_layer_workers( const decltype( layer_workers_ )& layer_workers ) { layer_workers_ = layer_workers; }
   void set_finished() { finished_ = true; }
+  void set_timestamp( const uint64_t timestamp ) { timestamp_ = timestamp; }
 
   glinthawk::net::Address next_worker() const;
 

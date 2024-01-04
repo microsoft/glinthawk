@@ -31,6 +31,8 @@ enum class Counters
   _Count,
 };
 
+// Pre -> Outgoing(Kernel) -> Outgoing(Worker) -> Network -> Incoming(Kernel) -> Attention
+
 enum class IntDistributions
 {
   PromptLength,
@@ -39,6 +41,12 @@ enum class IntDistributions
   KernelAttentionForwardTime,
   KernelPostAttentionForwardTime,
   KernelClassificationForwardTime,
+
+  OutgoingKernelQueueingTime,
+  OutgoingWorkerQueueingTime,
+  NetworkTime,
+  IncomingKernelQueueingTime,
+  AttentionQueueingTime,
 
   _Count
 };
@@ -67,6 +75,11 @@ constexpr std::array<std::string_view, static_cast<size_t>( IntDistributions::_C
   "kernel_attention_forward_time",
   "kernel_post_attention_forward_time",
   "kernel_classification_forward_time",
+  "outgoing_kernel_queueing_time",
+  "outgoing_worker_queueing_time",
+  "network_time",
+  "incoming_kernel_queueing_time",
+  "attention_queueing_time",
 };
 
 constexpr std::array<std::string_view, static_cast<size_t>( FloatDistributions::_Count )> float_dist_keys {};

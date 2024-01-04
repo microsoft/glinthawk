@@ -89,6 +89,7 @@ InferenceState::InferenceState( const string_view serialized )
   prompt_length_ = _get_and_advance<decltype( prompt_length_ )>( ptr );
   temperature_ = _get_and_advance<decltype( temperature_ )>( ptr );
   finished_ = _get_and_advance<decltype( finished_ )>( ptr );
+  timestamp_ = _get_and_advance<decltype( timestamp_ )>( ptr );
   dtype_ = static_cast<DataType>( _get_and_advance<underlying_type_t<DataType>>( ptr ) );
 
   const auto len_data = _get_and_advance<uint64_t>( ptr );
@@ -158,6 +159,8 @@ string InferenceState::serialize() const
   _put_and_advance( ptr, temperature_ );
   _put_and_advance( ptr, finished_ );
 
+  _put_and_advance( ptr, timestamp_ );
+
   _put_and_advance( ptr, static_cast<underlying_type_t<DataType>>( dtype_ ) );
   _put_and_advance( ptr, static_cast<uint64_t>( activations_.len() ) );
 
@@ -212,6 +215,7 @@ size_t InferenceState::serialized_size() const
          + sizeof( prompt_length_ ) /* prompt_length_ */
          + sizeof( temperature_ )   /* temperature_ */
          + sizeof( finished_ )      /* finished_ */
+         + sizeof( timestamp_ )
          + sizeof( DataType )       /* dtype_ */
          + sizeof( uint64_t )       /* activations_.len */
          + activations_.len()       /* activations_ data */
