@@ -42,7 +42,7 @@ private:
   DataType dtype_ { DataType::Float32 };
   DataBuffer activations_ {};
 
-  // TODO: The route is very long, and adds a big overhead to messages (adds 3x32x11=1056 bytes).
+  // TODO: The route is very long, and adds a big overhead to messages (adds 3x80x11=2640 bytes).
   // mapping from layer to worker address for this inference state
   std::map<std::pair<uint32_t, Stage>, glinthawk::net::Address> layer_workers_ {};
 
