@@ -80,7 +80,8 @@ void Worker<Model>::setup_peer( std::map<net::Address, Peer>::iterator peer_it )
       for ( auto& state : peer_it->second.outgoing_states ) {
         DLOG( INFO ) << "Sending state to " << peer_it->first.to_string() << ": " << state.to_string();
 
-        if ( state.next_stage() == InferenceState::Stage::Attention ) {
+        if ( state.next_stage() == InferenceState::Stage::Attention
+             or state.next_stage() == InferenceState::Stage::PostAttention ) {
           const auto current_time = std::chrono::steady_clock::now().time_since_epoch().count();
           __stats__.add_point<IntDistributions::OutgoingWorkerQueueingTime>( current_time - state.timestamp() );
           state.set_timestamp( current_time );
@@ -416,7 +417,8 @@ void Worker<Model>::handle_compute_kernel_event()
   while ( this->compute_kernel_->pop( state ) ) {
     __stats__.increment<Counters::StatesProcessed>();
 
-    if ( state.next_stage() == InferenceState::Stage::Attention ) {
+    if ( state.next_stage() == InferenceState::Stage::Attention
+         or state.next_stage() == InferenceState::Stage::PostAttention ) {
       const auto current_time = std::chrono::steady_clock::now().time_since_epoch().count();
       __stats__.add_point<IntDistributions::OutgoingKernelQueueingTime>( current_time - state.timestamp() );
       state.set_timestamp( current_time );
@@ -456,7 +458,8 @@ bool Worker<Model>::handle_peer_message( core::Message&& msg )
       auto state = models::InferenceState( msg.payload() );
       DLOG( INFO ) << "Inference state: " << state.to_string();
 
-      if ( state.next_stage() == InferenceState::Stage::Attention ) {
+      if ( state.next_stage() == InferenceState::Stage::Attention
+           or state.next_stage() == InferenceState::Stage::PostAttention ) {
         const auto current_time = std::chrono::steady_clock::now().time_since_epoch().count();
         __stats__.add_point<IntDistributions::NetworkTime>( current_time - state.timestamp() );
         state.set_timestamp( current_time );
@@ -555,6 +558,7 @@ void Worker<Model>::prompt_preparation_thread_func()
       state.set_next_stage( InferenceState::Stage::PreAttention );
       state.set_prompt_length( prompt.token_count() );
       state.set_temperature( 0.0f );
+      state.set_loop_start_timestamp( std::chrono::steady_clock::now().time_since_epoch().count() );
       state.set_layer_workers( current_route_ );
       states.push_back( move( state ) );
     }
