@@ -1,6 +1,7 @@
 #pragma once
 
 #include <array>
+#include <mutex>
 #include <string>
 #include <tuple>
 #include <type_traits>
@@ -140,10 +141,17 @@ private:
   std::string name_;
   std::unordered_map<std::string, std::string> tags_ {};
 
+  std::mutex tag_mutex_ {};
+
   std::array<uint64_t, static_cast<size_t>( Counters::_Count )> fields_counters_ {};
   std::array<Distribution<uint64_t>, static_cast<size_t>( IntDistributions::_Count )> fields_int_distribution_ {};
   std::array<Distribution<double>, static_cast<size_t>( FloatDistributions::_Count )> fields_float_distribution_ {};
   std::array<Ratio, static_cast<size_t>( Ratios::_Count )> fields_ratio_ {};
+
+  std::array<std::mutex, static_cast<size_t>( Counters::_Count )> counter_mutex_ {};
+  std::array<std::mutex, static_cast<size_t>( IntDistributions::_Count )> int_distribution_mutex_ {};
+  std::array<std::mutex, static_cast<size_t>( FloatDistributions::_Count )> float_distribution_mutex_ {};
+  std::array<std::mutex, static_cast<size_t>( Ratios::_Count )> ratio_mutex_ {};
 
 public:
   Measurement( const std::string& name )
@@ -151,23 +159,30 @@ public:
   {
   }
 
-  void tag( const std::string& key, const std::string& value ) { tags_[key] = value; }
+  void tag( const std::string& key, const std::string& value )
+  {
+    std::lock_guard lock( tag_mutex_ );
+    tags_[key] = value;
+  }
 
   template<Counters counter>
   void increment( const uint64_t value = 1 )
   {
+    std::lock_guard lock( counter_mutex_[static_cast<size_t>( counter )] );
     fields_counters_[static_cast<size_t>( counter )] += value;
   }
 
   template<Counters counter>
-  size_t get() const
+  size_t get()
   {
+    std::lock_guard lock( counter_mutex_[static_cast<size_t>( counter )] );
     return fields_counters_[static_cast<size_t>( counter )];
   }
 
   template<IntDistributions distribution>
   void add_point( const uint64_t value )
   {
+    std::lock_guard lock( int_distribution_mutex_[static_cast<size_t>( distribution )] );
     auto& dist = fields_int_distribution_[static_cast<size_t>( distribution )];
     dist.min = std::min( dist.min, value );
     dist.max = std::max( dist.max, value );
@@ -179,6 +194,7 @@ public:
   template<FloatDistributions distribution>
   void add_point( const double value )
   {
+    std::lock_guard lock( float_distribution_mutex_[static_cast<size_t>( distribution )] );
     auto& dist = fields_float_distribution_[static_cast<size_t>( distribution )];
     dist.min = std::min( dist.min, value );
     dist.max = std::max( dist.max, value );
@@ -190,6 +206,7 @@ public:
   template<Ratios ratio>
   void add_point( const uint64_t numerator, const uint64_t denominator )
   {
+    std::lock_guard lock( ratio_mutex_[static_cast<size_t>( ratio )] );
     auto& r = fields_ratio_[static_cast<size_t>( ratio )];
     r.numerator += numerator;
     r.denominator += denominator;
@@ -197,43 +214,56 @@ public:
 
   void zero_out()
   {
+    size_t i = 0;
     for ( auto& value : fields_counters_ ) {
+      std::lock_guard lock( counter_mutex_[i++] );
       value = {};
     }
 
+    i = 0;
     for ( auto& dist : fields_int_distribution_ ) {
+      std::lock_guard lock( int_distribution_mutex_[i++] );
       dist = {};
     }
 
+    i = 0;
     for ( auto& dist : fields_float_distribution_ ) {
+      std::lock_guard lock( float_distribution_mutex_[i++] );
       dist = {};
     }
 
+    i = 0;
     for ( auto& r : fields_ratio_ ) {
+      std::lock_guard lock( ratio_mutex_[i++] );
       r = {};
     }
   }
 
-  std::string to_string() const
+  std::string to_string()
   {
     std::string result = name_;
-    for ( const auto& [key, value] : tags_ ) {
-      if ( value.empty() ) {
-        continue;
-      }
+    {
+      std::lock_guard lock( tag_mutex_ );
+      for ( const auto& [key, value] : tags_ ) {
+        if ( value.empty() ) {
+          continue;
+        }
 
-      result += "," + key + "=" + value;
+        result += "," + key + "=" + value;
+      }
     }
 
     result += " ";
 
     size_t i = 0;
     for ( auto& value : fields_counters_ ) {
+      std::lock_guard lock( counter_mutex_[i] );
       result += std::string { counter_keys[i++] } + "=" + std::to_string( value ) + "u,";
     }
 
     i = 0;
     for ( const auto& dist : fields_int_distribution_ ) {
+      std::lock_guard lock( int_distribution_mutex_[i] );
       if ( dist.count == 0 ) {
         i++;
         continue;
@@ -253,6 +283,7 @@ public:
 
     i = 0;
     for ( const auto& dist : fields_float_distribution_ ) {
+      std::lock_guard lock( float_distribution_mutex_[i] );
       if ( dist.count == 0 ) {
         i++;
         continue;
@@ -272,6 +303,7 @@ public:
 
     i = 0;
     for ( const auto& r : fields_ratio_ ) {
+      std::lock_guard lock( ratio_mutex_[i] );
       if ( r.denominator == 0 or r.numerator == 0 ) {
         // XXX revisit this
         result += std::string { ratio_keys[i] } + "=0,";

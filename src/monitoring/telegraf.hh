@@ -40,7 +40,7 @@ public:
   TelegrafLogger( const std::filesystem::path& socket_file );
   ~TelegrafLogger() {}
 
-  void push_measurement( const Measurement& msg );
+  void push_measurement( Measurement& msg );
 };
 
 } // namespace glinthawk::monitoring
