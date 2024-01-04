@@ -46,7 +46,21 @@ enum class IntDistributions
   OutgoingWorkerQueueingTime,
   NetworkTime,
   IncomingKernelQueueingTime,
+  ContextAdmissionTime,
   AttentionQueueingTime,
+
+  IncomingQueue,
+  WaitingQueue,
+  OutgoingQueue,
+
+  ProcessingPreAttentionQueue,
+  ProcessingAttentionQueue,
+  ProcessingPostAttentionQueue,
+  ProcessingClassificationQueue,
+
+  AllocatedContexts,
+  FreeContexts,
+  EmptyContexts,
 
   _Count
 };
@@ -75,11 +89,25 @@ constexpr std::array<std::string_view, static_cast<size_t>( IntDistributions::_C
   "kernel_attention_forward_time",
   "kernel_post_attention_forward_time",
   "kernel_classification_forward_time",
+
   "outgoing_kernel_queueing_time",
   "outgoing_worker_queueing_time",
   "network_time",
   "incoming_kernel_queueing_time",
+  "context_admission_time",
   "attention_queueing_time",
+
+  "incoming_queue",
+  "waiting_queue",
+  "outgoing_queue",
+  "processing_pre_attention_queue",
+  "processing_attention_queue",
+  "processing_post_attention_queue",
+  "processing_classification_queue",
+
+  "allocated_contexts",
+  "free_contexts",
+  "empty_contexts",
 };
 
 constexpr std::array<std::string_view, static_cast<size_t>( FloatDistributions::_Count )> float_dist_keys {};

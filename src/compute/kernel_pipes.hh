@@ -25,7 +25,8 @@ private:
   std::deque<std::shared_ptr<typename Model::ContextType>> free_contexts_ {};
   std::unordered_map<glinthawk::PromptID, std::shared_ptr<typename Model::ContextType>> assigned_contexts_ {};
   const typename Model::SettingsType settings_ {};
-  int empty_contexts { 0 };
+  size_t empty_contexts { 0 };
+  size_t total_contexts { 0 };
 
 public:
   ContextManagerPreAllocated( const typename Model::SettingsType& settings )
@@ -41,11 +42,18 @@ public:
         break;
       }
     }
+    total_contexts = free_contexts_.size();
 
-    LOG( INFO ) << "Allocated " << i << " contexts";
+    LOG( INFO ) << "Allocated " << total() << " contexts";
   }
 
-  size_t size() const { return free_contexts_.size(); }
+  size_t free() const { return free_contexts_.size(); }
+
+  size_t allocated() const { return assigned_contexts_.size() - empty_contexts; }
+
+  size_t empty() const { return empty_contexts; }
+
+  size_t total() const { return total_contexts; }
 
   std::shared_ptr<typename Model::ContextType> get_context( const glinthawk::PromptID& prompt_id,
                                                             const bool emplace_empty = false )
@@ -68,9 +76,7 @@ public:
       context = free_contexts_.front();
       free_contexts_.pop_front();
       assigned_contexts_.emplace( prompt_id, context );
-      DLOG( INFO ) << "(size: " << assigned_contexts_.size() - empty_contexts << "/"
-                   << assigned_contexts_.size() + free_contexts_.size() - empty_contexts << ") Added context for "
-                   << prompt_id;
+      DLOG( INFO ) << "(size: " << allocated() << "/" << total() << ") Added context for " << prompt_id;
     }
 
     return context;
@@ -90,9 +96,7 @@ public:
 
       assigned_contexts_.erase( pair_freed );
 
-      DLOG( INFO ) << "(size: " << assigned_contexts_.size() - empty_contexts << "/"
-                   << assigned_contexts_.size() + free_contexts_.size() - empty_contexts << ") Released context for "
-                   << prompt_id;
+      DLOG( INFO ) << "(size: " << allocated() << "/" << total() << ") Released context for " << prompt_id;
       return true;
     }
     return false;
@@ -143,10 +147,12 @@ private:
   void execution_thread_func();
   void bookkeeping_thread_func();
   void backlog_thread_func();
+  void qmeasure_thread_func();
 
   std::thread execution_thread_;
   std::thread bookkeeping_thread_;
   std::thread backlog_thread_;
+  std::thread qmeasure_thread_;
 
 public:
   ComputeKernelPiped( std::unique_ptr<Model>&& model,
@@ -175,6 +181,7 @@ public:
     , execution_thread_( &ComputeKernelPiped::execution_thread_func, this )
     , bookkeeping_thread_( &ComputeKernelPiped::bookkeeping_thread_func, this )
     , backlog_thread_( &ComputeKernelPiped::backlog_thread_func, this )
+    , qmeasure_thread_( &ComputeKernelPiped::qmeasure_thread_func, this )
   {
   }
 
@@ -357,11 +364,9 @@ void ComputeKernelPiped<Model>::execution_thread_func()
         }
       } break;
       case models::InferenceState::Stage::Attention: {
-        if ( input_states[0].next_layer() == 0 ) {
-          for ( auto& state : input_states ) {
-            const auto queueing_time = start.time_since_epoch().count() - state.timestamp();
-            __stats__.add_point<IntDistributions::AttentionQueueingTime>( queueing_time );
-          }
+        for ( auto& state : input_states ) {
+          const auto queueing_time = start.time_since_epoch().count() - state.timestamp();
+          __stats__.add_point<IntDistributions::AttentionQueueingTime>( queueing_time );
         }
         results = model_->attention_forward( std::move( input_states ), contexts );
         const auto duration
@@ -530,7 +535,7 @@ void ComputeKernelPiped<Model>::bookkeeping_thread_func()
       }
 
       case models::InferenceState::Stage::Attention: {
-        if ( action.next_layer() == 0 ) {
+        {
           const auto current_time = std::chrono::steady_clock::now().time_since_epoch().count();
           __stats__.add_point<IntDistributions::IncomingKernelQueueingTime>( current_time - action.timestamp() );
           action.set_timestamp( current_time );
@@ -546,6 +551,9 @@ void ComputeKernelPiped<Model>::bookkeeping_thread_func()
           context = context_manager_.get_context( action.prompt_id(), false );
         }
         if ( not context.get()->empty() ) {
+          const auto current_time = std::chrono::steady_clock::now().time_since_epoch().count();
+          __stats__.add_point<IntDistributions::ContextAdmissionTime>( current_time - action.timestamp() );
+          action.set_timestamp( current_time );
           {
             std::lock_guard lock( processing_mutex_ );
             processing_attention_.emplace( std::move( action ), context );
@@ -611,17 +619,67 @@ void ComputeKernelPiped<Model>::backlog_thread_func()
     // let's get a free context from context_manager_
     {
       std::unique_lock<std::mutex> lock( ctx_mgr_mutex_ );
-      ctx_mgr_cv_.wait( lock, [this] { return context_manager_.size() > 0; } );
+      ctx_mgr_cv_.wait( lock, [this] { return context_manager_.free() > 0; } );
       context = context_manager_.get_context( action.prompt_id(), false );
     }
 
     CHECK_EQ( context.get()->empty(), false ) << "Context should not be empty";
+
+    const auto current_time = std::chrono::steady_clock::now().time_since_epoch().count();
+    __stats__.add_point<IntDistributions::ContextAdmissionTime>( current_time - action.timestamp() );
+    action.set_timestamp( current_time );
+
     {
       std::lock_guard lock( processing_mutex_ );
       processing_attention_.emplace( std::move( action ), context );
     }
 
     processing_cv_.notify_one();
+  }
+}
+
+template<typename Model>
+void ComputeKernelPiped<Model>::qmeasure_thread_func()
+{
+  LOG( INFO ) << "ComputeKernelPiped queue measurement thread started.";
+
+  while ( running_ ) {
+
+    {
+      std::lock_guard lock( processing_mutex_ );
+      __stats__.add_point<IntDistributions::ProcessingClassificationQueue>( processing_classification_.size() );
+      __stats__.add_point<IntDistributions::ProcessingAttentionQueue>( processing_attention_.size() );
+      for ( uint64_t layer_idx = 0; layer_idx < n_layers_; layer_idx++ ) {
+        __stats__.add_point<IntDistributions::ProcessingPreAttentionQueue>(
+          processing_pre_attention_[layer_idx].size() );
+        __stats__.add_point<IntDistributions::ProcessingPostAttentionQueue>(
+          processing_post_attention_[layer_idx].size() );
+      }
+    }
+
+    {
+      std::lock_guard lock( waiting_attention_mutex_ );
+      __stats__.add_point<IntDistributions::WaitingQueue>( waiting_attention_.size() );
+    }
+
+    {
+      std::lock_guard lock( incoming_mutex_ );
+      __stats__.add_point<IntDistributions::IncomingQueue>( incoming_.size() );
+    }
+
+    {
+      std::lock_guard lock( outgoing_mutex_ );
+      __stats__.add_point<IntDistributions::OutgoingQueue>( outgoing_.size() );
+    }
+
+    {
+      std::lock_guard lock( ctx_mgr_mutex_ );
+      __stats__.add_point<IntDistributions::AllocatedContexts>( context_manager_.allocated() );
+      __stats__.add_point<IntDistributions::FreeContexts>( context_manager_.free() );
+      __stats__.add_point<IntDistributions::EmptyContexts>( context_manager_.empty() );
+    }
+
+    std::this_thread::sleep_for( std::chrono::seconds { 1 } );
   }
 }
 
