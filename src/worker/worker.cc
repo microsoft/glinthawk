@@ -465,6 +465,11 @@ bool Worker<Model>::handle_peer_message( core::Message&& msg )
       this->compute_kernel_->check_finished( state );
 
       if ( state.next_layer() == 0 and state.next_stage() == models::InferenceState::Stage::PreAttention ) {
+
+        const auto current_time = std::chrono::steady_clock::now().time_since_epoch().count();
+        __stats__.add_point<IntDistributions::PromptLatency>( current_time - state.loop_start_timestamp() );
+        state.set_loop_start_timestamp( current_time );
+
         // We are the first layer: if this inference state contains a generated token, we should save it.
         // otherwise, we load the next token from the prompt.
 
