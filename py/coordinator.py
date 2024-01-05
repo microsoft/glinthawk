@@ -157,6 +157,8 @@ class Coordinator:
         sub_msg.port = self.cls_gpu_worker.port
         message.layer_to_address.append(sub_msg)
 
+        message.route_id = "dummy_path"
+
         return message
 
     async def handle_worker(self, reader, writer):
@@ -282,14 +284,28 @@ class Coordinator:
                         all(self.layer_workers[key][0] is not None and self.layer_workers[key][1] is not None for key in self.layer_workers) and \
                         self.cls_gpu_worker is not None and not ignore:
                     # all layers have been assigned
-                    # setting the route for the first worker
+                    # setting a route for all workers
+                    dummy_routing_message = Message(
+                        Message.OpCode.SetRoute,
+                        self.create_routing_message().SerializeToString(),
+                    ),
+                    for layer, worker_pair in self.layer_workers:
+                        self.outgoing_messages.put_nowait(
+                            [
+                                worker_pair[0],
+                                dummy_routing_message,
+                            ]
+                        )
+                        self.outgoing_messages.put_nowait(
+                            [
+                                worker_pair[1],
+                                dummy_routing_message,
+                            ]
+                        )
                     self.outgoing_messages.put_nowait(
                         [
-                            self.layer_workers[0][0],
-                            Message(
-                                Message.OpCode.SetRoute,
-                                self.create_routing_message().SerializeToString(),
-                            ),
+                            self.cls_gpu_worker,
+                            dummy_routing_message,
                         ]
                     )
 

@@ -38,7 +38,8 @@ message SetRoute
     uint32 port = 4;
   }
 
-  repeated LayerToAddress layer_to_address = 1;
+  string route_id = 1;
+  repeated LayerToAddress layer_to_address = 2;
 }
 
 message WorkerStats
