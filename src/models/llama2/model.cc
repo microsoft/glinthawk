@@ -191,7 +191,7 @@ void Llama2<Config, DType, LlamaOperations, Context>::dummy_forward( InferenceSt
 {
   CHECK_GE( state.next_layer(), settings_.start_layer_num );
   CHECK_LE( state.next_layer(), settings_.end_layer_num );
-  state.erase_from_workers( state.next_layer(), state.next_stage() );
+//  state.erase_from_workers( state.next_layer(), state.next_stage() );
   state.loop_till_next_worker( Config::n_layers );
 }
 

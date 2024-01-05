@@ -26,6 +26,7 @@ public:
 
 private:
   PromptID prompt_id_ {};
+  RouteID route_id_ {};
   ModelID model_id_ { 0 };
 
   uint32_t token_ { 1 };
@@ -43,8 +44,7 @@ private:
   DataType dtype_ { DataType::Float32 };
   DataBuffer activations_ {};
 
-  // TODO: The route is very long, and adds a big overhead to messages (adds 3x80x11=2640 bytes).
-  // mapping from layer to worker address for this inference state
+  // mapping from layer to worker address for this inference state, only local and does not get passed along
   std::map<std::pair<uint32_t, Stage>, glinthawk::net::Address> layer_workers_ {};
 
   size_t serialized_size() const;
@@ -69,6 +69,7 @@ public:
   std::string to_string() const;
 
   PromptID prompt_id() const { return prompt_id_; }
+  RouteID route_id() const { return route_id_; }
   ModelID model_id() const { return model_id_; }
 
   uint32_t token() const { return token_; }
@@ -87,6 +88,7 @@ public:
   const DataBuffer& activations() const { return activations_; }
 
   void set_prompt_id( const PromptID prompt_id ) { prompt_id_ = prompt_id; }
+  void set_route_id( const RouteID route_id ) { route_id_ = route_id; }
   void set_model_id( const ModelID model_id ) { model_id_ = model_id; }
   void set_token( const uint32_t token ) { token_ = token; }
   void set_token_pos( const uint32_t token_pos ) { token_pos_ = token_pos; }
