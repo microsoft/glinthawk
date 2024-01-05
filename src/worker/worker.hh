@@ -10,6 +10,7 @@
 #include <thread>
 
 #include "compute/kernel_pipes.hh"
+#include "models/types.hh"
 //#include "compute/kernel.hh"
 #include "message/handler.hh"
 #include "message/message.hh"
@@ -46,6 +47,8 @@ private:
   };
 
 private:
+  using RouteMap = std::map<std::pair<uint32_t, models::InferenceState::Stage>, net::Address>;
+
   std::atomic_bool running_ { true };
 
   EventLoop event_loop_ {};
@@ -63,7 +66,7 @@ private:
   std::unique_ptr<glinthawk::prompt::PromptManager> prompt_manager_ { nullptr };
   std::unique_ptr<glinthawk::prompt::CompletionManager> completion_manager_ { nullptr };
 
-  std::map<std::pair<uint32_t, models::InferenceState::Stage>, net::Address> current_route_ {};
+  std::unordered_map<RouteID, RouteMap> route_set_ {};
 
   core::MessageHandler<net::TCPSession>::RuleCategories rule_categories_ {
     .session = event_loop_.add_category( "Worker session" ),

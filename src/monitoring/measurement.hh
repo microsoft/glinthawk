@@ -47,10 +47,8 @@ enum class IntDistributions
   SerializeFirst,
   SerializeSecond,
   SerializeThird,
-  SerializeFourth,
   DeserializeFirst,
   DeserializeSecond,
-  DeserializeThird,
 
   OutgoingKernelQueueingTime,
   OutgoingWorkerQueueingTime,
@@ -104,10 +102,8 @@ constexpr std::array<std::string_view, static_cast<size_t>( IntDistributions::_C
   "serialize_one_time",
   "serialize_two_time",
   "serialize_three_time",
-  "serialize_four_time",
   "deserialize_one_time",
   "deserialize_two_time",
-  "deserialize_three_time",
 
   "outgoing_kernel_queueing_time",
   "outgoing_worker_queueing_time",

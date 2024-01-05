@@ -288,7 +288,7 @@ class Coordinator:
                     dummy_routing_message = Message(
                         Message.OpCode.SetRoute,
                         self.create_routing_message().SerializeToString(),
-                    ),
+                    )
                     for layer, worker_pair in self.layer_workers.items():
                         self.outgoing_messages.put_nowait(
                             [

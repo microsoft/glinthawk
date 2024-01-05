@@ -87,6 +87,7 @@ InferenceState::InferenceState( const string_view serialized )
   auto ptr = serialized.data();
 
   prompt_id_ = _get_and_advance<decltype( prompt_id_ )>( ptr );
+  route_id_ = _get_and_advance<decltype( route_id_ )>( ptr );
   model_id_ = _get_and_advance<decltype( model_id_ )>( ptr );
   token_ = _get_and_advance<decltype( token_ )>( ptr );
   token_pos_ = _get_and_advance<decltype( token_pos_ )>( ptr );
@@ -101,26 +102,15 @@ InferenceState::InferenceState( const string_view serialized )
 
   const auto t2 = std::chrono::steady_clock::now().time_since_epoch().count();
 
+  // These next 4 lines take 10us on average
   const auto len_data = _get_and_advance<uint64_t>( ptr );
   activations_ = DataBuffer { len_data };
   memcpy( activations_.data(), ptr, len_data );
   ptr += len_data;
 
   const auto t3 = std::chrono::steady_clock::now().time_since_epoch().count();
-
-  const auto num_workers = _get_and_advance<uint32_t>( ptr );
-
-  for ( uint32_t i = 0; i < num_workers; i++ ) {
-    const auto layer = _get_and_advance<uint32_t>( ptr );
-    const auto stage = _get_and_advance<Stage>( ptr );
-    const auto ipv4_numeric = _get_and_advance<uint32_t>( ptr );
-    const auto port = _get_and_advance<uint16_t>( ptr );
-    layer_workers_.emplace( std::make_pair( layer, stage ), net::Address::from_ipv4_numeric( ipv4_numeric, port ) );
-  }
-  const auto t4 = std::chrono::steady_clock::now().time_since_epoch().count();
   __stats__.add_point<glinthawk::IntDistributions::DeserializeFirst>( t2-t1 );
   __stats__.add_point<glinthawk::IntDistributions::DeserializeSecond>( t3-t2 );
-  __stats__.add_point<glinthawk::IntDistributions::DeserializeThird>( t4-t3 );
 }
 
 net::Address InferenceState::next_worker() const
@@ -132,24 +122,22 @@ net::Address InferenceState::next_worker() const
 
 void InferenceState::loop_till_next_worker( const uint32_t n_layers )
 {
-  while ( layer_workers_.find( { next_layer_, next_stage_ } ) == layer_workers_.end() and layer_workers_.size() > 0 ) {
-    switch ( next_stage_ ) {
-      case InferenceState::Stage::PreAttention: next_stage_ = InferenceState::Stage::Attention; break;
-      case InferenceState::Stage::Attention: next_stage_ = InferenceState::Stage::PostAttention; break;
-      case InferenceState::Stage::PostAttention:
-        if ( next_layer_ == n_layers - 1 ) {
-          next_stage_ = InferenceState::Stage::Classification;
-        } else {
-          next_stage_ = InferenceState::Stage::PreAttention;
-          next_layer_++;
-        }
-        break;
-      case InferenceState::Stage::Classification:
+  switch ( next_stage_ ) {
+    case InferenceState::Stage::PreAttention: next_stage_ = InferenceState::Stage::Attention; break;
+    case InferenceState::Stage::Attention: next_stage_ = InferenceState::Stage::PostAttention; break;
+    case InferenceState::Stage::PostAttention:
+      if ( next_layer_ == n_layers - 1 ) {
+        next_stage_ = InferenceState::Stage::Classification;
+      } else {
         next_stage_ = InferenceState::Stage::PreAttention;
-        next_layer_ = 0;
-        break;
-      default: LOG( FATAL ) << "Invalid stage";
-    }
+        next_layer_++;
+      }
+      break;
+    case InferenceState::Stage::Classification:
+      next_stage_ = InferenceState::Stage::PreAttention;
+      next_layer_ = 0;
+      break;
+    default: LOG( FATAL ) << "Invalid stage";
   }
 }
 
@@ -169,6 +157,7 @@ string InferenceState::serialize() const
 
   auto ptr = result.data();
   _put_and_advance( ptr, prompt_id_ );
+  _put_and_advance( ptr, route_id_ );
   _put_and_advance( ptr, model_id_ );
   _put_and_advance( ptr, token_ );
   _put_and_advance( ptr, token_pos_ );
@@ -188,20 +177,9 @@ string InferenceState::serialize() const
   memcpy( ptr, activations_.data(), activations_.len() );
   ptr += activations_.len();
   const auto t4 = std::chrono::steady_clock::now().time_since_epoch().count();
-
-  _put_and_advance( ptr, static_cast<uint32_t>( layer_workers_.size() ) );
-
-  for ( auto& [layer_stage, address] : layer_workers_ ) {
-    _put_and_advance( ptr, layer_stage.first );
-    _put_and_advance( ptr, layer_stage.second );
-    _put_and_advance( ptr, address.ipv4_numeric() );
-    _put_and_advance( ptr, address.port() );
-  }
-  const auto t5 = std::chrono::steady_clock::now().time_since_epoch().count();
   __stats__.add_point<glinthawk::IntDistributions::SerializeFirst>( t2-t1 );
   __stats__.add_point<glinthawk::IntDistributions::SerializeSecond>( t3-t2 );
   __stats__.add_point<glinthawk::IntDistributions::SerializeThird>( t4-t3 );
-  __stats__.add_point<glinthawk::IntDistributions::SerializeFourth>( t5-t4 );
 
   return result;
 }
@@ -211,6 +189,7 @@ string InferenceState::to_string() const
   ostringstream oss;
   oss << "InferenceState("
       << "prompt_id=" << prompt_id_.base58digest().substr( 0, 8 ) << ", "
+      << "route_id=" << route_id_.base58digest().substr( 0, 8 ) << ", "
       << "token=" << token_ << ", "
       << "token_pos=" << token_pos_ << ", "
       << "next_layer=" << next_layer_ << ", "
@@ -234,6 +213,7 @@ string InferenceState::to_string() const
 size_t InferenceState::serialized_size() const
 {
   return sizeof( PromptID )                                                            /* prompt_id_ */
+         + sizeof( RouteID )                                                           /* route_id_ */
          + sizeof( ModelID )                                                           /* model_id_ */
          + sizeof( token_ )                                                            /* token_ */
          + sizeof( token_pos_ )                                                        /* token_pos_ */
@@ -244,10 +224,7 @@ size_t InferenceState::serialized_size() const
          + sizeof( finished_ )                                                         /* finished_ */
          + sizeof( timestamp_ ) + sizeof( loop_start_timestamp_ ) + sizeof( DataType ) /* dtype_ */
          + sizeof( uint64_t )                                                          /* activations_.len */
-         + activations_.len()                                                          /* activations_ data */
-         + sizeof( uint32_t )                                                          /* layer_workers_.size() */
-         + layer_workers_.size()
-             * ( 2 * sizeof( uint32_t ) + sizeof( Stage ) + sizeof( uint16_t ) ); /* layer_workers_ */
+         + activations_.len();                                                         /* activations_ data */
 }
 
 }

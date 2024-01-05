@@ -51,7 +51,8 @@ void Worker<Model>::setup_stats_handler()
   if ( filesystem::is_socket( telegraf_socket, err ) ) {
     LOG( INFO ) << "Telegraf socket found at " << telegraf_socket.string();
     telegraf_logger_ = make_unique<monitoring::TelegrafLogger>( telegraf_socket );
-    telegraf_logger_->install_rules( event_loop_, telegraf_rule_categories_, []( auto&& ) { return true; }, [] {} );
+    telegraf_logger_->install_rules(
+      event_loop_, telegraf_rule_categories_, []( auto&& ) { return true; }, [] {} );
   } else {
     LOG( WARNING ) << "Telegraf socket not found at " << telegraf_socket.string();
   }
@@ -266,8 +267,7 @@ bool Worker<Model>::handle_coordinator_message( core::Message&& msg )
       proto.ParseFromString( msg.payload() );
       LOG( INFO ) << "Setting route: " << proto.ShortDebugString();
 
-      current_route_.clear();
-
+      RouteMap new_route {};
       for ( int i = 0; i < proto.layer_to_address_size(); i++ ) {
         const auto& route = proto.layer_to_address( i );
         InferenceState::Stage next_stage;
@@ -284,9 +284,13 @@ bool Worker<Model>::handle_coordinator_message( core::Message&& msg )
             break;
           default: throw std::runtime_error( "invalid stage" );
         }
-        current_route_.emplace( std::make_pair( route.layer_num(), next_stage ),
-                                Address { route.ip(), static_cast<uint16_t>( route.port() ) } );
+        new_route.emplace( std::make_pair( route.layer_num(), next_stage ),
+                           Address { route.ip(), static_cast<uint16_t>( route.port() ) } );
       }
+
+      RouteID route_id_dummy;
+      util::digest::sha256( proto.route_id(), route_id_dummy );
+      route_set_.emplace( route_id_dummy, new_route );
 
       LOG( INFO ) << "Route set; will be used for future prompts.";
 
@@ -296,16 +300,20 @@ bool Worker<Model>::handle_coordinator_message( core::Message&& msg )
     case Message::OpCode::PushDummyPrompts: {
       // create some random inference states and feed them into the system
       const size_t prompt_count = stoull( msg.payload() );
+      RouteID route_id_dummy;
+      util::digest::sha256( "dummy_path", route_id_dummy );
 
       if ( prompt_count == 0 or prompt_count > ( 1 << 16 ) ) {
         LOG( ERROR ) << "Invalid number of dummy prompts requested: " << prompt_count;
         break;
       }
 
-      if ( current_route_.empty() ) {
-        LOG( ERROR ) << "No route set; cannot push dummy prompts.";
+      auto it = route_set_.find( route_id_dummy );
+      if ( it == route_set_.end() ) {
+        LOG( FATAL ) << "No dummy route set; cannot push dummy prompts.";
         break;
       }
+      RouteMap dummy_route = it->second;
 
       vector<InferenceState> states {};
 
@@ -331,13 +339,14 @@ bool Worker<Model>::handle_coordinator_message( core::Message&& msg )
         // generate a random number between 0 and 1 for temprature
         InferenceState state { get_datatype<typename Model::ModelDataType>() };
         state.set_prompt_id( prompt_id );
+        state.set_route_id( route_id_dummy );
         state.set_token( 1 /* BOS */ );
         state.set_token_pos( 0 );
         state.set_next_layer( 0 );
         state.set_next_stage( InferenceState::Stage::PreAttention );
         state.set_prompt_length( 1 );
         state.set_temperature( temp_dist( temp_gen ) );
-        state.set_layer_workers( current_route_ );
+        state.set_layer_workers( dummy_route );
 
         states.push_back( move( state ) );
       }
@@ -353,6 +362,7 @@ bool Worker<Model>::handle_coordinator_message( core::Message&& msg )
     }
 
     case Message::OpCode::ProcessPrompts: {
+      // TODO: this path is broken since we are not setting any route ids for prompts
       if ( not this->prompt_manager_ ) {
         // XXX(sadjad): should do something better here
         LOG( ERROR ) << "Got prompts, but prompt manager not initialized.";
@@ -446,6 +456,11 @@ bool Worker<Model>::handle_peer_message( core::Message&& msg )
       __stats__.increment<Counters::StatesReceived>();
 
       auto state = models::InferenceState( msg.payload() );
+      auto it = route_set_.find( state.route_id() );
+      if ( it == route_set_.end() )
+        LOG( FATAL ) << "No route id " << state.route_id().base58digest().substr( 0, 8 )
+                     << " in route set for prompt: " << state;
+      state.set_layer_workers( it->second );
       DLOG( INFO ) << "Inference state: " << state.to_string();
 
       if ( ( state.next_stage() == InferenceState::Stage::Attention
@@ -544,6 +559,7 @@ void Worker<Model>::prompt_preparation_thread_func()
 
       auto prompt = prompt_manager_->get( prompt_id );
 
+      // TODO: this is broken now since there is nothing to assign route_id to the prompt
       InferenceState state { get_datatype<typename Model::ModelDataType>() };
       state.set_prompt_id( prompt_id );
       state.set_token( prompt.token( 0 ) );
@@ -553,7 +569,6 @@ void Worker<Model>::prompt_preparation_thread_func()
       state.set_prompt_length( prompt.token_count() );
       state.set_temperature( 0.0f );
       state.set_loop_start_timestamp( std::chrono::steady_clock::now().time_since_epoch().count() );
-      state.set_layer_workers( current_route_ );
       states.push_back( move( state ) );
     }
 
