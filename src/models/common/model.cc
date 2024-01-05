@@ -5,12 +5,8 @@
 
 #include "chrono"
 #include <glog/logging.h>
-#include "monitoring/measurement.hh"
 
 using namespace std;
-namespace {
-  glinthawk::Measurement& __stats__ { glinthawk::global_measurement() };
-}
 
 ostream& operator<<( ostream& os, const glinthawk::DataType& v )
 {
@@ -83,7 +79,6 @@ void _put_and_advance( PtrType*& ptr, const FieldType& field )
 
 InferenceState::InferenceState( const string_view serialized )
 {
-  const auto t1 = std::chrono::steady_clock::now().time_since_epoch().count();
   auto ptr = serialized.data();
 
   prompt_id_ = _get_and_advance<decltype( prompt_id_ )>( ptr );
@@ -100,17 +95,11 @@ InferenceState::InferenceState( const string_view serialized )
   loop_start_timestamp_ = _get_and_advance<decltype( loop_start_timestamp_ )>( ptr );
   dtype_ = static_cast<DataType>( _get_and_advance<underlying_type_t<DataType>>( ptr ) );
 
-  const auto t2 = std::chrono::steady_clock::now().time_since_epoch().count();
-
   // These next 4 lines take 10us on average
   const auto len_data = _get_and_advance<uint64_t>( ptr );
   activations_ = DataBuffer { len_data };
   memcpy( activations_.data(), ptr, len_data );
   ptr += len_data;
-
-  const auto t3 = std::chrono::steady_clock::now().time_since_epoch().count();
-  __stats__.add_point<glinthawk::IntDistributions::DeserializeFirst>( t2-t1 );
-  __stats__.add_point<glinthawk::IntDistributions::DeserializeSecond>( t3-t2 );
 }
 
 net::Address InferenceState::next_worker() const
@@ -148,12 +137,8 @@ void InferenceState::erase_from_workers( const uint32_t next_layer, const Stage 
 
 string InferenceState::serialize() const
 {
-  const auto t1 = std::chrono::steady_clock::now().time_since_epoch().count();
-
   string result;
   result.resize( serialized_size() );
-
-  const auto t2 = std::chrono::steady_clock::now().time_since_epoch().count();
 
   auto ptr = result.data();
   _put_and_advance( ptr, prompt_id_ );
@@ -172,14 +157,9 @@ string InferenceState::serialize() const
 
   _put_and_advance( ptr, static_cast<underlying_type_t<DataType>>( dtype_ ) );
   _put_and_advance( ptr, static_cast<uint64_t>( activations_.len() ) );
-  const auto t3 = std::chrono::steady_clock::now().time_since_epoch().count();
 
   memcpy( ptr, activations_.data(), activations_.len() );
   ptr += activations_.len();
-  const auto t4 = std::chrono::steady_clock::now().time_since_epoch().count();
-  __stats__.add_point<glinthawk::IntDistributions::SerializeFirst>( t2-t1 );
-  __stats__.add_point<glinthawk::IntDistributions::SerializeSecond>( t3-t2 );
-  __stats__.add_point<glinthawk::IntDistributions::SerializeThird>( t4-t3 );
 
   return result;
 }
