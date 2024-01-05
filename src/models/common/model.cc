@@ -3,9 +3,14 @@
 #include <iostream>
 #include <sstream>
 
+#include "chrono"
 #include <glog/logging.h>
+#include "monitoring/measurement.hh"
 
 using namespace std;
+namespace {
+  glinthawk::Measurement& __stats__ { glinthawk::global_measurement() };
+}
 
 ostream& operator<<( ostream& os, const glinthawk::DataType& v )
 {
@@ -78,6 +83,7 @@ void _put_and_advance( PtrType*& ptr, const FieldType& field )
 
 InferenceState::InferenceState( const string_view serialized )
 {
+  const auto t1 = std::chrono::steady_clock::now().time_since_epoch().count();
   auto ptr = serialized.data();
 
   prompt_id_ = _get_and_advance<decltype( prompt_id_ )>( ptr );
@@ -93,10 +99,14 @@ InferenceState::InferenceState( const string_view serialized )
   loop_start_timestamp_ = _get_and_advance<decltype( loop_start_timestamp_ )>( ptr );
   dtype_ = static_cast<DataType>( _get_and_advance<underlying_type_t<DataType>>( ptr ) );
 
+  const auto t2 = std::chrono::steady_clock::now().time_since_epoch().count();
+
   const auto len_data = _get_and_advance<uint64_t>( ptr );
   activations_ = DataBuffer { len_data };
   memcpy( activations_.data(), ptr, len_data );
   ptr += len_data;
+
+  const auto t3 = std::chrono::steady_clock::now().time_since_epoch().count();
 
   const auto num_workers = _get_and_advance<uint32_t>( ptr );
 
@@ -107,6 +117,10 @@ InferenceState::InferenceState( const string_view serialized )
     const auto port = _get_and_advance<uint16_t>( ptr );
     layer_workers_.emplace( std::make_pair( layer, stage ), net::Address::from_ipv4_numeric( ipv4_numeric, port ) );
   }
+  const auto t4 = std::chrono::steady_clock::now().time_since_epoch().count();
+  __stats__.add_point<glinthawk::IntDistributions::DeserializeFirst>( t2-t1 );
+  __stats__.add_point<glinthawk::IntDistributions::DeserializeSecond>( t3-t2 );
+  __stats__.add_point<glinthawk::IntDistributions::DeserializeThird>( t4-t3 );
 }
 
 net::Address InferenceState::next_worker() const
@@ -146,8 +160,12 @@ void InferenceState::erase_from_workers( const uint32_t next_layer, const Stage 
 
 string InferenceState::serialize() const
 {
+  const auto t1 = std::chrono::steady_clock::now().time_since_epoch().count();
+
   string result;
   result.resize( serialized_size() );
+
+  const auto t2 = std::chrono::steady_clock::now().time_since_epoch().count();
 
   auto ptr = result.data();
   _put_and_advance( ptr, prompt_id_ );
@@ -165,9 +183,11 @@ string InferenceState::serialize() const
 
   _put_and_advance( ptr, static_cast<underlying_type_t<DataType>>( dtype_ ) );
   _put_and_advance( ptr, static_cast<uint64_t>( activations_.len() ) );
+  const auto t3 = std::chrono::steady_clock::now().time_since_epoch().count();
 
   memcpy( ptr, activations_.data(), activations_.len() );
   ptr += activations_.len();
+  const auto t4 = std::chrono::steady_clock::now().time_since_epoch().count();
 
   _put_and_advance( ptr, static_cast<uint32_t>( layer_workers_.size() ) );
 
@@ -177,6 +197,11 @@ string InferenceState::serialize() const
     _put_and_advance( ptr, address.ipv4_numeric() );
     _put_and_advance( ptr, address.port() );
   }
+  const auto t5 = std::chrono::steady_clock::now().time_since_epoch().count();
+  __stats__.add_point<glinthawk::IntDistributions::SerializeFirst>( t2-t1 );
+  __stats__.add_point<glinthawk::IntDistributions::SerializeSecond>( t3-t2 );
+  __stats__.add_point<glinthawk::IntDistributions::SerializeThird>( t4-t3 );
+  __stats__.add_point<glinthawk::IntDistributions::SerializeFourth>( t5-t4 );
 
   return result;
 }
@@ -208,21 +233,19 @@ string InferenceState::to_string() const
 
 size_t InferenceState::serialized_size() const
 {
-  return sizeof( PromptID )         /* prompt_id_ */
-         + sizeof( ModelID )        /* model_id_ */
-         + sizeof( token_ )         /* token_ */
-         + sizeof( token_pos_ )     /* token_pos_ */
-         + sizeof( next_layer_ )    /* next_layer_ */
-         + sizeof( next_stage_ )    /* next_stage_ */
-         + sizeof( prompt_length_ ) /* prompt_length_ */
-         + sizeof( temperature_ )   /* temperature_ */
-         + sizeof( finished_ )      /* finished_ */
-         + sizeof( timestamp_ )
-         + sizeof( loop_start_timestamp_ )
-         + sizeof( DataType )       /* dtype_ */
-         + sizeof( uint64_t )       /* activations_.len */
-         + activations_.len()       /* activations_ data */
-         + sizeof( uint32_t )       /* layer_workers_.size() */
+  return sizeof( PromptID )                                                            /* prompt_id_ */
+         + sizeof( ModelID )                                                           /* model_id_ */
+         + sizeof( token_ )                                                            /* token_ */
+         + sizeof( token_pos_ )                                                        /* token_pos_ */
+         + sizeof( next_layer_ )                                                       /* next_layer_ */
+         + sizeof( next_stage_ )                                                       /* next_stage_ */
+         + sizeof( prompt_length_ )                                                    /* prompt_length_ */
+         + sizeof( temperature_ )                                                      /* temperature_ */
+         + sizeof( finished_ )                                                         /* finished_ */
+         + sizeof( timestamp_ ) + sizeof( loop_start_timestamp_ ) + sizeof( DataType ) /* dtype_ */
+         + sizeof( uint64_t )                                                          /* activations_.len */
+         + activations_.len()                                                          /* activations_ data */
+         + sizeof( uint32_t )                                                          /* layer_workers_.size() */
          + layer_workers_.size()
              * ( 2 * sizeof( uint32_t ) + sizeof( Stage ) + sizeof( uint16_t ) ); /* layer_workers_ */
 }

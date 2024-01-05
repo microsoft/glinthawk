@@ -44,6 +44,14 @@ enum class IntDistributions
   KernelPostAttentionForwardTime,
   KernelClassificationForwardTime,
 
+  SerializeFirst,
+  SerializeSecond,
+  SerializeThird,
+  SerializeFourth,
+  DeserializeFirst,
+  DeserializeSecond,
+  DeserializeThird,
+
   OutgoingKernelQueueingTime,
   OutgoingWorkerQueueingTime,
   NetworkTime,
@@ -92,6 +100,14 @@ constexpr std::array<std::string_view, static_cast<size_t>( IntDistributions::_C
   "kernel_attention_forward_time",
   "kernel_post_attention_forward_time",
   "kernel_classification_forward_time",
+
+  "serialize_one_time",
+  "serialize_two_time",
+  "serialize_three_time",
+  "serialize_four_time",
+  "deserialize_one_time",
+  "deserialize_two_time",
+  "deserialize_three_time",
 
   "outgoing_kernel_queueing_time",
   "outgoing_worker_queueing_time",
