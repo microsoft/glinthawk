@@ -279,7 +279,7 @@ class Coordinator:
                         Message.OpCode.SetRoute,
                         self.create_routing_message().SerializeToString(),
                     ),
-                    for layer, worker_pair in self.layer_workers:
+                    for layer, worker_pair in self.layer_workers.items():
                         self.outgoing_messages.put_nowait(
                             [
                                 worker_pair[0],
