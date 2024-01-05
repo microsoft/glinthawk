@@ -211,26 +211,33 @@ class Coordinator:
                         worker.max_concurrency_size_pre = 0
                         worker.max_concurrency_size_att = self.concurrency_size_att
                         worker.max_concurrency_size_post = 0
+                        worker.max_concurrency_size_cls = 0
                         context_count = self.cpu_context_count
                     else:
                         worker.start_layer = self.model.n_layers - 1
                         worker.end_layer = self.model.n_layers - 1
-                        worker.max_concurrency_size_cls = self.concurrency_size_cls
+                        worker.max_concurrency_size_pre = 0
+                        worker.max_concurrency_size_att = 0
+                        worker.max_concurrency_size_post = 0
+                        worker.max_concurrency_size_cls = 0
                         context_count = 0
                 else:
                     if self.ip_port_to_index[worker.ip] < self.model.n_layers / self.model.layers_per_worker:
                         worker.start_layer = self.ip_port_to_index[worker.ip] * self.model.layers_per_worker
                         worker.end_layer = (self.ip_port_to_index[worker.ip] + 1) * self.model.layers_per_worker - 1
+                        worker.max_concurrency_size_pre = self.concurrency_size_pre
+                        worker.max_concurrency_size_att = self.concurrency_size_att
+                        worker.max_concurrency_size_post = self.concurrency_size_post
                         worker.max_concurrency_size_cls = 0
                         context_count = self.gpu_context_count
                     else:
                         worker.start_layer = self.model.n_layers - 1
                         worker.end_layer = self.model.n_layers - 1
+                        worker.max_concurrency_size_pre = 0
+                        worker.max_concurrency_size_att = 0
+                        worker.max_concurrency_size_post = 0
                         worker.max_concurrency_size_cls = self.concurrency_size_cls
                         context_count = 0
-                    worker.max_concurrency_size_pre = self.concurrency_size_pre
-                    worker.max_concurrency_size_att = self.concurrency_size_att
-                    worker.max_concurrency_size_post = self.concurrency_size_post
 
                 initialization_message = glinthawk_pb.InitializeWorker(
                     model_name=self.model.name,
