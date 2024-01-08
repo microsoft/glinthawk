@@ -80,13 +80,17 @@ void Worker<Model>::setup_peer( std::map<net::Address, Peer>::iterator peer_it )
       for ( auto& state : peer_it->second.outgoing_states ) {
         DLOG( INFO ) << "Sending state to " << peer_it->first.to_string() << ": " << state.to_string();
 
-        if ( ( state.next_stage() == InferenceState::Stage::Attention
-               or state.next_stage() == InferenceState::Stage::PostAttention )
-             and not state.finished() ) {
-          const auto current_time = std::chrono::steady_clock::now().time_since_epoch().count();
-          __stats__.add_point<IntDistributions::OutgoingWorkerQueueingTime>( current_time - state.timestamp() );
-          state.set_timestamp( current_time );
+        const auto current_time = std::chrono::steady_clock::now().time_since_epoch().count();
+        if ( state.next_stage() == InferenceState::Stage::PreAttention and not state.finished() ) {
+          __stats__.add_point<IntDistributions::PreWorker2SerializeTime>( current_time - state.timestamp() );
+        } else if ( state.next_stage() == InferenceState::Stage::Attention and not state.finished() ) {
+          __stats__.add_point<IntDistributions::AttWorker2SerializeTime>( current_time - state.timestamp() );
+        } else if ( state.next_stage() == InferenceState::Stage::PostAttention and not state.finished() ) {
+          __stats__.add_point<IntDistributions::PostWorker2SerializeTime>( current_time - state.timestamp() );
+        } else if ( state.next_stage() == InferenceState::Stage::Classification and not state.finished() ) {
+          __stats__.add_point<IntDistributions::ClsWorker2SerializeTime>( current_time - state.timestamp() );
         }
+        state.set_timestamp( current_time );
 
         auto state_ser = state.serialize();
         peer_it->second.message_handler.push_message( Message( Message::OpCode::InferenceState, move( state_ser ) ) );
@@ -242,6 +246,14 @@ bool Worker<Model>::handle_coordinator_message( core::Message&& msg )
       // TODO(sadjad): eventually allow for loading different models
       // const auto& model_name = proto.model_name();
 
+      __stats__.tag( "start_layer", to_string( proto.start_layer() ) );
+      __stats__.tag( "end_layer", to_string( proto.end_layer() ) );
+#ifdef TARGET_PLATFORM_AMD64
+      __stats__.tag( "platform", "amd64" );
+#elif defined( TARGET_PLATFORM_CUDA )
+      __stats__.tag( "platform", "cuda" );
+#endif
+
       setup_compute_kernel( model_root_,
                             proto.start_layer(),
                             proto.end_layer(),
@@ -253,14 +265,6 @@ bool Worker<Model>::handle_coordinator_message( core::Message&& msg )
                             proto.randomize() );
 
       setup_blobstore( proto.blobstore_uri() );
-
-      __stats__.tag( "start_layer", to_string( proto.start_layer() ) );
-      __stats__.tag( "end_layer", to_string( proto.end_layer() ) );
-#ifdef TARGET_PLATFORM_AMD64
-      __stats__.tag( "platform", "amd64" );
-#elif defined( TARGET_PLATFORM_CUDA )
-      __stats__.tag( "platform", "cuda" );
-#endif
 
       LOG( INFO ) << "Worker initialized.";
       break;
@@ -427,13 +431,17 @@ void Worker<Model>::handle_compute_kernel_event()
   while ( this->compute_kernel_->pop( state ) ) {
     __stats__.increment<Counters::StatesProcessed>();
 
-    if ( ( state.next_stage() == InferenceState::Stage::Attention
-           or state.next_stage() == InferenceState::Stage::PostAttention )
-         and not state.finished() ) {
-      const auto current_time = std::chrono::steady_clock::now().time_since_epoch().count();
-      __stats__.add_point<IntDistributions::OutgoingKernelQueueingTime>( current_time - state.timestamp() );
-      state.set_timestamp( current_time );
+    const auto current_time = std::chrono::steady_clock::now().time_since_epoch().count();
+    if ( state.next_stage() == InferenceState::Stage::PreAttention and not state.finished() ) {
+      __stats__.add_point<IntDistributions::PreInference2WorkerTime>( current_time - state.timestamp() );
+    } else if ( state.next_stage() == InferenceState::Stage::Attention and not state.finished() ) {
+      __stats__.add_point<IntDistributions::AttInference2WorkerTime>( current_time - state.timestamp() );
+    } else if ( state.next_stage() == InferenceState::Stage::PostAttention and not state.finished() ) {
+      __stats__.add_point<IntDistributions::PostInference2WorkerTime>( current_time - state.timestamp() );
+    } else if ( state.next_stage() == InferenceState::Stage::Classification and not state.finished() ) {
+      __stats__.add_point<IntDistributions::ClsInference2WorkerTime>( current_time - state.timestamp() );
     }
+    state.set_timestamp( current_time );
 
     DLOG( INFO ) << "Got state from compute kernel: " << state.to_string();
 
@@ -474,24 +482,24 @@ bool Worker<Model>::handle_peer_message( core::Message&& msg )
       state.set_layer_workers( it->second );
       DLOG( INFO ) << "Inference state: " << state.to_string();
 
-      if ( ( state.next_stage() == InferenceState::Stage::Attention
-             or state.next_stage() == InferenceState::Stage::PostAttention )
-           and not state.finished() ) {
-        const auto current_time = std::chrono::steady_clock::now().time_since_epoch().count();
-        __stats__.add_point<IntDistributions::NetworkTime>( current_time - state.timestamp() );
-        state.set_timestamp( current_time );
+      const auto current_time = std::chrono::steady_clock::now().time_since_epoch().count();
+      if ( state.next_stage() == InferenceState::Stage::Attention and not state.finished() ) {
+        __stats__.add_point<IntDistributions::PreSerialize2AttWorkerTime>( current_time - state.timestamp() );
+      } else if ( state.next_stage() == InferenceState::Stage::PostAttention and not state.finished() ) {
+        __stats__.add_point<IntDistributions::AttSerialize2PostWorkerTime>( current_time - state.timestamp() );
       }
+      state.set_timestamp( current_time );
 
       this->compute_kernel_->check_finished( state );
 
       if ( state.next_layer() == 0 and state.next_stage() == models::InferenceState::Stage::PreAttention ) {
 
         // Only log prompt latency after context has been fully allocated
-        const auto current_time = std::chrono::steady_clock::now().time_since_epoch().count();
+        const auto current_time_prompt = std::chrono::steady_clock::now().time_since_epoch().count();
         if ( state.token_pos() > 1 and not state.finished() ) {
-          __stats__.add_point<IntDistributions::PromptLatency>( current_time - state.loop_start_timestamp() );
+          __stats__.add_point<IntDistributions::PromptLatency>( current_time_prompt - state.loop_start_timestamp() );
         }
-        state.set_loop_start_timestamp( current_time );
+        state.set_loop_start_timestamp( current_time_prompt );
 
         // We are the first layer: if this inference state contains a generated token, we should save it.
         // otherwise, we load the next token from the prompt.
@@ -522,6 +530,19 @@ bool Worker<Model>::handle_peer_message( core::Message&& msg )
       if ( state.finished() ) {
         this->compute_kernel_->push_finished( move( state ) );
       } else {
+        if ( msg_counter_ != 0 ) {
+          if ( state.next_stage() == InferenceState::Stage::PreAttention ) {
+            __stats__.add_point<IntDistributions::PreSerialize2AttWorkerVarTime>( current_time - past_msg_time_ );
+          } else if ( state.next_stage() == InferenceState::Stage::Attention ) {
+            __stats__.add_point<IntDistributions::AttSerialize2PostWorkerVarTime>( current_time - past_msg_time_ );
+          } else if ( state.next_stage() == InferenceState::Stage::PostAttention ) {
+            __stats__.add_point<IntDistributions::PostSerialize2ClsWorkerVarTime>( current_time - past_msg_time_ );
+          } else if ( state.next_stage() == InferenceState::Stage::Classification ) {
+            __stats__.add_point<IntDistributions::ClsSerialize2PreWorkerVarTime>( current_time - past_msg_time_ );
+          }
+        }
+        msg_counter_ = ( msg_counter_ + 1 ) % 24;
+        past_msg_time_ = current_time;
         this->compute_kernel_->push( move( state ) );
       }
       break;

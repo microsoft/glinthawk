@@ -355,6 +355,10 @@ void ComputeKernelPiped<Model>::execution_thread_func()
     std::vector<models::InferenceState> results;
     switch ( next_stage ) {
       case models::InferenceState::Stage::PreAttention: {
+        for ( auto& state : input_states ) {
+          __stats__.add_point<IntDistributions::PreKernelIncoming2BatchingTime>( start.time_since_epoch().count()
+                                                                                 - state.timestamp() );
+        }
         results = model_->pre_attention_forward( std::move( input_states ), contexts );
         const auto end = std::chrono::steady_clock::now();
         const auto duration = std::chrono::duration_cast<std::chrono::microseconds>( end - start );
@@ -365,8 +369,8 @@ void ComputeKernelPiped<Model>::execution_thread_func()
       } break;
       case models::InferenceState::Stage::Attention: {
         for ( auto& state : input_states ) {
-          const auto queueing_time = start.time_since_epoch().count() - state.timestamp();
-          __stats__.add_point<IntDistributions::AttentionQueueingTime>( queueing_time );
+          __stats__.add_point<IntDistributions::AttKernelContext2BatchingTime>( start.time_since_epoch().count()
+                                                                                - state.timestamp() );
         }
         results = model_->attention_forward( std::move( input_states ), contexts );
         const auto end = std::chrono::steady_clock::now();
@@ -377,16 +381,30 @@ void ComputeKernelPiped<Model>::execution_thread_func()
         }
       } break;
       case models::InferenceState::Stage::PostAttention: {
+        for ( auto& state : input_states ) {
+          __stats__.add_point<IntDistributions::PostKernelIncoming2BatchingTime>( start.time_since_epoch().count()
+                                                                                  - state.timestamp() );
+        }
         results = model_->post_attention_forward( std::move( input_states ) );
-        const auto duration
-          = std::chrono::duration_cast<std::chrono::microseconds>( std::chrono::steady_clock::now() - start );
+        const auto end = std::chrono::steady_clock::now();
+        const auto duration = std::chrono::duration_cast<std::chrono::microseconds>( end - start );
         __stats__.add_point<IntDistributions::KernelPostAttentionForwardTime>( duration.count() );
+        for ( auto& result : results ) {
+          result.set_timestamp( end.time_since_epoch().count() );
+        }
       } break;
       case models::InferenceState::Stage::Classification: {
+        for ( auto& state : input_states ) {
+          __stats__.add_point<IntDistributions::ClsKernelIncoming2BatchingTime>( start.time_since_epoch().count()
+                                                                                 - state.timestamp() );
+        }
         results = model_->classify_forward( std::move( input_states ) );
-        const auto duration
-          = std::chrono::duration_cast<std::chrono::microseconds>( std::chrono::steady_clock::now() - start );
+        const auto end = std::chrono::steady_clock::now();
+        const auto duration = std::chrono::duration_cast<std::chrono::microseconds>( end - start );
         __stats__.add_point<IntDistributions::KernelClassificationForwardTime>( duration.count() );
+        for ( auto& result : results ) {
+          result.set_timestamp( end.time_since_epoch().count() );
+        }
       } break;
       default: LOG( FATAL ) << "Invalid stage";
     }
@@ -394,7 +412,7 @@ void ComputeKernelPiped<Model>::execution_thread_func()
     std::vector<models::InferenceState> outgoing_states;
     std::vector<StateContextPair> processing_states;
     switch ( next_stage ) {
-      case models::InferenceState::Stage::PreAttention:
+      case models::InferenceState::Stage::PreAttention: {
         // the next stage is attention, so if we hold the context and serve attention, add it directly to processing
         for ( size_t j = 0; j < target_conc_pre_size_; j++ ) {
           if ( process_att_ and !contexts[j].get()->empty() ) {
@@ -404,6 +422,7 @@ void ComputeKernelPiped<Model>::execution_thread_func()
           }
         }
         break;
+      }
       case models::InferenceState::Stage::Attention:
         // The next stage is post-attention, so if we serve that specific layer, add it directly to processing
         for ( size_t j = 0; j < target_conc_att_size_; j++ ) {
@@ -518,8 +537,12 @@ void ComputeKernelPiped<Model>::bookkeeping_thread_func()
       << "InferenceState can not be processed in this machine, original next layer was: " << action.next_layer()
       << ", but we host " << start_layer_ << " to " << end_layer_;
 
+    const auto current_time = std::chrono::steady_clock::now().time_since_epoch().count();
     switch ( action.next_stage() ) {
       case models::InferenceState::Stage::PreAttention: {
+        __stats__.add_point<IntDistributions::PreWorker2KernelIncomingTime>( current_time - action.timestamp() );
+        action.set_timestamp( current_time );
+
         // for action in pre-attention stage, get (try to create) context and just push to compute.
         CHECK_EQ( process_pre_, true ) << "This machine does not service the PreAttention pipeline";
         ContextPtr context;
@@ -538,11 +561,8 @@ void ComputeKernelPiped<Model>::bookkeeping_thread_func()
       }
 
       case models::InferenceState::Stage::Attention: {
-        {
-          const auto current_time = std::chrono::steady_clock::now().time_since_epoch().count();
-          __stats__.add_point<IntDistributions::IncomingKernelQueueingTime>( current_time - action.timestamp() );
-          action.set_timestamp( current_time );
-        }
+        __stats__.add_point<IntDistributions::AttWorker2KernelIncomingTime>( current_time - action.timestamp() );
+        action.set_timestamp( current_time );
 
         // for action in attention stage, get non-empty context and just push to compute.
         // if the context doesn't exist, just wait
@@ -554,9 +574,9 @@ void ComputeKernelPiped<Model>::bookkeeping_thread_func()
           context = context_manager_.get_context( action.prompt_id(), false );
         }
         if ( not context.get()->empty() ) {
-          const auto current_time = std::chrono::steady_clock::now().time_since_epoch().count();
-          __stats__.add_point<IntDistributions::ContextAdmissionTime>( current_time - action.timestamp() );
-          action.set_timestamp( current_time );
+          const auto current_time_ctx = std::chrono::steady_clock::now().time_since_epoch().count();
+          __stats__.add_point<IntDistributions::AttKernelIncoming2ContextTime>( current_time_ctx - action.timestamp() );
+          action.set_timestamp( current_time_ctx );
           {
             std::lock_guard lock( processing_mutex_ );
             processing_attention_.emplace( std::move( action ), context );
@@ -575,11 +595,8 @@ void ComputeKernelPiped<Model>::bookkeeping_thread_func()
       }
 
       case models::InferenceState::Stage::PostAttention: {
-        {
-          const auto current_time = std::chrono::steady_clock::now().time_since_epoch().count();
-          __stats__.add_point<IntDistributions::IncomingKernelQueueingTime>( current_time - action.timestamp() );
-          action.set_timestamp( current_time );
-        }
+        __stats__.add_point<IntDistributions::PostWorker2KernelIncomingTime>( current_time - action.timestamp() );
+        action.set_timestamp( current_time );
         // for action in post-attention stage, push to compute without context
         CHECK_EQ( process_post_, true ) << "This machine does not service the PostAttention pipeline";
         {
@@ -592,6 +609,8 @@ void ComputeKernelPiped<Model>::bookkeeping_thread_func()
       }
 
       case models::InferenceState::Stage::Classification: {
+        __stats__.add_point<IntDistributions::ClsWorker2KernelIncomingTime>( current_time - action.timestamp() );
+        action.set_timestamp( current_time );
         // for action in classification stage, push to compute without context
         CHECK_EQ( process_cls_, true ) << "This machine does not service the Classification pipeline";
         {
@@ -634,7 +653,7 @@ void ComputeKernelPiped<Model>::backlog_thread_func()
     CHECK_EQ( context.get()->empty(), false ) << "Context should not be empty";
 
     const auto current_time = std::chrono::steady_clock::now().time_since_epoch().count();
-    __stats__.add_point<IntDistributions::ContextAdmissionTime>( current_time - action.timestamp() );
+    __stats__.add_point<IntDistributions::AttKernelIncoming2ContextTime>( current_time - action.timestamp() );
     action.set_timestamp( current_time );
 
     {

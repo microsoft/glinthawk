@@ -32,8 +32,6 @@ enum class Counters
   _Count,
 };
 
-// Pre -> Outgoing(Kernel) -> Outgoing(Worker) -> Network -> Incoming(Kernel) -> Attention
-
 enum class IntDistributions
 {
   PromptLength,
@@ -44,12 +42,42 @@ enum class IntDistributions
   KernelPostAttentionForwardTime,
   KernelClassificationForwardTime,
 
-  OutgoingKernelQueueingTime,
-  OutgoingWorkerQueueingTime,
-  NetworkTime,
-  IncomingKernelQueueingTime,
-  ContextAdmissionTime,
-  AttentionQueueingTime,
+  PreWorker2KernelIncomingTime,
+  PreKernelIncoming2BatchingTime,
+  PreInference2WorkerTime,
+  PreWorker2SerializeTime,
+
+  PreSerialize2AttWorkerTime,
+
+  AttWorker2KernelIncomingTime,
+  AttKernelIncoming2ContextTime,
+  AttKernelContext2BatchingTime,
+  AttInference2WorkerTime,
+  AttWorker2SerializeTime,
+
+  AttSerialize2PostWorkerTime,
+
+  PostWorker2KernelIncomingTime,
+  PostKernelIncoming2BatchingTime,
+  PostInference2WorkerTime,
+  PostWorker2SerializeTime,
+
+  ClsWorker2KernelIncomingTime,
+  ClsKernelIncoming2BatchingTime,
+  ClsInference2WorkerTime,
+  ClsWorker2SerializeTime,
+
+  PreSerialize2AttWorkerVarTime,
+  AttSerialize2PostWorkerVarTime,
+  PostSerialize2ClsWorkerVarTime,
+  ClsSerialize2PreWorkerVarTime,
+
+  //  OutgoingKernelQueueingTime,
+  //  OutgoingWorkerQueueingTime,
+  //  NetworkTime,
+  //  IncomingKernelQueueingTime,
+  //  ContextAdmissionTime,
+  //  AttentionQueueingTime,
 
   IncomingQueue,
   WaitingQueue,
@@ -93,12 +121,42 @@ constexpr std::array<std::string_view, static_cast<size_t>( IntDistributions::_C
   "kernel_post_attention_forward_time",
   "kernel_classification_forward_time",
 
-  "outgoing_kernel_queueing_time",
-  "outgoing_worker_queueing_time",
-  "network_time",
-  "incoming_kernel_queueing_time",
-  "context_admission_time",
-  "attention_queueing_time",
+  "pre_worker_to_kernel_incoming_time",
+  "pre_kernel_incoming_to_batching_time",
+  "pre_inference_to_worker_time",
+  "pre_worker_to_serialize_time",
+
+  "pre_serialize_to_att_worker_time",
+
+  "att_worker_to_kernel_incoming_time",
+  "att_kernel_incoming_to_context_time",
+  "att_context_to_batching_time",
+  "att_inference_to_worker_time",
+  "att_worker_to_serialize_time",
+
+  "att_serialize_to_post_worker_time",
+
+  "post_worker_to_kernel_incoming_time",
+  "post_kernel_incoming_to_batching_time",
+  "post_inference_to_worker_time",
+  "post_worker_to_serialize_time",
+
+  "classification_worker_to_kernel_incoming_time",
+  "classification_kernel_incoming_to_batching_time",
+  "classification_inference_to_worker_time",
+  "classification_worker_to_serialize_time",
+
+  "pre_serialize_to_att_worker_var_time",
+  "att_serialize_to_post_worker_var_time",
+  "post_serialize_to_cls_worker_var_time",
+  "cls_serialize_to_pre_worker_var_time",
+
+  //  "outgoing_kernel_queueing_time",
+  //  "outgoing_worker_queueing_time",
+  //  "network_time",
+  //  "incoming_kernel_queueing_time",
+  //  "context_admission_time",
+  //  "attention_queueing_time",
 
   "incoming_queue",
   "waiting_queue",
@@ -152,10 +210,7 @@ public:
   {
   }
 
-  void tag( const std::string& key, const std::string& value )
-  {
-    tags_[key] = value;
-  }
+  void tag( const std::string& key, const std::string& value ) { tags_[key] = value; }
 
   template<Counters counter>
   void increment( const uint64_t value = 1 )

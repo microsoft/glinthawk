@@ -58,6 +58,9 @@ private:
   net::Address coordinator_address_;
   Peer coordinator_;
 
+  uint64_t msg_counter_ {0};
+  uint64_t past_msg_time_ {};
+
   std::map<net::Address, Peer> peers_ {};
   std::filesystem::path model_root_;
   std::unique_ptr<compute::ComputeKernelPiped<Model>> compute_kernel_ { nullptr };
