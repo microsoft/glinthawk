@@ -283,21 +283,20 @@ void ComputeKernelPiped<Model>::execution_thread_func()
           return true;
         }
 
-        for ( int layer_idx = static_cast<int>( n_layers_ - 1 ); layer_idx >= 0; layer_idx-- ) {
-          if ( processing_post_attention_[layer_idx].size() >= target_conc_post_size_ and process_post_ ) {
-            next_stage = models::InferenceState::Stage::PostAttention;
-            next_layer_idx = static_cast<uint32_t>( layer_idx );
-            return true;
-          }
-        }
-
         if ( processing_attention_.size() >= target_conc_att_size_ and process_att_ ) {
           next_stage = models::InferenceState::Stage::Attention;
           next_layer_idx = static_cast<uint32_t>( -1 );
           return true;
         }
 
+        // TODO: these orders must be carefully examined here
+
         for ( int layer_idx = static_cast<int>( n_layers_ - 1 ); layer_idx >= 0; layer_idx-- ) {
+          if ( processing_post_attention_[layer_idx].size() >= target_conc_post_size_ and process_post_ ) {
+            next_stage = models::InferenceState::Stage::PostAttention;
+            next_layer_idx = static_cast<uint32_t>( layer_idx );
+            return true;
+          }
           if ( processing_pre_attention_[layer_idx].size() >= target_conc_pre_size_ and process_pre_ ) {
             next_stage = models::InferenceState::Stage::PreAttention;
             next_layer_idx = static_cast<uint32_t>( layer_idx );
