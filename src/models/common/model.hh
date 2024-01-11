@@ -40,6 +40,8 @@ private:
   // XXX temporary hack for getting some measurements
   uint64_t timestamp_ { 0 };
   uint64_t loop_start_timestamp_ { 0 };
+  uint64_t batch_timestamp_ { 0 };
+  bool batch_last_ { false };
 
   DataType dtype_ { DataType::Float32 };
   DataBuffer activations_ {};
@@ -83,6 +85,8 @@ public:
   DataType dtype() const { return dtype_; }
   uint64_t timestamp() const { return timestamp_; }
   uint64_t loop_start_timestamp() const { return loop_start_timestamp_; }
+  uint64_t batch_timestamp() const { return batch_timestamp_; }
+  bool batch_last() const { return batch_last_; }
 
   DataBuffer& activations() { return activations_; }
   const DataBuffer& activations() const { return activations_; }
@@ -101,6 +105,8 @@ public:
   void set_finished() { finished_ = true; }
   void set_timestamp( const uint64_t timestamp ) { timestamp_ = timestamp; }
   void set_loop_start_timestamp( const uint64_t loop_start_timestamp ) { loop_start_timestamp_ = loop_start_timestamp; }
+  void set_batch_timestamp( const uint64_t batch_timestamp ) { batch_timestamp_ = batch_timestamp; }
+  void set_batch_last( const bool batch_last ) { batch_last_ = batch_last; }
 
   glinthawk::net::Address next_worker() const;
 

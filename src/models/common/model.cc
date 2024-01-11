@@ -93,6 +93,8 @@ InferenceState::InferenceState( const string_view serialized )
   finished_ = _get_and_advance<decltype( finished_ )>( ptr );
   timestamp_ = _get_and_advance<decltype( timestamp_ )>( ptr );
   loop_start_timestamp_ = _get_and_advance<decltype( loop_start_timestamp_ )>( ptr );
+  batch_timestamp_ = _get_and_advance<decltype( batch_timestamp_ )>( ptr );
+  batch_last_ = _get_and_advance<decltype( batch_last_ )>( ptr );
   dtype_ = static_cast<DataType>( _get_and_advance<underlying_type_t<DataType>>( ptr ) );
 
   // These next 4 lines take 10us on average
@@ -154,6 +156,8 @@ string InferenceState::serialize() const
 
   _put_and_advance( ptr, timestamp_ );
   _put_and_advance( ptr, loop_start_timestamp_ );
+  _put_and_advance( ptr, batch_timestamp_ );
+  _put_and_advance( ptr, batch_last_ );
 
   _put_and_advance( ptr, static_cast<underlying_type_t<DataType>>( dtype_ ) );
   _put_and_advance( ptr, static_cast<uint64_t>( activations_.len() ) );
@@ -202,7 +206,8 @@ size_t InferenceState::serialized_size() const
          + sizeof( prompt_length_ )                                                    /* prompt_length_ */
          + sizeof( temperature_ )                                                      /* temperature_ */
          + sizeof( finished_ )                                                         /* finished_ */
-         + sizeof( timestamp_ ) + sizeof( loop_start_timestamp_ ) + sizeof( DataType ) /* dtype_ */
+         + sizeof( timestamp_ ) + sizeof( loop_start_timestamp_ ) + sizeof( batch_timestamp_ ) + sizeof( batch_last_ )
+         + sizeof( DataType )                                                          /* dtype_ */
          + sizeof( uint64_t )                                                          /* activations_.len */
          + activations_.len();                                                         /* activations_ data */
 }

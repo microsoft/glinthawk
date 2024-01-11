@@ -42,6 +42,25 @@ enum class IntDistributions
   KernelPostAttentionForwardTime,
   KernelClassificationForwardTime,
 
+  PreInference2WorkerTimeBatch,
+  PreWorker2SerializeTimeBatch,
+  PreSerialize2AttWorkerTimeBatch,
+  AttWorker2KernelIncomingTimeBatch,
+  AttKernelIncoming2ContextTimeBatch,
+  AttKernelContext2BatchingTimeBatch,
+
+  AttInference2WorkerTimeBatch,
+  AttWorker2SerializeTimeBatch,
+  AttSerialize2PostWorkerTimeBatch,
+  PostWorker2KernelIncomingTimeBatch,
+  PostKernelIncoming2BatchingTimeBatch,
+
+  PostInference2WorkerTimeBatch,
+  PostWorker2SerializeTimeBatch,
+
+  ClsInference2WorkerTimeBatch,
+  ClsWorker2SerializeTimeBatch,
+
   PreWorker2KernelIncomingTime,
   PreKernelIncoming2BatchingTime,
   PreInference2WorkerTime,
@@ -120,6 +139,25 @@ constexpr std::array<std::string_view, static_cast<size_t>( IntDistributions::_C
   "kernel_attention_forward_time",
   "kernel_post_attention_forward_time",
   "kernel_classification_forward_time",
+
+  "pre_inference_to_worker_time_batch",
+  "pre_worker_to_serialize_time_batch",
+  "pre_serialize_to_att_worker_time_batch",
+  "att_worker_to_kernel_incoming_time_batch",
+  "att_kernel_incoming_to_context_time_batch",
+  "att_context_to_batching_time_batch",
+
+  "att_inference_to_worker_time_batch",
+  "att_worker_to_serialize_time_batch",
+  "att_serialize_to_post_worker_time_batch",
+  "post_worker_to_kernel_incoming_time_batch",
+  "post_kernel_incoming_to_batching_time_batch",
+
+  "post_inference_to_worker_time_batch",
+  "post_worker_to_serialize_time_batch",
+
+  "classification_inference_to_worker_time_batch",
+  "classification_worker_to_serialize_time_batch",
 
   "pre_worker_to_kernel_incoming_time",
   "pre_kernel_incoming_to_batching_time",
