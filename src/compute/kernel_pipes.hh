@@ -364,12 +364,19 @@ void ComputeKernelPiped<Model>::execution_thread_func()
         __stats__.add_point<IntDistributions::KernelPreAttentionForwardTime>( duration.count() );
         for ( auto& result : results ) {
           result.set_timestamp( end.time_since_epoch().count() );
+          result.set_batch_timestamp( end.time_since_epoch().count() );
+          result.set_batch_last( false );
         }
+        results.back().set_batch_last( true );
       } break;
       case models::InferenceState::Stage::Attention: {
         for ( auto& state : input_states ) {
           __stats__.add_point<IntDistributions::AttKernelContext2BatchingTime>( start.time_since_epoch().count()
                                                                                 - state.timestamp() );
+          if ( state.batch_last() ) {
+            __stats__.add_point<IntDistributions::AttKernelContext2BatchingTimeBatch>( start.time_since_epoch().count()
+                                                                                       - state.batch_timestamp() );
+          }
         }
         results = model_->attention_forward( std::move( input_states ), contexts );
         const auto end = std::chrono::steady_clock::now();
@@ -377,12 +384,19 @@ void ComputeKernelPiped<Model>::execution_thread_func()
         __stats__.add_point<IntDistributions::KernelAttentionForwardTime>( duration.count() );
         for ( auto& result : results ) {
           result.set_timestamp( end.time_since_epoch().count() );
+          result.set_batch_timestamp( end.time_since_epoch().count() );
+          result.set_batch_last( false );
         }
+        results.back().set_batch_last( true );
       } break;
       case models::InferenceState::Stage::PostAttention: {
         for ( auto& state : input_states ) {
           __stats__.add_point<IntDistributions::PostKernelIncoming2BatchingTime>( start.time_since_epoch().count()
                                                                                   - state.timestamp() );
+          if ( state.batch_last() ) {
+            __stats__.add_point<IntDistributions::PostKernelIncoming2BatchingTimeBatch>(
+              start.time_since_epoch().count() - state.batch_timestamp() );
+          }
         }
         results = model_->post_attention_forward( std::move( input_states ) );
         const auto end = std::chrono::steady_clock::now();
@@ -390,7 +404,10 @@ void ComputeKernelPiped<Model>::execution_thread_func()
         __stats__.add_point<IntDistributions::KernelPostAttentionForwardTime>( duration.count() );
         for ( auto& result : results ) {
           result.set_timestamp( end.time_since_epoch().count() );
+          result.set_batch_timestamp( end.time_since_epoch().count() );
+          result.set_batch_last( false );
         }
+        results.back().set_batch_last( true );
       } break;
       case models::InferenceState::Stage::Classification: {
         for ( auto& state : input_states ) {
@@ -403,7 +420,10 @@ void ComputeKernelPiped<Model>::execution_thread_func()
         __stats__.add_point<IntDistributions::KernelClassificationForwardTime>( duration.count() );
         for ( auto& result : results ) {
           result.set_timestamp( end.time_since_epoch().count() );
+          result.set_batch_timestamp( end.time_since_epoch().count() );
+          result.set_batch_last( false );
         }
+        results.back().set_batch_last( true );
       } break;
       default: LOG( FATAL ) << "Invalid stage";
     }
@@ -561,6 +581,10 @@ void ComputeKernelPiped<Model>::bookkeeping_thread_func()
 
       case models::InferenceState::Stage::Attention: {
         __stats__.add_point<IntDistributions::AttWorker2KernelIncomingTime>( current_time - action.timestamp() );
+        if ( action.batch_last() ) {
+          __stats__.add_point<IntDistributions::AttWorker2KernelIncomingTimeBatch>( current_time
+                                                                                    - action.batch_timestamp() );
+        }
         action.set_timestamp( current_time );
 
         // for action in attention stage, get non-empty context and just push to compute.
@@ -575,6 +599,10 @@ void ComputeKernelPiped<Model>::bookkeeping_thread_func()
         if ( not context.get()->empty() ) {
           const auto current_time_ctx = std::chrono::steady_clock::now().time_since_epoch().count();
           __stats__.add_point<IntDistributions::AttKernelIncoming2ContextTime>( current_time_ctx - action.timestamp() );
+          if ( action.batch_last() ) {
+            __stats__.add_point<IntDistributions::AttKernelIncoming2ContextTimeBatch>( current_time
+                                                                                       - action.batch_timestamp() );
+          }
           action.set_timestamp( current_time_ctx );
           {
             std::lock_guard lock( processing_mutex_ );
@@ -595,6 +623,10 @@ void ComputeKernelPiped<Model>::bookkeeping_thread_func()
 
       case models::InferenceState::Stage::PostAttention: {
         __stats__.add_point<IntDistributions::PostWorker2KernelIncomingTime>( current_time - action.timestamp() );
+        if ( action.batch_last() ) {
+          __stats__.add_point<IntDistributions::PostWorker2KernelIncomingTimeBatch>( current_time
+                                                                                     - action.batch_timestamp() );
+        }
         action.set_timestamp( current_time );
         // for action in post-attention stage, push to compute without context
         CHECK_EQ( process_post_, true ) << "This machine does not service the PostAttention pipeline";
@@ -653,6 +685,10 @@ void ComputeKernelPiped<Model>::backlog_thread_func()
 
     const auto current_time = std::chrono::steady_clock::now().time_since_epoch().count();
     __stats__.add_point<IntDistributions::AttKernelIncoming2ContextTime>( current_time - action.timestamp() );
+    if ( action.batch_last() ) {
+      __stats__.add_point<IntDistributions::AttKernelIncoming2ContextTimeBatch>( current_time
+                                                                                 - action.batch_timestamp() );
+    }
     action.set_timestamp( current_time );
 
     {
