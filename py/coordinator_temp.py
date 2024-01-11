@@ -231,6 +231,7 @@ class Coordinator:
                         worker.max_concurrency_size_pre = self.concurrency_size_pre
                         worker.max_concurrency_size_att = 0
                         worker.max_concurrency_size_post = 0
+                        # TODO: classification is layer 79
                         worker.max_concurrency_size_cls = self.concurrency_size_cls
                         context_count = self.gpu_context_count
                     elif worker.role_idx < self.model.n_layers / self.model.layers_per_worker:
@@ -273,14 +274,10 @@ class Coordinator:
                     ]
                 )
 
-                ignore = False
                 if message.opcode == Message.OpCode.HeyCPU:
-                    if worker.role_idx < self.model.n_layers / self.model.layers_per_worker:
-                        if worker.start_layer not in self.layer_workers:
-                            self.layer_workers[worker.start_layer] = [None, None]
-                        self.layer_workers[worker.start_layer][1] = worker
-                    else:
-                        ignore = True
+                    if worker.role_idx not in self.layer_workers:
+                        self.layer_workers[worker.role_idx] = [None, None]
+                    self.layer_workers[worker.role_idx][1] = worker
                 else:
                     if worker.role_idx not in self.layer_workers:
                         self.layer_workers[worker.role_idx] = [None, None]
@@ -288,7 +285,7 @@ class Coordinator:
 
                 if len(self.layer_workers) == self.model.n_layers / self.model.layers_per_worker + 1 and \
                         all(self.layer_workers[key][0] is not None and self.layer_workers[key][1] is not None for key in
-                            self.layer_workers[:-1]) and not ignore:
+                            self.layer_workers):
                     # all layers have been assigned
                     # setting a route for all workers
                     dummy_routing_message = Message(
