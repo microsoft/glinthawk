@@ -36,6 +36,8 @@ enum class IntDistributions
 {
   PromptLength,
   PromptLatency,
+  InNodeLatency,
+  InNetLatency,
   KernelForwardTime,
   KernelPreAttentionForwardTime,
   KernelAttentionForwardTime,
@@ -91,13 +93,6 @@ enum class IntDistributions
   PostSerialize2ClsWorkerVarTime,
   ClsSerialize2PreWorkerVarTime,
 
-  //  OutgoingKernelQueueingTime,
-  //  OutgoingWorkerQueueingTime,
-  //  NetworkTime,
-  //  IncomingKernelQueueingTime,
-  //  ContextAdmissionTime,
-  //  AttentionQueueingTime,
-
   IncomingQueue,
   WaitingQueue,
   OutgoingQueue,
@@ -134,6 +129,8 @@ constexpr std::array<std::string_view, static_cast<size_t>( Counters::_Count )> 
 constexpr std::array<std::string_view, static_cast<size_t>( IntDistributions::_Count )> int_dist_keys {
   "prompt_length",
   "prompt_latency",
+  "in_node_latency",
+  "in_net_latency",
   "kernel_forward_time",
   "kernel_pre_attention_forward_time",
   "kernel_attention_forward_time",
@@ -188,13 +185,6 @@ constexpr std::array<std::string_view, static_cast<size_t>( IntDistributions::_C
   "att_serialize_to_post_worker_var_time",
   "post_serialize_to_cls_worker_var_time",
   "cls_serialize_to_pre_worker_var_time",
-
-  //  "outgoing_kernel_queueing_time",
-  //  "outgoing_worker_queueing_time",
-  //  "network_time",
-  //  "incoming_kernel_queueing_time",
-  //  "context_admission_time",
-  //  "attention_queueing_time",
 
   "incoming_queue",
   "waiting_queue",

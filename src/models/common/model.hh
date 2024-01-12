@@ -40,6 +40,7 @@ private:
   // XXX temporary hack for getting some measurements
   uint64_t timestamp_ { 0 };
   uint64_t loop_start_timestamp_ { 0 };
+  uint64_t time_in_node_ { 0 };
   uint64_t batch_timestamp_ { 0 };
   bool batch_last_ { false };
 
@@ -85,6 +86,7 @@ public:
   DataType dtype() const { return dtype_; }
   uint64_t timestamp() const { return timestamp_; }
   uint64_t loop_start_timestamp() const { return loop_start_timestamp_; }
+  uint64_t time_in_node() const { return time_in_node_; }
   uint64_t batch_timestamp() const { return batch_timestamp_; }
   bool batch_last() const { return batch_last_; }
 
@@ -105,6 +107,7 @@ public:
   void set_finished() { finished_ = true; }
   void set_timestamp( const uint64_t timestamp ) { timestamp_ = timestamp; }
   void set_loop_start_timestamp( const uint64_t loop_start_timestamp ) { loop_start_timestamp_ = loop_start_timestamp; }
+  void set_time_in_node( const uint64_t time_in_node ) { time_in_node_ = time_in_node; }
   void set_batch_timestamp( const uint64_t batch_timestamp ) { batch_timestamp_ = batch_timestamp; }
   void set_batch_last( const bool batch_last ) { batch_last_ = batch_last; }
 
