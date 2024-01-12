@@ -76,6 +76,8 @@ public:
 
   DeviceUniquePtr device_allocate( const uint64_t size_bytes );
 
+  void randomize_device_buffer( DType* buffer, const uint64_t len, const float min, const float max );
+
   void copy( DType* dst, const DType* l, const uint64_t batch_size, const CopyType type, const bool async = false );
 };
 
@@ -407,7 +409,24 @@ __global__ void silu_direct( __half* _hb, const __half* _hb2, const uint64_t hid
 
 }
 
+namespace { // randomize
+
+template<typename DType>
+__global__ void init_random_kernel( DType* buffer, uint64_t len, float min, float max, const uint64_t seed )
+{
+  const uint64_t idx = blockIdx.x * blockDim.x + threadIdx.x;
+
+  if ( idx < len ) {
+    curandState state;
+    curand_init( seed, idx, 0, &state );
+    DType val = curand_uniform( &state ) * ( max - min ) + min;
+    buffer[idx] = val;
+  }
 }
+
+}
+
+} // namespace
 
 template<typename DType>
 Operations<DType>::Operations( const int num_streams )
@@ -561,6 +580,12 @@ void Operations<DType>::copy( DType* dst,
   } else {
     CHECK_CUDA( cudaMemcpy( dst, l, size_bytes, convert_to_cuda( type ) ) );
   }
+}
+
+template<typename DType>
+void Operations<DType>::randomize_device_buffer( DType* buffer, const uint64_t len, const float min, const float max )
+{
+  init_random_kernel<<<div_ceil( len, TPB ), TPB>>>( buffer, len, min, max, time( nullptr ) );
 }
 
 } // namespace glinthawk::models::common::cuda

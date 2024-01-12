@@ -52,23 +52,6 @@ void CHECK_DTYPE( const DataType dtype )
 #endif
 }
 
-template<typename DType>
-void randomize_buffer( DType* buffer, size_t len, const float min, const float max )
-{
-  static thread_local std::mt19937 generator { std::random_device {}() };
-  std::uniform_real_distribution<float> distribution( min, max );
-
-  size_t i;
-#pragma omp parallel for schedule( static ) private( i )
-  for ( i = 0; i < len; i++ ) {
-    if constexpr ( std::is_same_v<DType, float> ) {
-      buffer[i] = distribution( generator );
-    } else {
-      buffer[i] = static_cast<DType>( distribution( generator ) );
-    }
-  }
-}
-
 template<typename Config, typename DType, typename LlamaOperations, typename Context>
 void extract_batch_token( LlamaOperations& ops,
                           RunState<Config, DType, Context>& state,
@@ -116,29 +99,39 @@ Llama2<Config, DType, LlamaOperations, Context>::Llama2( const std::filesystem::
   constexpr auto base_size = BaseWeights<Config, DType>::base_size();
   constexpr auto layer_size = LayerWeights<Config, DType>::layer_size();
 
-  // Load the model
-  // (1) loading the base weights
-  //  if ( not randomize_parameters ) {
-  // XXX(pouya): avoid randomizing weights right now so CPU doesn't overload
-  CHECK_EQ( std::filesystem::file_size( base_path ), base_size ) << "Base weights are not the expected size.";
-  FileDescriptor base_fd { CHECK_SYSCALL( "open", open( base_path.c_str(), O_RDONLY ) ) };
-  MMap_Region base_mmap { nullptr, base_size, PROT_READ, MAP_PRIVATE, base_fd.fd_num(), 0 };
+  if ( randomize_parameters ) {
+    LOG( WARNING ) << "Randomizing weights and run state...";
 
-  ops_.copy(
-    base_weights_buffer_.get(), reinterpret_cast<DType*>( base_mmap.addr() ), base_size, CopyType::HostToDevice );
+    ops_.randomize_device_buffer( base_weights_buffer_.get(),
+                                  base_size / sizeof( DType ),
+                                  -10.0 / sqrt( Config::dim ),
+                                  10.0 / sqrt( Config::dim ) );
 
-  LOG( INFO ) << "Loaded base weights (" << base_size << " bytes).";
-  //  } else {
-  //    LOG( WARNING ) << "Randomizing BASEWEIGHTS...";
-  //    std::unique_ptr<DType[]> base { new DType[base_size / sizeof( DType )] };
-  //    randomize_buffer(
-  //      base.get(), base_size / sizeof( DType ), -10.0 / sqrt( Config::dim ), 10.0 / sqrt( Config::dim ) );
-  //
-  //    ops_.copy( base_weights_buffer_.get(), base.get(), base_size, CopyType::HostToDevice );
-  //  }
+    ops_.randomize_device_buffer( layers_buffer_.get(),
+                                  layer_size * settings_.n_layers_loaded() / sizeof( DType ),
+                                  -10.0 / sqrt( Config::dim ),
+                                  10.0 / sqrt( Config::dim ) );
 
-  // (2) load the layers
+    ops_.randomize_device_buffer( run_state_buffer_.get(),
+                                  RunState<Config, DType, Context>::state_size( settings_ ) / sizeof( DType ),
+                                  -10.0 / sqrt( Config::dim ),
+                                  10.0 / sqrt( Config::dim ) );
+
+    LOG( WARNING ) << "Randomizing weights and run state... done.";
+  }
+
   if ( not randomize_parameters ) {
+    // Load BASEWEIGHTS
+    CHECK_EQ( std::filesystem::file_size( base_path ), base_size ) << "Base weights are not the expected size.";
+    FileDescriptor base_fd { CHECK_SYSCALL( "open", open( base_path.c_str(), O_RDONLY ) ) };
+    MMap_Region base_mmap { nullptr, base_size, PROT_READ, MAP_PRIVATE, base_fd.fd_num(), 0 };
+
+    ops_.copy(
+      base_weights_buffer_.get(), reinterpret_cast<DType*>( base_mmap.addr() ), base_size, CopyType::HostToDevice );
+
+    LOG( INFO ) << "Loaded base weights (" << base_size << " bytes).";
+
+    // Load LAYERi
     for ( auto i = settings_.start_layer_num; i <= settings_.end_layer_num; i++ ) {
       const auto layer_path = model_dir / ( "LAYER" + std::to_string( i ) + filename_suffix );
 
@@ -155,15 +148,6 @@ Llama2<Config, DType, LlamaOperations, Context>::Llama2( const std::filesystem::
 
       LOG( INFO ) << "Loaded layer " << i << " (" << layer_size << " bytes).";
     }
-  } else {
-    LOG( WARNING ) << "Randomizing LAYERS...";
-    std::unique_ptr<DType[]> layer_host { new DType[layer_size * settings_.n_layers_loaded() / sizeof( DType )] };
-    randomize_buffer( layer_host.get(),
-                      layer_size * settings_.n_layers_loaded() / sizeof( DType ),
-                      -10.0 / sqrt( Config::dim ),
-                      10.0 / sqrt( Config::dim ) );
-    ops_.copy(
-      layers_buffer_.get(), layer_host.get(), layer_size * settings_.n_layers_loaded(), CopyType::HostToDevice );
   }
 }
 
@@ -172,7 +156,7 @@ void Llama2<Config, DType, LlamaOperations, Context>::dummy_forward( InferenceSt
 {
   CHECK_GE( state.next_layer(), settings_.start_layer_num );
   CHECK_LE( state.next_layer(), settings_.end_layer_num );
-//  state.erase_from_workers( state.next_layer(), state.next_stage() );
+  //  state.erase_from_workers( state.next_layer(), state.next_stage() );
   state.loop_till_next_worker( Config::n_layers );
 }
 
