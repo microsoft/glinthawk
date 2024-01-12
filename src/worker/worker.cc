@@ -107,6 +107,7 @@ void Worker<Model>::setup_peer( std::map<net::Address, Peer>::iterator peer_it )
           }
         }
         state.set_timestamp( current_time );
+        state.set_time_in_node( state.time_in_node() + current_time );
 
         auto state_ser = state.serialize();
         peer_it->second.message_handler.push_message( Message( Message::OpCode::InferenceState, move( state_ser ) ) );
@@ -366,6 +367,8 @@ bool Worker<Model>::handle_coordinator_message( core::Message&& msg )
         state.set_next_stage( InferenceState::Stage::PreAttention );
         state.set_prompt_length( 1 );
         state.set_temperature( temp_dist( temp_gen ) );
+        state.set_loop_start_timestamp( std::chrono::steady_clock::now().time_since_epoch().count() );
+        state.set_time_in_node( -std::chrono::steady_clock::now().time_since_epoch().count() );
         state.set_layer_workers( dummy_route );
 
         states.push_back( move( state ) );
@@ -523,8 +526,12 @@ bool Worker<Model>::handle_peer_message( core::Message&& msg )
         const auto current_time_prompt = std::chrono::steady_clock::now().time_since_epoch().count();
         if ( state.token_pos() > 1 and not state.finished() ) {
           __stats__.add_point<IntDistributions::PromptLatency>( current_time_prompt - state.loop_start_timestamp() );
+          __stats__.add_point<IntDistributions::InNodeLatency>( state.time_in_node() );
+          __stats__.add_point<IntDistributions::InNetLatency>( current_time_prompt - state.loop_start_timestamp()
+                                                               - state.time_in_node() );
         }
         state.set_loop_start_timestamp( current_time_prompt );
+        state.set_time_in_node( 0 );
 
         // We are the first layer: if this inference state contains a generated token, we should save it.
         // otherwise, we load the next token from the prompt.
@@ -551,6 +558,8 @@ bool Worker<Model>::handle_peer_message( core::Message&& msg )
           state.set_token( prompt.token( state.token_pos() ) );
         }
       }
+
+      state.set_time_in_node( state.time_in_node() - current_time );
 
       if ( state.finished() ) {
         this->compute_kernel_->push_finished( move( state ) );
@@ -626,6 +635,7 @@ void Worker<Model>::prompt_preparation_thread_func()
       state.set_prompt_length( prompt.token_count() );
       state.set_temperature( 0.0f );
       state.set_loop_start_timestamp( std::chrono::steady_clock::now().time_since_epoch().count() );
+      state.set_time_in_node( -std::chrono::steady_clock::now().time_since_epoch().count() );
       states.push_back( move( state ) );
     }
 
