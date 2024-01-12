@@ -33,6 +33,7 @@ concept OperationsConcept = requires( T t,
   { t.copy( ptr1, ptr2, size, cpt, flag ) } -> std::same_as<void>;
   { t.copy_table( ptr1, ptr2, size_table, size_table, size_table, cpt, flag ) } -> std::same_as<void>;
   { t.device_allocate( size ) } -> std::same_as<typename T::DeviceUniquePtr>;
+  { t.randomize_device_buffer( ptr1, size, val_f, val_f ) } -> std::same_as<void>;
 };
 
 } // namespace glinthawk::models::common

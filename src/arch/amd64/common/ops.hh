@@ -4,6 +4,7 @@
 #include <random>
 
 #include "models/common/ops/concept.hh"
+#include "util/random.hh"
 
 namespace glinthawk::models::common::amd64 {
 
@@ -43,6 +44,8 @@ public:
   void soft_sample( DType* v, const std::vector<float>& temp_s, const uint64_t batch_size );
 
   DeviceUniquePtr device_allocate( const uint64_t size_bytes );
+
+  void randomize_device_buffer( DType* buffer, const uint64_t len, const float min, const float max );
 
   void copy( DType* dst, const DType* src, const uint64_t len_bytes, const CopyType type, const bool async = false );
 
@@ -213,6 +216,12 @@ void Operations<DType>::copy_table( DType* dst,
     if ( len_bytes[i] > 0 )
       std::memcpy( dst + dst_offset[i], src + src_offset[i], len_bytes[i] );
   }
+}
+
+template<typename DType>
+void Operations<DType>::randomize_device_buffer( DType* buffer, const uint64_t len, const float min, const float max )
+{
+  util::randomize_buffer( buffer, len, min, max );
 }
 
 } // namespace glinthawk::models::common::amd64

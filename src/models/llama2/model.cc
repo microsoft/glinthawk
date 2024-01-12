@@ -52,23 +52,6 @@ void CHECK_DTYPE( const DataType dtype )
 #endif
 }
 
-template<typename DType>
-void randomize_buffer( DType* buffer, size_t len, const float min, const float max )
-{
-  static thread_local std::mt19937 generator { std::random_device {}() };
-  std::uniform_real_distribution<float> distribution( min, max );
-
-  size_t i;
-#pragma omp parallel for schedule( static ) private( i )
-  for ( i = 0; i < len; i++ ) {
-    if constexpr ( std::is_same_v<DType, float> ) {
-      buffer[i] = distribution( generator );
-    } else {
-      buffer[i] = static_cast<DType>( distribution( generator ) );
-    }
-  }
-}
-
 template<typename Config, typename DType, typename LlamaOperations, typename Context>
 void extract_batch_token( LlamaOperations& ops,
                           RunState<Config, DType, Context>& state,
@@ -191,7 +174,7 @@ void Llama2<Config, DType, LlamaOperations, Context>::dummy_forward( InferenceSt
 {
   CHECK_GE( state.next_layer(), settings_.start_layer_num );
   CHECK_LE( state.next_layer(), settings_.end_layer_num );
-//  state.erase_from_workers( state.next_layer(), state.next_stage() );
+  //  state.erase_from_workers( state.next_layer(), state.next_stage() );
   state.loop_till_next_worker( Config::n_layers );
 }
 
