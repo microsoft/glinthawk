@@ -4,9 +4,13 @@
 #include "ops/concept.hh"
 #include "variants.hh"
 
-#if defined( TARGET_PLATFORM_AMD64 )
+// XXX(sadjad): We're assuming AMD64 is a subset of CUDA, i.e., every CUDA platform is also an AMD64 platform.
+// This allows of to create workers that deal with CUDA and AMD64 models at the same time.
+#if defined( TARGET_PLATFORM_AMD64 ) || defined( TARGET_PLATFORM_CUDA )
 #include "arch/amd64/llama2/ops.hh"
-#elif defined( TARGET_PLATFORM_CUDA )
+#endif
+
+#if defined( TARGET_PLATFORM_CUDA )
 #include "arch/cuda/llama2/ops.cuh"
 #endif
 
@@ -91,14 +95,16 @@ public:
              PLATFORM::LlamaOperations<configs::MODEL_NAME, DType, PLATFORM::Context<configs::MODEL_NAME, DType>>,     \
              PLATFORM::Context<configs::MODEL_NAME, DType>>
 
-#if defined( TARGET_PLATFORM_AMD64 )
+#if defined( TARGET_PLATFORM_AMD64 ) || defined( TARGET_PLATFORM_CUDA )
 namespace amd64 {
 DECLARE_MODEL( amd64, Llama2_7B_Chat );
 DECLARE_MODEL( amd64, Llama2_13B_Chat );
 DECLARE_MODEL( amd64, Llama2_70B_Chat );
 DECLARE_MODEL( amd64, Stories_110M );
 }
-#elif defined( TARGET_PLATFORM_CUDA )
+#endif
+
+#if defined( TARGET_PLATFORM_CUDA )
 namespace cuda {
 DECLARE_MODEL( cuda, Llama2_7B_Chat );
 DECLARE_MODEL( cuda, Llama2_13B_Chat );
