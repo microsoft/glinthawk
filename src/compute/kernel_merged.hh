@@ -375,7 +375,7 @@ void ComputeKernelMerged<Model_GPU, Model_CPU>::execution_thread_gpu_func()
             std::lock_guard lock( ctx_mgr_cpu_mutex_ );
             context_cpu = context_manager_cpu_.get_context( results[j].prompt_id(), false );
           }
-          if ( context_cpu.empty() ) {
+          if ( context_cpu->empty() ) {
             waiting_states.emplace_back( std::move( results[j] ) );
           } else {
             processing_states_cpu.emplace_back( std::move( results[j] ), context_cpu );
@@ -476,7 +476,7 @@ void ComputeKernelMerged<Model_GPU, Model_CPU>::execution_thread_gpu_func()
       }
     }
 
-    if ( processing_states_cpu.size > 0 and next_stage == models::InferenceState::Stage::PreAttention ) {
+    if ( processing_states_cpu.size() > 0 and next_stage == models::InferenceState::Stage::PreAttention ) {
       std::lock_guard lock( processing_cpu_mutex_ );
       for ( auto& action : processing_states_cpu ) {
         processing_attention_cpu_.emplace( std::move( action.first ), action.second );
