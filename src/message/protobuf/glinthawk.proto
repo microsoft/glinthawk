@@ -14,7 +14,10 @@ message InitializeWorker
   uint32 concurrency_cls_size = 8;
   uint32 max_context_count = 9;
   bool randomize = 10;
-  string blobstore_uri = 11;
+  uint32 concurrency_att_cpu_size = 11;
+  uint32 max_context_count_cpu = 12;
+  bool randomize_cpu = 13;
+  string blobstore_uri = 14;
 }
 
 message ProcessPrompts { repeated string prompt_ids = 1; }

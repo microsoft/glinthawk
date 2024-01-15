@@ -56,7 +56,8 @@ public:
   size_t total() const { return total_contexts; }
 
   std::shared_ptr<typename Model::ContextType> get_context( const glinthawk::PromptID& prompt_id,
-                                                            const bool emplace_empty = false )
+                                                            const bool emplace_empty = false,
+                                                            const bool produce_empty = false)
   {
     auto it = assigned_contexts_.find( prompt_id );
     if ( it != assigned_contexts_.end() ) {
@@ -65,7 +66,7 @@ public:
 
     std::shared_ptr<typename Model::ContextType> context;
 
-    if ( free_contexts_.empty() ) {
+    if ( free_contexts_.empty() or produce_empty ) {
       context = std::make_shared<typename Model::ContextType>( settings_, true );
 
       if ( emplace_empty ) {
