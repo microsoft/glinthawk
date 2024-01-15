@@ -158,9 +158,11 @@ public:
     }
 
     // do a "fake" forward: remove self from propagation list and set next worker
-    model_gpu_->dummy_forward( state );
-    model_cpu_->dummy_forward( state );
-    model_gpu_->dummy_forward( state );
+    for (int i = 0; i < n_layers_gpu_; i++){
+      model_gpu_->dummy_forward( state );
+      model_cpu_->dummy_forward( state );
+      model_gpu_->dummy_forward( state );
+    }
 
     if ( state.next_stage() == models::InferenceState::Stage::Classification ) {
       // drop release message as it has fully propagated

@@ -133,24 +133,26 @@ void WorkerMerged<Model_GPU, Model_CPU>::setup_blobstore( const string& blobstor
 
 template<typename Model_GPU, typename Model_CPU>
 void WorkerMerged<Model_GPU, Model_CPU>::setup_compute_kernel( const filesystem::path& model_root,
-                                                const int start_layer_gpu,
-                                                const int end_layer_gpu,
-                                                const int concurrency_size_pre_attention_gpu,
-                                                const int concurrency_size_attention_gpu,
-                                                const int concurrency_size_post_attention_gpu,
-                                                const int concurrency_size_classification_gpu,
-                                                const int max_context_count_gpu,
-                                                const bool randomize_gpu,
-                                                const int concurrency_size_attention_cpu,
-                                                const int max_context_count_cpu,
-                                                const bool randomize_cpu )
+                                                               const int start_layer_gpu,
+                                                               const int end_layer_gpu,
+                                                               const int concurrency_size_pre_attention_gpu,
+                                                               const int concurrency_size_attention_gpu,
+                                                               const int concurrency_size_post_attention_gpu,
+                                                               const int concurrency_size_classification_gpu,
+                                                               const int max_context_count_gpu,
+                                                               const bool randomize_gpu,
+                                                               const int concurrency_size_attention_cpu,
+                                                               const int max_context_count_cpu,
+                                                               const bool randomize_cpu )
 {
   CHECK_LE( start_layer_gpu, end_layer_gpu ) << "start_layer must be less than or equal to end_layer";
 
   const int max_concurrency_size_gpu = std::max( { concurrency_size_pre_attention_gpu,
                                                    concurrency_size_attention_gpu,
                                                    concurrency_size_post_attention_gpu,
-                                                   concurrency_size_classification_gpu } );
+                                                   concurrency_size_classification_gpu,
+                                                   1 } );
+  const int max_concurrency_size_cpu = std::max( { concurrency_size_attention_cpu, 1 } );
 
   compute_kernel_ = make_unique<compute::ComputeKernelMerged<Model_GPU, Model_CPU>>(
     make_unique<Model_GPU>(
@@ -162,7 +164,7 @@ void WorkerMerged<Model_GPU, Model_CPU>::setup_compute_kernel( const filesystem:
     start_layer_gpu,
     end_layer_gpu,
     make_unique<Model_CPU>(
-      model_root, 0, 0, concurrency_size_attention_cpu, max_context_count_cpu, randomize_cpu ),
+      model_root, start_layer_gpu, end_layer_gpu, max_concurrency_size_cpu, max_context_count_cpu, randomize_cpu ),
     concurrency_size_attention_cpu );
 
   event_loop_.add_rule( "Compute Kernel",
@@ -174,8 +176,8 @@ void WorkerMerged<Model_GPU, Model_CPU>::setup_compute_kernel( const filesystem:
 
 template<typename Model_GPU, typename Model_CPU>
 WorkerMerged<Model_GPU, Model_CPU>::WorkerMerged( const Address& worker_address,
-                                   const Address& coordinator_address,
-                                   const std::filesystem::path& model_root )
+                                                  const Address& coordinator_address,
+                                                  const std::filesystem::path& model_root )
   : listen_address_( worker_address )
   , listen_socket_( [this]() -> TCPSocket {
     TCPSocket socket;
@@ -386,7 +388,8 @@ bool WorkerMerged<Model_GPU, Model_CPU>::handle_coordinator_message( core::Messa
 
       // also run the completion commiting thread
       if ( not completion_commit_thread_.joinable() ) {
-        completion_commit_thread_ = thread( bind( &WorkerMerged<Model_GPU, Model_CPU>::completion_commit_thread_func, this ) );
+        completion_commit_thread_
+          = thread( bind( &WorkerMerged<Model_GPU, Model_CPU>::completion_commit_thread_func, this ) );
       }
 
       break;
@@ -418,12 +421,14 @@ bool WorkerMerged<Model_GPU, Model_CPU>::handle_coordinator_message( core::Messa
 
       // make sure the prompt preparation thread is running
       if ( not prompt_preparation_thread_.joinable() ) {
-        prompt_preparation_thread_ = thread( bind( &WorkerMerged<Model_GPU, Model_CPU>::prompt_preparation_thread_func, this ) );
+        prompt_preparation_thread_
+          = thread( bind( &WorkerMerged<Model_GPU, Model_CPU>::prompt_preparation_thread_func, this ) );
       }
 
       // also run the completion commiting thread
       if ( not completion_commit_thread_.joinable() ) {
-        completion_commit_thread_ = thread( bind( &WorkerMerged<Model_GPU, Model_CPU>::completion_commit_thread_func, this ) );
+        completion_commit_thread_
+          = thread( bind( &WorkerMerged<Model_GPU, Model_CPU>::completion_commit_thread_func, this ) );
       }
 
       break;
@@ -690,15 +695,15 @@ namespace glinthawk::core {
 namespace models_cpu = glinthawk::models::llama2::amd64;
 namespace models_gpu = glinthawk::models::llama2::cuda;
 
-//template class WorkerMerged<models_gpu::Llama2_7B_Chat<__half>, models_cpu::Llama2_7B_Chat<_Float16>>;
-//template class WorkerMerged<models_gpu::Llama2_13B_Chat<__half>, models_cpu::Llama2_13B_Chat<_Float16>>;
-//template class WorkerMerged<models_gpu::Llama2_70B_Chat<__half>, models_cpu::Llama2_70B_Chat<_Float16>>;
-//template class WorkerMerged<models_gpu::Stories_110M<__half>, models_cpu::Stories_110M<_Float16>>;
+// template class WorkerMerged<models_gpu::Llama2_7B_Chat<__half>, models_cpu::Llama2_7B_Chat<_Float16>>;
+// template class WorkerMerged<models_gpu::Llama2_13B_Chat<__half>, models_cpu::Llama2_13B_Chat<_Float16>>;
+// template class WorkerMerged<models_gpu::Llama2_70B_Chat<__half>, models_cpu::Llama2_70B_Chat<_Float16>>;
+// template class WorkerMerged<models_gpu::Stories_110M<__half>, models_cpu::Stories_110M<_Float16>>;
 //
-//template class WorkerMerged<models_gpu::Llama2_7B_Chat<float>, models_cpu::Llama2_7B_Chat<_Float16>>;
-//template class WorkerMerged<models_gpu::Llama2_13B_Chat<float>, models_cpu::Llama2_13B_Chat<_Float16>>;
-//template class WorkerMerged<models_gpu::Llama2_70B_Chat<float>, models_cpu::Llama2_70B_Chat<_Float16>>;
-//template class WorkerMerged<models_gpu::Stories_110M<float>, models_cpu::Stories_110M<_Float16>>;
+// template class WorkerMerged<models_gpu::Llama2_7B_Chat<float>, models_cpu::Llama2_7B_Chat<_Float16>>;
+// template class WorkerMerged<models_gpu::Llama2_13B_Chat<float>, models_cpu::Llama2_13B_Chat<_Float16>>;
+// template class WorkerMerged<models_gpu::Llama2_70B_Chat<float>, models_cpu::Llama2_70B_Chat<_Float16>>;
+// template class WorkerMerged<models_gpu::Stories_110M<float>, models_cpu::Stories_110M<_Float16>>;
 
 template class WorkerMerged<models_gpu::Llama2_7B_Chat<__half>, models_cpu::Llama2_7B_Chat<float>>;
 template class WorkerMerged<models_gpu::Llama2_13B_Chat<__half>, models_cpu::Llama2_13B_Chat<float>>;

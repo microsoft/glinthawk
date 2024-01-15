@@ -13,9 +13,7 @@ target_link_libraries ( glinthawkcompute_cuda
 add_executable ( profile-offload ../../src/frontend/profile-offload.cu )
 target_link_libraries ( profile-offload glinthawkcompute_cuda )
 
-# Probably incorrect:
-add_executable ( worker_both ../../src/frontend/worker_both.cc )
-target_link_libraries ( worker_both glinthawkcompute_cuda )
+list ( APPEND GLINTHAWK_TARGETS worker_both )
 
 set ( __PLATFORM cuda )
 include ( ../_targets.cmake )
