@@ -690,15 +690,15 @@ namespace glinthawk::core {
 namespace models_cpu = glinthawk::models::llama2::amd64;
 namespace models_gpu = glinthawk::models::llama2::cuda;
 
-template class WorkerMerged<models_gpu::Llama2_7B_Chat<__half>, models_cpu::Llama2_7B_Chat<_Float16>>;
-template class WorkerMerged<models_gpu::Llama2_13B_Chat<__half>, models_cpu::Llama2_13B_Chat<_Float16>>;
-template class WorkerMerged<models_gpu::Llama2_70B_Chat<__half>, models_cpu::Llama2_70B_Chat<_Float16>>;
-template class WorkerMerged<models_gpu::Stories_110M<__half>, models_cpu::Stories_110M<_Float16>>;
-
-template class WorkerMerged<models_gpu::Llama2_7B_Chat<float>, models_cpu::Llama2_7B_Chat<_Float16>>;
-template class WorkerMerged<models_gpu::Llama2_13B_Chat<float>, models_cpu::Llama2_13B_Chat<_Float16>>;
-template class WorkerMerged<models_gpu::Llama2_70B_Chat<float>, models_cpu::Llama2_70B_Chat<_Float16>>;
-template class WorkerMerged<models_gpu::Stories_110M<float>, models_cpu::Stories_110M<_Float16>>;
+//template class WorkerMerged<models_gpu::Llama2_7B_Chat<__half>, models_cpu::Llama2_7B_Chat<_Float16>>;
+//template class WorkerMerged<models_gpu::Llama2_13B_Chat<__half>, models_cpu::Llama2_13B_Chat<_Float16>>;
+//template class WorkerMerged<models_gpu::Llama2_70B_Chat<__half>, models_cpu::Llama2_70B_Chat<_Float16>>;
+//template class WorkerMerged<models_gpu::Stories_110M<__half>, models_cpu::Stories_110M<_Float16>>;
+//
+//template class WorkerMerged<models_gpu::Llama2_7B_Chat<float>, models_cpu::Llama2_7B_Chat<_Float16>>;
+//template class WorkerMerged<models_gpu::Llama2_13B_Chat<float>, models_cpu::Llama2_13B_Chat<_Float16>>;
+//template class WorkerMerged<models_gpu::Llama2_70B_Chat<float>, models_cpu::Llama2_70B_Chat<_Float16>>;
+//template class WorkerMerged<models_gpu::Stories_110M<float>, models_cpu::Stories_110M<_Float16>>;
 
 template class WorkerMerged<models_gpu::Llama2_7B_Chat<__half>, models_cpu::Llama2_7B_Chat<float>>;
 template class WorkerMerged<models_gpu::Llama2_13B_Chat<__half>, models_cpu::Llama2_13B_Chat<float>>;
