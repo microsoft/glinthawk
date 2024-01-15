@@ -79,14 +79,14 @@ private:
   std::thread qmeasure_thread_;
 
 public:
-  ComputeKernelMerged( std::unique_ptr<Model>&& model_gpu,
+  ComputeKernelMerged( std::unique_ptr<Model_GPU>&& model_gpu,
                        const uint64_t target_conc_pre_gpu_size,
                        const uint64_t target_conc_att_gpu_size,
                        const uint64_t target_conc_post_gpu_size,
                        const uint64_t target_conc_cls_gpu_size,
                        const uint64_t start_layer_gpu,
                        const uint64_t end_layer_gpu,
-                       std::unique_ptr<Model>&& model_cpu,
+                       std::unique_ptr<Model_CPU>&& model_cpu,
                        const uint64_t target_conc_att_cpu_size )
     : model_gpu_( std::move( model_gpu ) )
     , context_manager_gpu_( model_gpu_->settings() )
@@ -100,8 +100,8 @@ public:
     , model_cpu_( std::move( model_cpu ) )
     , context_manager_cpu_( model_cpu_->settings() )
     , target_conc_att_cpu_size_( target_conc_att_cpu_size )
-    , processing_pre_attention_gpu_( n_layers_ )
-    , processing_post_attention_gpu_( n_layers_ )
+    , processing_pre_attention_gpu_( n_layers_gpu_ )
+    , processing_post_attention_gpu_( n_layers_gpu_ )
     , running_( true )
     , execution_thread_gpu_( &ComputeKernelMerged::execution_thread_gpu_func, this )
     , execution_thread_cpu_( &ComputeKernelMerged::execution_thread_cpu_func, this )
@@ -149,12 +149,12 @@ public:
     {
       std::lock_guard lock( ctx_mgr_gpu_mutex_ );
       if ( context_manager_gpu_.release( state.prompt_id() ) )
-        ctx_mgr_gpu_mutex_.notify_one();
+        ctx_mgr_gpu_cv_.notify_one();
     }
     {
       std::lock_guard lock( ctx_mgr_cpu_mutex_ );
       if ( context_manager_cpu_.release( state.prompt_id() ) )
-        ctx_mgr_cpu_mutex_.notify_one();
+        ctx_mgr_cpu_cv_.notify_one();
     }
 
     // do a "fake" forward: remove self from propagation list and set next worker
@@ -196,8 +196,8 @@ public:
   }
 };
 
-template<typename Model>
-void ComputeKernelMerged<Model>::execution_thread_gpu_func()
+template<typename Model_GPU, typename Model_CPU>
+void ComputeKernelMerged<Model_GPU, Model_CPU>::execution_thread_gpu_func()
 {
   LOG( INFO ) << "ComputeKernelMerged execution thread for GPU started.";
 
@@ -363,7 +363,7 @@ void ComputeKernelMerged<Model>::execution_thread_gpu_func()
     std::vector<models::InferenceState> outgoing_states;
     std::vector<StateContextPairCPU> processing_states_cpu;
     std::vector<StateContextPairGPU> processing_states_gpu;
-    std::vector << models::InferenceState > waiting_states;
+    std::vector<models::InferenceState> waiting_states;
     switch ( next_stage ) {
       case models::InferenceState::Stage::PreAttention: {
         // the next stage is attention, so if we hold the context and serve attention, add it directly to processing
@@ -442,7 +442,7 @@ void ComputeKernelMerged<Model>::execution_thread_gpu_func()
       std::lock_guard lock( processing_gpu_mutex_ );
       switch ( next_stage ) {
         case models::InferenceState::Stage::PreAttention:
-          for ( auto& action : processing_gpu_states ) {
+          for ( auto& action : processing_states_gpu ) {
             processing_attention_gpu_.emplace( std::move( action.first ), action.second );
           }
           break;
@@ -476,19 +476,26 @@ void ComputeKernelMerged<Model>::execution_thread_gpu_func()
       }
     }
 
-    {
+    if ( processing_states_cpu.size > 0 and next_stage == models::InferenceState::Stage::PreAttention ) {
       std::lock_guard lock( processing_cpu_mutex_ );
-      if ( next_stage == models::InferenceState::Stage::PreAttention ) {
-        for ( auto& action : processing_states_cpu ) {
-          processing_attention_cpu_.emplace( std::move( action.first ), action.second );
-        }
+      for ( auto& action : processing_states_cpu ) {
+        processing_attention_cpu_.emplace( std::move( action.first ), action.second );
       }
+      processing_cpu_cv_.notify_one();
+    }
+
+    if ( waiting_states.size() > 0 and next_stage == models::InferenceState::Stage::PreAttention ) {
+      std::lock_guard lock( waiting_attention_mutex_ );
+      for ( auto& state : waiting_states ) {
+        waiting_attention_.emplace( std::move( state ) );
+      }
+      waiting_attention_cv_.notify_one();
     }
   }
 }
 
-template<typename Model>
-void ComputeKernelMerged<Model>::execution_thread_cpu_func()
+template<typename Model_GPU, typename Model_CPU>
+void ComputeKernelMerged<Model_GPU, Model_CPU>::execution_thread_cpu_func()
 {
   LOG( INFO ) << "ComputeKernelMerged execution thread for CPU started.";
 
@@ -558,15 +565,15 @@ void ComputeKernelMerged<Model>::execution_thread_cpu_func()
     {
       std::lock_guard lock( processing_gpu_mutex_ );
       for ( auto& state : processing_states ) {
-        processing_post_attention_gpu_[state.next_layer() - start_layer_].emplace( std::move( state ) );
+        processing_post_attention_gpu_[state.next_layer() - start_layer_gpu_].emplace( std::move( state ) );
       }
       processing_gpu_cv_.notify_one();
     }
   }
 }
 
-template<typename Model>
-void ComputeKernelMerged<Model>::bookkeeping_thread_func()
+template<typename Model_GPU, typename Model_CPU>
+void ComputeKernelMerged<Model_GPU, Model_CPU>::bookkeeping_thread_func()
 {
   LOG( INFO ) << "ComputeKernelMerged bookkeeping thread started.";
 
@@ -646,7 +653,7 @@ void ComputeKernelMerged<Model>::bookkeeping_thread_func()
           action.set_timestamp( current_time_ctx );
           {
             std::lock_guard lock( processing_cpu_mutex_ );
-            processing_cpu_attention_.emplace( std::move( action ), context );
+            processing_attention_cpu_.emplace( std::move( action ), context );
           }
 
           processing_cpu_cv_.notify_one();
@@ -701,8 +708,8 @@ void ComputeKernelMerged<Model>::bookkeeping_thread_func()
   }
 }
 
-template<typename Model>
-void ComputeKernelMerged<Model>::backlog_thread_func()
+template<typename Model_GPU, typename Model_CPU>
+void ComputeKernelMerged<Model_GPU, Model_CPU>::backlog_thread_func()
 {
   LOG( INFO ) << "ComputeKernelMerged backlog thread started.";
 
@@ -736,7 +743,7 @@ void ComputeKernelMerged<Model>::backlog_thread_func()
     action.set_timestamp( current_time );
 
     {
-      std::lock_guard lock( processing_mutex_ );
+      std::lock_guard lock( processing_cpu_mutex_ );
       processing_attention_cpu_.emplace( std::move( action ), context );
     }
 
@@ -744,8 +751,8 @@ void ComputeKernelMerged<Model>::backlog_thread_func()
   }
 }
 
-template<typename Model>
-void ComputeKernelMerged<Model>::qmeasure_thread_func()
+template<typename Model_GPU, typename Model_CPU>
+void ComputeKernelMerged<Model_GPU, Model_CPU>::qmeasure_thread_func()
 {
   LOG( INFO ) << "ComputeKernelMerged queue measurement thread started.";
 

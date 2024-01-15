@@ -1,4 +1,4 @@
-#include "worker.hh"
+#include "worker_merged.hh"
 
 #include <chrono>
 #include <filesystem>
@@ -168,7 +168,7 @@ void WorkerMerged<Model_GPU, Model_CPU>::setup_compute_kernel( const filesystem:
   event_loop_.add_rule( "Compute Kernel",
                         Direction::In,
                         compute_kernel_->event_fd(),
-                        bind( &WorkerMerged<Model_GPU>::handle_compute_kernel_event, this ),
+                        bind( &WorkerMerged<Model_GPU, Model_CPU>::handle_compute_kernel_event, this ),
                         [this] { return this->compute_kernel_ != nullptr; } );
 }
 
@@ -689,25 +689,25 @@ namespace glinthawk::core {
 namespace models_cpu = glinthawk::models::llama2::amd64;
 namespace models_gpu = glinthawk::models::llama2::cuda;
 
-template class Worker<models_gpu::Llama2_7B_Chat<__half>, models_cpu::Llama2_7B_Chat<_Float16>>;
-template class Worker<models_gpu::Llama2_13B_Chat<__half>, models_cpu::Llama2_13B_Chat<_Float16>>;
-template class Worker<models_gpu::Llama2_70B_Chat<__half>, models_cpu::Llama2_70B_Chat<_Float16>>;
-template class Worker<models_gpu::Stories_110M<__half>, models_cpu::Stories_110M<_Float16>>;
+template class WorkerMerged<models_gpu::Llama2_7B_Chat<__half>, models_cpu::Llama2_7B_Chat<_Float16>>;
+template class WorkerMerged<models_gpu::Llama2_13B_Chat<__half>, models_cpu::Llama2_13B_Chat<_Float16>>;
+template class WorkerMerged<models_gpu::Llama2_70B_Chat<__half>, models_cpu::Llama2_70B_Chat<_Float16>>;
+template class WorkerMerged<models_gpu::Stories_110M<__half>, models_cpu::Stories_110M<_Float16>>;
 
-template class Worker<models_gpu::Llama2_7B_Chat<float>, models_cpu::Llama2_7B_Chat<_Float16>>;
-template class Worker<models_gpu::Llama2_13B_Chat<float>, models_cpu::Llama2_13B_Chat<_Float16>>;
-template class Worker<models_gpu::Llama2_70B_Chat<float>, models_cpu::Llama2_70B_Chat<_Float16>>;
-template class Worker<models_gpu::Stories_110M<float>, models_cpu::Stories_110M<_Float16>>;
+template class WorkerMerged<models_gpu::Llama2_7B_Chat<float>, models_cpu::Llama2_7B_Chat<_Float16>>;
+template class WorkerMerged<models_gpu::Llama2_13B_Chat<float>, models_cpu::Llama2_13B_Chat<_Float16>>;
+template class WorkerMerged<models_gpu::Llama2_70B_Chat<float>, models_cpu::Llama2_70B_Chat<_Float16>>;
+template class WorkerMerged<models_gpu::Stories_110M<float>, models_cpu::Stories_110M<_Float16>>;
 
-template class Worker<models_gpu::Llama2_7B_Chat<__half>, models_cpu::Llama2_7B_Chat<float>>;
-template class Worker<models_gpu::Llama2_13B_Chat<__half>, models_cpu::Llama2_13B_Chat<float>>;
-template class Worker<models_gpu::Llama2_70B_Chat<__half>, models_cpu::Llama2_70B_Chat<float>>;
-template class Worker<models_gpu::Stories_110M<__half>, models_cpu::Stories_110M<float>>;
+template class WorkerMerged<models_gpu::Llama2_7B_Chat<__half>, models_cpu::Llama2_7B_Chat<float>>;
+template class WorkerMerged<models_gpu::Llama2_13B_Chat<__half>, models_cpu::Llama2_13B_Chat<float>>;
+template class WorkerMerged<models_gpu::Llama2_70B_Chat<__half>, models_cpu::Llama2_70B_Chat<float>>;
+template class WorkerMerged<models_gpu::Stories_110M<__half>, models_cpu::Stories_110M<float>>;
 
-template class Worker<models_gpu::Llama2_7B_Chat<float>, models_cpu::Llama2_7B_Chat<float>>;
-template class Worker<models_gpu::Llama2_13B_Chat<float>, models_cpu::Llama2_13B_Chat<float>>;
-template class Worker<models_gpu::Llama2_70B_Chat<float>, models_cpu::Llama2_70B_Chat<float>>;
-template class Worker<models_gpu::Stories_110M<float>, models_cpu::Stories_110M<float>>;
+template class WorkerMerged<models_gpu::Llama2_7B_Chat<float>, models_cpu::Llama2_7B_Chat<float>>;
+template class WorkerMerged<models_gpu::Llama2_13B_Chat<float>, models_cpu::Llama2_13B_Chat<float>>;
+template class WorkerMerged<models_gpu::Llama2_70B_Chat<float>, models_cpu::Llama2_70B_Chat<float>>;
+template class WorkerMerged<models_gpu::Stories_110M<float>, models_cpu::Stories_110M<float>>;
 #endif
 
 } // namespace glinthawk::core
