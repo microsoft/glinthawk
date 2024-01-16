@@ -72,6 +72,7 @@ int main( int argc, char* argv[] )
       vector<shared_ptr<ContextType>> contexts( batch_size );
       vector<models::InferenceState> states( batch_size );
 
+      LOG_EVERY_N( INFO, 100 ) << "Preparing states and contexts for repeat " << r << "...";
       for ( size_t i = 0; i < batch_size; i++ ) {
         contexts[i] = make_shared<ContextType>( model.settings() );
         ops.randomize_device_buffer( contexts[i]->layer( start_layer ).token( 0 ).key(),
@@ -96,6 +97,7 @@ int main( int argc, char* argv[] )
                                   : stage == "att" ? models::InferenceState::Stage::Attention
                                                    : models::InferenceState::Stage::PostAttention );
       }
+      LOG_EVERY_N( INFO, 100 ) << "Preparing states and contexts for repeat " << r << "... done.";
 
       GlobalScopeTimer<Timer::Category::PartialInference> timer {};
 

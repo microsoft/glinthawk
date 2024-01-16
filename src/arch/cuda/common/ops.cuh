@@ -10,6 +10,8 @@
 #include <curand.h>
 #include <curand_kernel.h>
 
+#include "util/random.hh"
+
 namespace glinthawk::models::common::cuda {
 
 constexpr size_t TPB = 64;    /* threads per block */
@@ -411,6 +413,8 @@ __global__ void silu_direct( __half* _hb, const __half* _hb2, const uint64_t hid
 
 namespace { // randomize
 
+// XXX too slow
+/*
 template<typename DType>
 __global__ void init_random_kernel( DType* buffer, uint64_t len, float min, float max, const uint64_t seed )
 {
@@ -423,6 +427,7 @@ __global__ void init_random_kernel( DType* buffer, uint64_t len, float min, floa
     buffer[idx] = val;
   }
 }
+*/
 
 }
 
@@ -585,7 +590,9 @@ void Operations<DType>::copy( DType* dst,
 template<typename DType>
 void Operations<DType>::randomize_device_buffer( DType* buffer, const uint64_t len, const float min, const float max )
 {
-  init_random_kernel<<<div_ceil( len, TPB ), TPB>>>( buffer, len, min, max, time( nullptr ) );
+  std::unique_ptr<DType[]> host_buffer { new DType[len] };
+  util::randomize_buffer( host_buffer.get(), len, min, max );
+  CHECK_CUDA( cudaMemcpy( buffer, host_buffer.get(), len * sizeof( DType ), cudaMemcpyHostToDevice ) );
 }
 
 } // namespace glinthawk::models::common::cuda
