@@ -2,11 +2,13 @@
 #include <filesystem>
 #include <iostream>
 #include <memory>
+#include <tuple>
 
 #include <glog/logging.h>
 
 #include "models/llama2/model.hh"
 
+#include "util/random.hh"
 #include "util/timer.hh"
 
 #define OOF_IMPL
@@ -25,7 +27,7 @@ static void signal_handler( int )
 
 void usage( const char* argv0 )
 {
-  cout << "Usage: " << argv0 << " <model_root> <stage=(pre|att|post)> <batch_size>" << endl;
+  cout << "Usage: " << argv0 << " <model_root> <stage=(pre|att|post)> <batch_size> <repeats>" << endl;
 }
 
 int main( int argc, char* argv[] )
@@ -34,7 +36,7 @@ int main( int argc, char* argv[] )
     abort();
   }
 
-  if ( argc != 4 ) {
+  if ( argc != 5 ) {
     usage( argv[0] );
     return EXIT_FAILURE;
   }
@@ -50,24 +52,64 @@ int main( int argc, char* argv[] )
     // const string model_name { argv[2] }; // XXX let's fix the model to Llama2_70B_Chat for now
     const string stage { argv[2] };
     const uint64_t batch_size = atoi( argv[3] );
+    const uint64_t repeats = atoi( argv[4] );
     const int start_layer = 1;
     const int end_layer = 1;
 
     using ModelType = models::llama2::_GLINTHAWK_ARCH_NS_::Llama2_70B_Chat<_GLINTHAWK_DTYPE_>;
+    using ContextType = ModelType::ContextType;
+    using ConfigType = ModelType::ConfigType;
+
     ModelType model { model_dir, start_layer, end_layer, batch_size, batch_size, true /* random params */ };
 
-    using ContextType = ModelType::ContextType;
-    vector<shared_ptr<ContextType>> contexts( batch_size );
-    vector<models::InferenceState> states( batch_size );
-
+#if defined( TARGET_PLATFORM_AMD64 )
     models::common::_GLINTHAWK_ARCH_NS_::Operations<_GLINTHAWK_DTYPE_> ops;
+#elif defined( TARGET_PLATFORM_CUDA )
+    models::common::_GLINTHAWK_ARCH_NS_::Operations<_GLINTHAWK_DTYPE_> ops { batch_size };
+#endif
 
-    for(size_t i = 0; i < batch_size; i++) {
-      contexts[i] = make_shared<ContextType>( model.settings() );
-      for ( size_t i = 0; i < )
+    for ( size_t r = 0; r < repeats; r++ ) {
+      vector<shared_ptr<ContextType>> contexts( batch_size );
+      vector<models::InferenceState> states( batch_size );
+
+      for ( size_t i = 0; i < batch_size; i++ ) {
+        contexts[i] = make_shared<ContextType>( model.settings() );
+        ops.randomize_device_buffer( contexts[i]->layer( start_layer ).token( 0 ).key(),
+                                     contexts[i]->max_size( model.settings().n_layers_loaded() )
+                                       / sizeof( _GLINTHAWK_DTYPE_ ),
+                                     -10.0 / sqrtf( ConfigType::dim ),
+                                     10.0 / sqrtf( ConfigType::dim ) );
+
+        DataBuffer state_buffer { ( 2 * ConfigType::dim + 2 * ConfigType::kv_dim ) * sizeof( _GLINTHAWK_DTYPE_ ) };
+
+        util::randomize_buffer( reinterpret_cast<_GLINTHAWK_DTYPE_*>( state_buffer.data() ),
+                                state_buffer.len() / sizeof( _GLINTHAWK_DTYPE_ ),
+                                -10.0 / sqrtf( ConfigType::dim ),
+                                10.0 / sqrtf( ConfigType::dim ) );
+
+        states[i] = { DataType::_GLINTHAWK_DTYPE_NAME_ };
+        states[i].set_token_pos( ConfigType::seq_len - 1 );
+        states[i].set_activations( move( state_buffer ) );
+
+        states[i].set_next_layer( start_layer );
+        states[i].set_next_stage( stage == "pre"   ? models::InferenceState::Stage::PreAttention
+                                  : stage == "att" ? models::InferenceState::Stage::Attention
+                                                   : models::InferenceState::Stage::PostAttention );
+      }
+
+      GlobalScopeTimer<Timer::Category::PartialInference> timer {};
+
+      if ( stage == "pre" ) {
+        std::ignore = model.pre_attention_forward( std::move( states ), contexts );
+      } else if ( stage == "att" ) {
+        std::ignore = model.attention_forward( std::move( states ), contexts );
+      } else if ( stage == "post" ) {
+        std::ignore = model.post_attention_forward( std::move( states ) );
+      } else {
+        usage( argv[0] );
+        return EXIT_FAILURE;
+      }
     }
-
-
 
     cerr << endl << global_timer().summary() << endl;
   } catch ( const exception& e ) {
