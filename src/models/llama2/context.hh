@@ -4,6 +4,7 @@
 #include <cstddef>
 #include <type_traits>
 
+#include "arch/float.hh"
 #include "variants.hh"
 
 namespace glinthawk::models::llama2 {
@@ -172,8 +173,8 @@ public:
   bool empty() const { return buffer_ == nullptr; }
 };
 
-static_assert( ContextConcept<Context<configs::Stories_110M, float>, float> );
-static_assert( LayerContextConcept<LayerContext<configs::Stories_110M, float>, float> );
-static_assert( TokenContextConcept<TokenContext<configs::Stories_110M, float>, float> );
+static_assert( ContextConcept<Context<configs::Stories_110M, glinthawk::float32_t>, glinthawk::float32_t> );
+static_assert( LayerContextConcept<LayerContext<configs::Stories_110M, glinthawk::float32_t>, glinthawk::float32_t> );
+static_assert( TokenContextConcept<TokenContext<configs::Stories_110M, glinthawk::float32_t>, glinthawk::float32_t> );
 
 } // namespace glinthawk::models::llama2

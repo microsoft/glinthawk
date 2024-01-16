@@ -5,6 +5,7 @@
 #include <cstring>
 
 #include "models/types.hh"
+#include "arch/float.hh"
 
 namespace glinthawk::models::common {
 
@@ -19,7 +20,7 @@ concept OperationsConcept = requires( T t,
                                       uint32_t* ptr_uint32,
                                       const uint64_t size,
                                       const std::vector<uint64_t> size_table,
-                                      const float val_f,
+                                      const glinthawk::float32_t val_f,
                                       const bool flag,
                                       const CopyType cpt ) {
   typename T::Float16;

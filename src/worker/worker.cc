@@ -51,8 +51,7 @@ void Worker<Model>::setup_stats_handler()
   if ( filesystem::is_socket( telegraf_socket, err ) ) {
     LOG( INFO ) << "Telegraf socket found at " << telegraf_socket.string();
     telegraf_logger_ = make_unique<monitoring::TelegrafLogger>( telegraf_socket );
-    telegraf_logger_->install_rules(
-      event_loop_, telegraf_rule_categories_, []( auto&& ) { return true; }, [] {} );
+    telegraf_logger_->install_rules( event_loop_, telegraf_rule_categories_, []( auto&& ) { return true; }, [] {} );
   } else {
     LOG( WARNING ) << "Telegraf socket not found at " << telegraf_socket.string();
   }
@@ -690,26 +689,17 @@ namespace glinthawk::core {
 
 #if defined( TARGET_PLATFORM_AMD64 )
 namespace models = glinthawk::models::llama2::amd64;
-
-template class Worker<models::Llama2_7B_Chat<_Float16>>;
-template class Worker<models::Llama2_13B_Chat<_Float16>>;
-template class Worker<models::Llama2_70B_Chat<_Float16>>;
-template class Worker<models::Stories_110M<_Float16>>;
-template class Worker<models::Llama2_7B_Chat<float>>;
-template class Worker<models::Llama2_13B_Chat<float>>;
-template class Worker<models::Llama2_70B_Chat<float>>;
-template class Worker<models::Stories_110M<float>>;
 #elif defined( TARGET_PLATFORM_CUDA )
 namespace models = glinthawk::models::llama2::cuda;
-
-template class Worker<models::Llama2_7B_Chat<__half>>;
-template class Worker<models::Llama2_13B_Chat<__half>>;
-template class Worker<models::Llama2_70B_Chat<__half>>;
-template class Worker<models::Stories_110M<__half>>;
-template class Worker<models::Llama2_7B_Chat<float>>;
-template class Worker<models::Llama2_13B_Chat<float>>;
-template class Worker<models::Llama2_70B_Chat<float>>;
-template class Worker<models::Stories_110M<float>>;
 #endif
+
+template class Worker<models::Llama2_7B_Chat<glinthawk::float16_t>>;
+template class Worker<models::Llama2_13B_Chat<glinthawk::float16_t>>;
+template class Worker<models::Llama2_70B_Chat<glinthawk::float16_t>>;
+template class Worker<models::Stories_110M<glinthawk::float16_t>>;
+template class Worker<models::Llama2_7B_Chat<glinthawk::float32_t>>;
+template class Worker<models::Llama2_13B_Chat<glinthawk::float32_t>>;
+template class Worker<models::Llama2_70B_Chat<glinthawk::float32_t>>;
+template class Worker<models::Stories_110M<glinthawk::float32_t>>;
 
 } // namespace glinthawk::core
