@@ -74,14 +74,22 @@ int main( int argc, char* argv[] )
 
       LOG_EVERY_N( INFO, 100 ) << "Preparing states and contexts for repeat " << r << "...";
       for ( size_t i = 0; i < batch_size; i++ ) {
-        contexts[i] = make_shared<ContextType>( model.settings() );
+        {
+          GlobalScopeTimer<Timer::Category::MemoryAllocationDevice> _ {};
+          contexts[i] = make_shared<ContextType>( model.settings() );
+        }
+
         ops.randomize_device_buffer( contexts[i]->layer( start_layer ).token( 0 ).key(),
                                      contexts[i]->max_size( model.settings().n_layers_loaded() )
                                        / sizeof( _GLINTHAWK_DTYPE_ ),
                                      -10.0 / sqrtf( ConfigType::dim ),
                                      10.0 / sqrtf( ConfigType::dim ) );
 
-        DataBuffer state_buffer { ( 2 * ConfigType::dim + 2 * ConfigType::kv_dim ) * sizeof( _GLINTHAWK_DTYPE_ ) };
+        DataBuffer state_buffer;
+        {
+          GlobalScopeTimer<Timer::Category::MemoryAllocationHost> _ {};
+          state_buffer = DataBuffer { ( 2 * ConfigType::dim + 2 * ConfigType::kv_dim ) * sizeof( _GLINTHAWK_DTYPE_ ) };
+        }
 
         util::randomize_buffer( reinterpret_cast<_GLINTHAWK_DTYPE_*>( state_buffer.data() ),
                                 state_buffer.len() / sizeof( _GLINTHAWK_DTYPE_ ),
@@ -96,10 +104,21 @@ int main( int argc, char* argv[] )
         states[i].set_next_stage( stage == "pre"   ? models::InferenceState::Stage::PreAttention
                                   : stage == "att" ? models::InferenceState::Stage::Attention
                                                    : models::InferenceState::Stage::PostAttention );
+
+        string state_serialized;
+        {
+          GlobalScopeTimer<Timer::Category::Serializing> _ {};
+          state_serialized = states[i].serialize();
+        }
+        {
+          GlobalScopeTimer<Timer::Category::Deserializing> _ {};
+          auto state = models::InferenceState { state_serialized };
+          states[i] = move( state );
+        }
       }
       LOG_EVERY_N( INFO, 100 ) << "Preparing states and contexts for repeat " << r << "... done.";
 
-      GlobalScopeTimer<Timer::Category::PartialInference> timer {};
+      GlobalScopeTimer<Timer::Category::PartialInference> _ {};
 
       if ( stage == "pre" ) {
         std::ignore = model.pre_attention_forward( std::move( states ), contexts );
