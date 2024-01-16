@@ -48,7 +48,7 @@ protected:
   constexpr static float beta = 0.0f;
 
 public:
-  Operations( const int num_streams );
+  Operations( const size_t num_streams );
   ~Operations();
 
   Operations( const Operations& ) = delete;
@@ -437,13 +437,13 @@ __global__ void init_random_kernel( DType* buffer, uint64_t len, float min, floa
 } // namespace
 
 template<typename DType>
-Operations<DType>::Operations( const int num_streams )
+Operations<DType>::Operations( const size_t num_streams )
 {
   CHECK_CUBLAS( cublasCreate( &cublas_handle_default ) );
   cublas_handle_count = num_streams;
   streams = (cudaStream_t*)malloc( num_streams * sizeof( cudaStream_t ) );
   cublas_handle_array = (cublasHandle_t*)malloc( num_streams * sizeof( cublasHandle_t ) );
-  for ( int i = 0; i < num_streams; i++ ) {
+  for ( size_t i = 0; i < num_streams; i++ ) {
     cudaStreamCreate( &( streams[i] ) );
     CHECK_CUBLAS( cublasCreate( &( cublas_handle_array[i] ) ) );
     CHECK_CUBLAS( cublasSetStream( cublas_handle_array[i], streams[i] ) );
