@@ -12,7 +12,7 @@
 
 namespace glinthawk::util::digest {
 
-struct SHA256Hash
+struct __attribute__( ( packed ) ) SHA256Hash
 {
   std::array<uint8_t, SHA256_DIGEST_LENGTH> hash {};
 

@@ -80,23 +80,8 @@ void _put_and_advance( PtrType*& ptr, const FieldType& field )
 InferenceState::InferenceState( const string_view serialized )
 {
   auto ptr = serialized.data();
-
-  prompt_id_ = _get_and_advance<decltype( prompt_id_ )>( ptr );
-  route_id_ = _get_and_advance<decltype( route_id_ )>( ptr );
-  model_id_ = _get_and_advance<decltype( model_id_ )>( ptr );
-  token_ = _get_and_advance<decltype( token_ )>( ptr );
-  token_pos_ = _get_and_advance<decltype( token_pos_ )>( ptr );
-  next_layer_ = _get_and_advance<decltype( next_layer_ )>( ptr );
-  next_stage_ = _get_and_advance<decltype( next_stage_ )>( ptr );
-  prompt_length_ = _get_and_advance<decltype( prompt_length_ )>( ptr );
-  temperature_ = _get_and_advance<decltype( temperature_ )>( ptr );
-  finished_ = _get_and_advance<decltype( finished_ )>( ptr );
-  timestamp_ = _get_and_advance<decltype( timestamp_ )>( ptr );
-  loop_start_timestamp_ = _get_and_advance<decltype( loop_start_timestamp_ )>( ptr );
-  time_in_node_ = _get_and_advance<decltype( time_in_node_ )>( ptr );
-  batch_timestamp_ = _get_and_advance<decltype( batch_timestamp_ )>( ptr );
-  batch_last_ = _get_and_advance<decltype( batch_last_ )>( ptr );
-  dtype_ = static_cast<DataType>( _get_and_advance<underlying_type_t<DataType>>( ptr ) );
+  data_ = Data { serialized.data() };
+  ptr += sizeof( data_ );
 
   // These next 4 lines take 10us on average
   const auto len_data = _get_and_advance<uint64_t>( ptr );
@@ -107,27 +92,28 @@ InferenceState::InferenceState( const string_view serialized )
 
 net::Address InferenceState::next_worker() const
 {
-  auto it = layer_workers_.find( { next_layer_, next_stage_ } );
-  CHECK( it != layer_workers_.end() ) << "No worker found for layer " << next_layer_ << ", stage " << next_stage_;
+  auto it = layer_workers_.find( { data_.next_layer_, data_.next_stage_ } );
+  CHECK( it != layer_workers_.end() ) << "No worker found for layer " << data_.next_layer_ << ", stage "
+                                      << data_.next_stage_;
   return it->second;
 }
 
 void InferenceState::loop_till_next_worker( const uint32_t n_layers )
 {
-  switch ( next_stage_ ) {
-    case InferenceState::Stage::PreAttention: next_stage_ = InferenceState::Stage::Attention; break;
-    case InferenceState::Stage::Attention: next_stage_ = InferenceState::Stage::PostAttention; break;
+  switch ( data_.next_stage_ ) {
+    case InferenceState::Stage::PreAttention: data_.next_stage_ = InferenceState::Stage::Attention; break;
+    case InferenceState::Stage::Attention: data_.next_stage_ = InferenceState::Stage::PostAttention; break;
     case InferenceState::Stage::PostAttention:
-      if ( next_layer_ == n_layers - 1 ) {
-        next_stage_ = InferenceState::Stage::Classification;
+      if ( data_.next_layer_ == n_layers - 1 ) {
+        data_.next_stage_ = InferenceState::Stage::Classification;
       } else {
-        next_stage_ = InferenceState::Stage::PreAttention;
-        next_layer_++;
+        data_.next_stage_ = InferenceState::Stage::PreAttention;
+        data_.next_layer_++;
       }
       break;
     case InferenceState::Stage::Classification:
-      next_stage_ = InferenceState::Stage::PreAttention;
-      next_layer_ = 0;
+      data_.next_stage_ = InferenceState::Stage::PreAttention;
+      data_.next_layer_ = 0;
       break;
     default: LOG( FATAL ) << "Invalid stage";
   }
@@ -144,28 +130,11 @@ string InferenceState::serialize() const
   result.resize( serialized_size() );
 
   auto ptr = result.data();
-  _put_and_advance( ptr, prompt_id_ );
-  _put_and_advance( ptr, route_id_ );
-  _put_and_advance( ptr, model_id_ );
-  _put_and_advance( ptr, token_ );
-  _put_and_advance( ptr, token_pos_ );
-  _put_and_advance( ptr, next_layer_ );
-  _put_and_advance( ptr, next_stage_ );
-  _put_and_advance( ptr, prompt_length_ );
-  _put_and_advance( ptr, temperature_ );
-  _put_and_advance( ptr, finished_ );
+  memcpy( ptr, &data_, sizeof( data_ ) );
+  ptr += sizeof( data_ );
 
-  _put_and_advance( ptr, timestamp_ );
-  _put_and_advance( ptr, loop_start_timestamp_ );
-  _put_and_advance( ptr, time_in_node_ );
-  _put_and_advance( ptr, batch_timestamp_ );
-  _put_and_advance( ptr, batch_last_ );
-
-  _put_and_advance( ptr, static_cast<underlying_type_t<DataType>>( dtype_ ) );
   _put_and_advance( ptr, static_cast<uint64_t>( activations_.len() ) );
-
   memcpy( ptr, activations_.data(), activations_.len() );
-  ptr += activations_.len();
 
   return result;
 }
@@ -173,19 +142,12 @@ string InferenceState::serialize() const
 string InferenceState::to_string() const
 {
   ostringstream oss;
-  oss << "InferenceState("
-      << "prompt_id=" << prompt_id_.base58digest().substr( 0, 8 ) << ", "
-      << "route_id=" << route_id_.base58digest().substr( 0, 8 ) << ", "
-      << "token=" << token_ << ", "
-      << "token_pos=" << token_pos_ << ", "
-      << "next_layer=" << next_layer_ << ", "
-      << "next_stage=" << next_stage_ << ", "
-      << "prompt_len=" << prompt_length_ << ", "
-      << "temperature=" << temperature_ << ", "
-      << "finished=" << finished_ << ", "
-      << "dtype=" << dtype_ << ", "
-      << "activations.len=" << activations_ << ", "
-      << "peers={";
+  oss << "InferenceState(" << "prompt_id=" << data_.prompt_id_.base58digest().substr( 0, 8 ) << ", "
+      << "route_id=" << data_.route_id_.base58digest().substr( 0, 8 ) << ", " << "token=" << data_.token_ << ", "
+      << "token_pos=" << data_.token_pos_ << ", " << "next_layer=" << data_.next_layer_ << ", "
+      << "next_stage=" << data_.next_stage_ << ", " << "prompt_len=" << data_.prompt_length_ << ", "
+      << "temperature=" << data_.temperature_ << ", " << "finished=" << data_.finished_ << ", "
+      << "dtype=" << data_.dtype_ << ", " << "activations.len=" << activations_ << ", " << "peers={";
 
   for ( auto& [layer_stage, address] : layer_workers_ ) {
     oss << " (" << layer_stage.first << "-" << layer_stage.second << " -> " << address.to_string() << ")";
@@ -198,21 +160,9 @@ string InferenceState::to_string() const
 
 size_t InferenceState::serialized_size() const
 {
-  return sizeof( PromptID )                                                            /* prompt_id_ */
-         + sizeof( RouteID )                                                           /* route_id_ */
-         + sizeof( ModelID )                                                           /* model_id_ */
-         + sizeof( token_ )                                                            /* token_ */
-         + sizeof( token_pos_ )                                                        /* token_pos_ */
-         + sizeof( next_layer_ )                                                       /* next_layer_ */
-         + sizeof( next_stage_ )                                                       /* next_stage_ */
-         + sizeof( prompt_length_ )                                                    /* prompt_length_ */
-         + sizeof( temperature_ )                                                      /* temperature_ */
-         + sizeof( finished_ )                                                         /* finished_ */
-         + sizeof( timestamp_ ) + sizeof( loop_start_timestamp_ ) + sizeof( batch_timestamp_ ) + sizeof( batch_last_ )
-         + sizeof(time_in_node_) +
-         + sizeof( DataType )                                                          /* dtype_ */
-         + sizeof( uint64_t )                                                          /* activations_.len */
-         + activations_.len();                                                         /* activations_ data */
+  return sizeof( data_ )       /* base */
+         + sizeof( uint64_t )  /* activations_.len */
+         + activations_.len(); /* activations_ data */
 }
 
 }
