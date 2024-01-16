@@ -36,7 +36,14 @@ ostream& operator<<( ostream& o, const Value<T>& v )
 
 string Timer::summary() const
 {
-  constexpr size_t WIDTH = 25;
+  size_t WIDTH = 25;
+
+  for ( size_t i = 0; i < num_categories; i++ ) {
+    cout << _category_names.at( i ) << endl;
+    WIDTH = max( WIDTH, strlen( _category_names.at( i ) ) );
+  }
+
+  WIDTH += 6;
 
   const uint64_t now = timestamp_ns();
   const uint64_t elapsed = now - _beginning_timestamp;
@@ -54,7 +61,7 @@ string Timer::summary() const
     if ( _records.at( i ).count == 0 )
       continue;
 
-    out << "    " << setw( WIDTH - 4 ) << left << string_view { _category_names.at( i ) }.substr( 0, WIDTH - 6 );
+    out << "    " << setw( WIDTH - 4 ) << left << _category_names.at( i );
 
     out << fixed << setprecision( 1 ) << Value<double>( 100 * _records.at( i ).total_ns / double( elapsed ) ) << "%";
     accounted += _records.at( i ).total_ns;
