@@ -5,6 +5,7 @@
 #include <type_traits>
 
 #include "../common/ops.hh"
+#include "arch/float.hh"
 #include "models/llama2/base.hh"
 #include "models/llama2/ops/concept.hh"
 #include "models/llama2/variants.hh"
@@ -47,7 +48,7 @@ public:
                    DType* state_q,
                    typename ContextType::TokenContextType token_contexts[] );
 
-  void soft_sample( DType* v, const std::vector<float>& temp_s, const uint64_t batch_size );
+  void soft_sample( DType* v, const std::vector<glinthawk::float32_t>& temp_s, const uint64_t batch_size );
 
   void copy_kv_cache( typename ContextType::TokenContextType token_contexts[],
                       const DType* state_kv,
@@ -69,11 +70,13 @@ public:
   Context( const Settings<Config>& settings, const bool make_empty = false );
 };
 
-static_assert(
-  LlamaOperationsConcept<LlamaOperations<configs::Stories_110M, float>, float, Settings<configs::Stories_110M>> );
+static_assert( LlamaOperationsConcept<LlamaOperations<configs::Stories_110M, glinthawk::float32_t>,
+                                      glinthawk::float32_t,
+                                      Settings<configs::Stories_110M>> );
 
-static_assert(
-  LlamaOperationsConcept<LlamaOperations<configs::Stories_110M, _Float16>, _Float16, Settings<configs::Stories_110M>> );
+static_assert( LlamaOperationsConcept<LlamaOperations<configs::Stories_110M, glinthawk::float16_t>,
+                                      glinthawk::float16_t,
+                                      Settings<configs::Stories_110M>> );
 
 template<typename Config, typename DType>
 Context<Config, DType>::Context( const Settings<Config>& settings, const bool make_empty )
@@ -109,15 +112,15 @@ void softmax( DType* x, const uint64_t size )
   }
 
   // exp and sum
-  float sum = 0.0f;
+  glinthawk::float32_t sum = 0.0f;
   for ( uint64_t i = 0; i < size; i++ ) {
-    x[i] = DType( expf( float( x[i] - max_val ) ) );
-    sum += float( x[i] );
+    x[i] = static_cast<DType>( expf( static_cast<glinthawk::float32_t>( x[i] - max_val ) ) );
+    sum += static_cast<glinthawk::float32_t>( x[i] );
   }
 
   // normalize
   for ( uint64_t i = 0; i < size; i++ ) {
-    x[i] = DType( float( x[i] ) / sum );
+    x[i] = static_cast<DType>( static_cast<glinthawk::float32_t>( x[i] ) / sum );
   }
 }
 
@@ -137,19 +140,19 @@ inline void do_rope( const DType* freq_cis_real_row,
   DType* q = state_q + head_q_num * head_size;
   DType* k = state_k + head_k_num * head_size;
 
-  const float fcr = freq_cis_real_row[elem_idx / 2];
-  const float fci = freq_cis_imag_row[elem_idx / 2];
+  const glinthawk::float32_t fcr = freq_cis_real_row[elem_idx / 2];
+  const glinthawk::float32_t fci = freq_cis_imag_row[elem_idx / 2];
 
-  const float k0 = k[elem_idx];
-  const float k1 = k[elem_idx + 1];
-  k[elem_idx] = DType( k0 * fcr - k1 * fci );
-  k[elem_idx + 1] = DType( k0 * fci + k1 * fcr );
+  const glinthawk::float32_t k0 = k[elem_idx];
+  const glinthawk::float32_t k1 = k[elem_idx + 1];
+  k[elem_idx] = static_cast<DType>( k0 * fcr - k1 * fci );
+  k[elem_idx + 1] = static_cast<DType>( k0 * fci + k1 * fcr );
 
   for ( uint64_t i = 0; i < gqa_size; i++ ) {
-    const float q0 = q[i * head_size + elem_idx];
-    const float q1 = q[i * head_size + elem_idx + 1];
-    q[i * head_size + elem_idx] = DType( q0 * fcr - q1 * fci );
-    q[i * head_size + elem_idx + 1] = DType( q0 * fci + q1 * fcr );
+    const glinthawk::float32_t q0 = q[i * head_size + elem_idx];
+    const glinthawk::float32_t q1 = q[i * head_size + elem_idx + 1];
+    q[i * head_size + elem_idx] = static_cast<DType>( q0 * fcr - q1 * fci );
+    q[i * head_size + elem_idx + 1] = static_cast<DType>( q0 * fci + q1 * fcr );
   }
 }
 
@@ -158,12 +161,12 @@ inline void do_rope( const DType* freq_cis_real_row,
 namespace { // soft_sample
 
 template<typename DType, uint64_t vocab_size>
-void gumbel_fix( DType* array, float temp )
+void gumbel_fix( DType* array, glinthawk::float32_t temp )
 {
   for ( uint64_t i = 0; i < vocab_size; i++ ) {
-    float myrandf = static_cast<float>( rand() ) / RAND_MAX;
+    glinthawk::float32_t myrandf = static_cast<glinthawk::float32_t>( rand() ) / RAND_MAX;
     myrandf = logf( -logf( myrandf ) );
-    array[i] = DType( float( array[i] ) / temp - myrandf );
+    array[i] = static_cast<DType>( static_cast<glinthawk::float32_t>( array[i] ) / temp - myrandf );
   }
 }
 
@@ -179,7 +182,7 @@ void LlamaOperations<Config, DType, ContextType>::attention_0_gemm(
   const uint64_t batch_size,
   const uint32_t* token_positions )
 {
-  const float scale = 1.0f / sqrtf( Config::head_size );
+  const glinthawk::float32_t scale = 1.0f / sqrtf( Config::head_size );
 
   constexpr uint64_t ld_qry = Config::head_size;
   constexpr uint64_t ld_att = Config::seq_len;
@@ -202,13 +205,13 @@ void LlamaOperations<Config, DType, ContextType>::attention_0_gemm(
       for ( uint64_t key_pos = 0; key_pos < token_positions[i] + 1; key_pos++ ) {
         const DType* current_key = layer_contexts[i].token( key_pos ).key_head( kv_head );
 
-        float sum_s[Config::gqa_size] = { 0.0 };
+        glinthawk::float32_t sum_s[Config::gqa_size] = { 0.0 };
 
         for ( uint64_t p = 0; p < Config::head_size; ++p ) {
-          const float a_value = current_key[p];
+          const glinthawk::float32_t a_value = current_key[p];
 
           for ( uint64_t query_gqa_head = 0; query_gqa_head < Config::gqa_size; query_gqa_head++ ) {
-            const float b_value = current_query[query_gqa_head * ld_qry + p];
+            const glinthawk::float32_t b_value = current_query[query_gqa_head * ld_qry + p];
             sum_s[query_gqa_head] += a_value * b_value;
           }
         }
@@ -249,8 +252,9 @@ void LlamaOperations<Config, DType, ContextType>::attention_2_gemm(
   for ( i = 0; i < batch_size; i++ ) {
     for ( kv_head = 0; kv_head < Config::n_kv_heads; kv_head += Config::attention_rounds ) {
 
-      float sum_s[Config::attention_rounds * Config::gqa_size * Config::head_size];
-      std::memset( sum_s, 0, sizeof( float ) * Config::attention_rounds * Config::gqa_size * Config::head_size );
+      glinthawk::float32_t sum_s[Config::attention_rounds * Config::gqa_size * Config::head_size];
+      std::memset(
+        sum_s, 0, sizeof( glinthawk::float32_t ) * Config::attention_rounds * Config::gqa_size * Config::head_size );
       const DType* current_att = att + i * att_dim_ + kv_head * stride_att;
 
       for ( uint64_t p = 0; p < token_positions[i] + 1; ++p ) {
@@ -258,10 +262,10 @@ void LlamaOperations<Config, DType, ContextType>::attention_2_gemm(
 
         for ( uint64_t round_index = 0; round_index < Config::attention_rounds; round_index++ ) {
           for ( uint64_t att_gqa_head = 0; att_gqa_head < Config::gqa_size; att_gqa_head++ ) {
-            const float b_value = current_att[round_index * stride_att + att_gqa_head * ld_att + p];
+            const glinthawk::float32_t b_value = current_att[round_index * stride_att + att_gqa_head * ld_att + p];
 
             for ( uint64_t val_pos = 0; val_pos < Config::head_size; val_pos++ ) {
-              const float a_value = current_value[round_index * stride_val + val_pos];
+              const glinthawk::float32_t a_value = current_value[round_index * stride_val + val_pos];
               sum_s[round_index * stride_xb + att_gqa_head * Config::head_size + val_pos] += a_value * b_value;
             }
           }

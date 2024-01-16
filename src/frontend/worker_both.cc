@@ -25,8 +25,7 @@ static void signal_handler( int )
 
 void usage( const char* argv0 )
 {
-  cerr << "Usage: " << argv0 << " <model_dir_path> <model_name>"
-       << " <listen_ip> <listen_port>"
+  cerr << "Usage: " << argv0 << " <model_dir_path> <model_name>" << " <listen_ip> <listen_port>"
        << " <coordinator_ip> <coordinator_port>" << endl;
 }
 
@@ -60,9 +59,9 @@ int main( int argc, char* argv[] )
 
 #define CREATE_AND_RUN_WORKER( MODEL_NAME, CLASS_NAME )                                                                \
   if ( model_name == MODEL_NAME ) {                                                                                    \
-    core::WorkerMerged<cuda::CLASS_NAME<_GLINTHAWK_DTYPE_>, amd64::CLASS_NAME<float>> worker { listen_addr,            \
-                                                                                               coordinator_addr,       \
-                                                                                               model_path };           \
+    core::WorkerMerged<cuda::CLASS_NAME<_GLINTHAWK_DTYPE_>, amd64::CLASS_NAME<glinthawk::float32_t>> worker {          \
+      listen_addr, coordinator_addr, model_path                                                                        \
+    };                                                                                                                 \
     worker.run();                                                                                                      \
   }
 

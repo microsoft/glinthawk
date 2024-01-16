@@ -4,6 +4,7 @@
 #include <iostream>
 #include <vector>
 
+#include "arch/float.hh"
 #include "message/handler.hh"
 #include "message/message.hh"
 #include "models/common/model.hh"
@@ -22,7 +23,7 @@ void usage( const char* name ) { cout << "Usage: " << name << " <id=(0|1)> <ip> 
 void send_fake_message( auto& message_handler )
 {
   models::InferenceState fake_state { DataType::Float32 };
-  fake_state.set_activations( { 4096 * sizeof( float ) } );
+  fake_state.set_activations( { 4096 * sizeof( glinthawk::float32_t ) } );
   fake_state.set_timestamp( chrono::steady_clock::now().time_since_epoch().count() );
   core::Message fake_message { core::Message::OpCode::InferenceState, fake_state.serialize() };
   message_handler.push_message( move( fake_message ) );
