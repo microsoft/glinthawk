@@ -18,19 +18,11 @@ namespace {
 template<typename DType>
 std::string dtype_str()
 {
-  if constexpr ( std::is_same_v<DType, float> ) {
+  if constexpr ( std::is_same_v<DType, glinthawk::float32_t> ) {
     return { "FP32" };
-  }
-#if defined( TARGET_PLATFORM_AMD64 )
-  else if constexpr ( std::is_same_v<DType, _Float16> ) {
+  } else if constexpr ( std::is_same_v<DType, glinthawk::float16_t> ) {
     return { "FP16" };
-  }
-#elif defined( TARGET_PLATFORM_CUDA )
-  else if constexpr ( std::is_same_v<DType, __half> ) {
-    return { "FP16" };
-  }
-#endif
-  else {
+  } else {
     LOG( FATAL ) << "invalid dtype";
   }
 }
@@ -38,18 +30,13 @@ std::string dtype_str()
 template<typename DType>
 void CHECK_DTYPE( const DataType dtype )
 {
-  if constexpr ( std::is_same_v<DType, float> ) {
+  if constexpr ( std::is_same_v<DType, glinthawk::float32_t> ) {
     CHECK( dtype == DataType::Float32 );
-  }
-#if defined( TARGET_PLATFORM_AMD64 )
-  else if constexpr ( std::is_same_v<DType, _Float16> ) {
+  } else if constexpr ( std::is_same_v<DType, glinthawk::float16_t> ) {
     CHECK( dtype == DataType::Float16 );
+  } else {
+    LOG( FATAL ) << "invalid dtype";
   }
-#elif defined( TARGET_PLATFORM_CUDA )
-  else if constexpr ( std::is_same_v<DType, __half> ) {
-    CHECK( dtype == DataType::Float16 );
-  }
-#endif
 }
 
 template<typename Config, typename DType, typename LlamaOperations, typename Context>
@@ -919,29 +906,29 @@ BatchedInferenceState<Config> Llama2<Config, DType, LlamaOperations, Context>::c
                         PLATFORM::Context<configs::MODEL, DTYPE>>;
 
 #if defined( TARGET_PLATFORM_AMD64 ) || defined( TARGET_PLATFORM_CUDA )
-INSTANTIATE_MODEL( amd64, Stories_110M, float );
-INSTANTIATE_MODEL( amd64, Llama2_7B_Chat, float );
-INSTANTIATE_MODEL( amd64, Llama2_13B_Chat, float );
-INSTANTIATE_MODEL( amd64, Llama2_70B_Chat, float );
+INSTANTIATE_MODEL( amd64, Stories_110M, glinthawk::float32_t );
+INSTANTIATE_MODEL( amd64, Llama2_7B_Chat, glinthawk::float32_t );
+INSTANTIATE_MODEL( amd64, Llama2_13B_Chat, glinthawk::float32_t );
+INSTANTIATE_MODEL( amd64, Llama2_70B_Chat, glinthawk::float32_t );
 #endif
 
 // _Float16 is not supported by `nvcc`
 #if defined( TARGET_PLATFORM_AMD64 )
-INSTANTIATE_MODEL( amd64, Stories_110M, _Float16 );
-INSTANTIATE_MODEL( amd64, Llama2_7B_Chat, _Float16 );
-INSTANTIATE_MODEL( amd64, Llama2_13B_Chat, _Float16 );
-INSTANTIATE_MODEL( amd64, Llama2_70B_Chat, _Float16 );
+INSTANTIATE_MODEL( amd64, Stories_110M, glinthawk::float16_t );
+INSTANTIATE_MODEL( amd64, Llama2_7B_Chat, glinthawk::float16_t );
+INSTANTIATE_MODEL( amd64, Llama2_13B_Chat, glinthawk::float16_t );
+INSTANTIATE_MODEL( amd64, Llama2_70B_Chat, glinthawk::float16_t );
 #endif
 
 #if defined( TARGET_PLATFORM_CUDA )
-INSTANTIATE_MODEL( cuda, Stories_110M, float );
-INSTANTIATE_MODEL( cuda, Llama2_7B_Chat, float );
-INSTANTIATE_MODEL( cuda, Llama2_13B_Chat, float );
-INSTANTIATE_MODEL( cuda, Llama2_70B_Chat, float );
-INSTANTIATE_MODEL( cuda, Stories_110M, __half );
-INSTANTIATE_MODEL( cuda, Llama2_7B_Chat, __half );
-INSTANTIATE_MODEL( cuda, Llama2_13B_Chat, __half );
-INSTANTIATE_MODEL( cuda, Llama2_70B_Chat, __half );
+INSTANTIATE_MODEL( cuda, Stories_110M, glinthawk::float32_t );
+INSTANTIATE_MODEL( cuda, Llama2_7B_Chat, glinthawk::float32_t );
+INSTANTIATE_MODEL( cuda, Llama2_13B_Chat, glinthawk::float32_t );
+INSTANTIATE_MODEL( cuda, Llama2_70B_Chat, glinthawk::float32_t );
+INSTANTIATE_MODEL( cuda, Stories_110M, glinthawk::float16_t );
+INSTANTIATE_MODEL( cuda, Llama2_7B_Chat, glinthawk::float16_t );
+INSTANTIATE_MODEL( cuda, Llama2_13B_Chat, glinthawk::float16_t );
+INSTANTIATE_MODEL( cuda, Llama2_70B_Chat, glinthawk::float16_t );
 #endif
 
 } // namespace glinthawk::models::llama2

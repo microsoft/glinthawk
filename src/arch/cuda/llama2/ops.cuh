@@ -50,7 +50,7 @@ public:
                    DType* state_q,
                    typename ContextType::TokenContextType token_contexts[] );
 
-  void soft_sample( DType* v, const std::vector<float>& temp_s, const uint64_t batch_size );
+  void soft_sample( DType* v, const std::vector<glinthawk::float32_t>& temp_s, const uint64_t batch_size );
 
   void copy_kv_cache( typename ContextType::TokenContextType token_contexts[],
                       const DType* state_kv,
@@ -71,11 +71,13 @@ public:
   Context( const Settings<Config>& settings, const bool make_empty = false );
 };
 
-static_assert(
-  LlamaOperationsConcept<LlamaOperations<configs::Stories_110M, float>, float, Settings<configs::Stories_110M>> );
+static_assert( LlamaOperationsConcept<LlamaOperations<configs::Stories_110M, glinthawk::float32_t>,
+                                      glinthawk::float32_t,
+                                      Settings<configs::Stories_110M>> );
 
-static_assert(
-  LlamaOperationsConcept<LlamaOperations<configs::Stories_110M, __half>, __half, Settings<configs::Stories_110M>> );
+static_assert( LlamaOperationsConcept<LlamaOperations<configs::Stories_110M, glinthawk::float16_t>,
+                                      glinthawk::float16_t,
+                                      Settings<configs::Stories_110M>> );
 
 namespace {
 
@@ -125,7 +127,7 @@ __global__ void find_max_for_rows( const DType* att, DType* output, const uint64
 
   DType max_value = att[0];
   for ( uint64_t i = 1; i <= token_pos; i++ ) {
-    if constexpr ( std::is_same_v<DType, __half> ) {
+    if constexpr ( std::is_same_v<DType, glinthawk::float16_t> ) {
       max_value = __hmax( max_value, att[i] );
     } else {
       max_value = max( max_value, att[i] );
@@ -143,7 +145,7 @@ __global__ void subtract_and_expf( const DType* values, DType* att )
 
   att += head_num * seq_len;
 
-  if constexpr ( std::is_same_v<DType, __half> ) {
+  if constexpr ( std::is_same_v<DType, glinthawk::float16_t> ) {
     att[token_pos] = hexp( att[token_pos] - values[head_num] );
   } else {
     att[token_pos] = expf( att[token_pos] - values[head_num] );
@@ -215,14 +217,14 @@ __global__ void do_rope( const DType* freq_cis_real_row,
 namespace { // soft_sample
 
 template<typename DType, uint64_t vocab_size>
-__global__ void gumbel_fix( DType* array, const float temp, curandState* rng_state )
+__global__ void gumbel_fix( DType* array, const glinthawk::float32_t temp, curandState* rng_state )
 {
   const uint64_t i = threadIdx.x + blockIdx.x * TPB;
 
   if ( i < vocab_size ) {
-    float myrandf = curand_uniform( rng_state + i );
+    glinthawk::float32_t myrandf = curand_uniform( rng_state + i );
     myrandf = logf( -logf( myrandf ) );
-    if constexpr ( std::is_same_v<DType, __half> ) {
+    if constexpr ( std::is_same_v<DType, glinthawk::float16_t> ) {
       array[i] = __float2half( __half2float( array[i] ) / temp - myrandf );
     } else {
       array[i] = array[i] / temp - myrandf;
@@ -272,7 +274,7 @@ LlamaOperations<Config, DType, ContextType>::LlamaOperations( const Settings<Con
 
   static_assert(
     sizeof( DType ) * Config::dim
-    >= sizeof( float )
+    >= sizeof( glinthawk::float32_t )
          * ( div_ceil( Config::dim, 2 * NRBS ) + div_ceil( div_ceil( Config::dim, 2 * NRBS ), 2 * NRBS ) + 1 ) ); // (j)
 
   static_assert( sizeof( DType ) * ( 4 * Config::dim + 2 * Config::hidden_dim )
@@ -294,8 +296,8 @@ void LlamaOperations<Config, DType, ContextType>::attention_0_gemm(
 {
   static_assert( ContextType::LayerContextType::is_contiguous(), "ContextType::LayerContextType must be contiguous" );
 
-  constexpr cudaDataType_t cuda_arg_type = std::is_same_v<DType, __half> ? CUDA_R_16F : CUDA_R_32F;
-  const float scale = 1.0f / sqrtf( Config::head_size );
+  constexpr cudaDataType_t cuda_arg_type = std::is_same_v<DType, glinthawk::float16_t> ? CUDA_R_16F : CUDA_R_32F;
+  const glinthawk::float32_t scale = 1.0f / sqrtf( Config::head_size );
   constexpr uint64_t k = Config::head_size;
   constexpr uint64_t n = Config::gqa_size;
   constexpr uint64_t lda = Config::n_kv_heads * Config::head_size * 2;
@@ -346,7 +348,7 @@ void LlamaOperations<Config, DType, ContextType>::attention_2_gemm(
 {
   static_assert( ContextType::LayerContextType::is_contiguous(), "ContextType::LayerContextType must be contiguous" );
 
-  constexpr cudaDataType_t cuda_arg_type = std::is_same_v<DType, __half> ? CUDA_R_16F : CUDA_R_32F;
+  constexpr cudaDataType_t cuda_arg_type = std::is_same_v<DType, glinthawk::float16_t> ? CUDA_R_16F : CUDA_R_32F;
 
   constexpr uint64_t m = Config::head_size;
   constexpr uint64_t n = Config::gqa_size;

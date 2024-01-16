@@ -3,6 +3,7 @@
 #include <memory>
 #include <random>
 
+#include "arch/float.hh"
 #include "models/common/ops/concept.hh"
 #include "util/random.hh"
 
@@ -13,8 +14,8 @@ class Operations
 {
 public:
   using DeviceUniquePtr = std::unique_ptr<DType>;
-  using Float16 = _Float16;
-  using Float32 = float;
+  using Float16 = glinthawk::float16_t;
+  using Float32 = glinthawk::float32_t;
 
 public:
   Operations() {}
@@ -50,8 +51,8 @@ public:
   void copy( DType* dst, const DType* src, const uint64_t len_bytes, const CopyType type, const bool async = false );
 };
 
-static_assert( OperationsConcept<Operations<float>, float> );
-static_assert( OperationsConcept<Operations<_Float16>, _Float16> );
+static_assert( OperationsConcept<Operations<glinthawk::float32_t>, glinthawk::float32_t> );
+static_assert( OperationsConcept<Operations<glinthawk::float16_t>, glinthawk::float16_t> );
 
 // helper functions are in this anonymous namespace
 namespace {
@@ -66,11 +67,11 @@ void fast_matmul_row_major( uint64_t n, const DType* A, const DType* B, DType* C
 #pragma omp parallel for private( row, col ) shared( A, B, C ) collapse( 2 )
   for ( row = 0; row < m; row++ ) {
     for ( col = 0; col < n; col++ ) {
-      float sum = 0.0;
+      glinthawk::float32_t sum = 0.0;
 
       for ( uint64_t p = 0; p < k; ++p ) {
-        const float a_value = A[row * lda + p];
-        const float b_value = B[col * ldb + p];
+        const glinthawk::float32_t a_value = A[row * lda + p];
+        const glinthawk::float32_t b_value = B[col * ldb + p];
         sum += a_value * b_value;
       }
 
@@ -92,7 +93,8 @@ void Operations<DType>::accum( DType* a, const DType* b, const uint64_t batch_si
 #pragma omp parallel for private( b_idx, i ) collapse( 2 )
   for ( b_idx = 0; b_idx < batch_size; b_idx++ ) {
     for ( i = 0; i < size; i++ ) {
-      a[b_idx * size + i] = DType( float( a[b_idx * size + i] ) + float( b[b_idx * size + i] ) );
+      a[b_idx * size + i] = static_cast<DType>( static_cast<glinthawk::float32_t>( a[b_idx * size + i] )
+                                                + static_cast<glinthawk::float32_t>( b[b_idx * size + i] ) );
     }
   }
 }
@@ -108,9 +110,9 @@ void Operations<DType>::rmsnorm( DType* output, const DType* x, DType*, const DT
     DType* O = output + b * size;
 
     // calculate sum of squares
-    float ss = 0.0f;
+    glinthawk::float32_t ss = 0.0f;
     for ( uint64_t j = 0; j < size; j++ ) {
-      ss += float( X[j] ) * float( X[j] );
+      ss += static_cast<glinthawk::float32_t>( X[j] ) * static_cast<glinthawk::float32_t>( X[j] );
     }
 
     ss /= size;
@@ -119,7 +121,8 @@ void Operations<DType>::rmsnorm( DType* output, const DType* x, DType*, const DT
 
     // normalize and scale
     for ( uint64_t j = 0; j < size; j++ ) {
-      O[j] = DType( float( weight[j] ) * ( ss * float( X[j] ) ) );
+      O[j] = static_cast<DType>( static_cast<glinthawk::float32_t>( weight[j] )
+                                 * ( ss * static_cast<glinthawk::float32_t>( X[j] ) ) );
     }
   }
 }
@@ -134,7 +137,7 @@ void Operations<DType>::argmax( uint32_t* output, const DType* v, DType*, const 
     const DType* this_v = v + b * n;
 
     uint64_t max_i = 0;
-    float max_p = this_v[0];
+    glinthawk::float32_t max_p = this_v[0];
 
     for ( uint64_t i = 1; i < n; i++ ) {
       if ( this_v[i] > max_p ) {
@@ -158,8 +161,9 @@ void Operations<DType>::silu( DType* hb, DType* hb2, const uint64_t batch_size )
     DType* current_hb2 = hb2 + b * hidden_dim;
 
     for ( size_t i = 0; i < hidden_dim; i++ ) {
-      const float x = current_hb[i];
-      current_hb[i] = DType( x * ( 1.0f / ( 1.0f + expf( -x ) ) ) * float( current_hb2[i] ) );
+      const glinthawk::float32_t x = current_hb[i];
+      current_hb[i] = static_cast<DType>( x * ( 1.0f / ( 1.0f + expf( -x ) ) )
+                                          * static_cast<glinthawk::float32_t>( current_hb2[i] ) );
     }
   }
 }

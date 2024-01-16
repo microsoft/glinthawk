@@ -61,11 +61,10 @@ struct SimpleComputeKernelTraits;
 
 #if defined( TARGET_PLATFORM_AMD64 )
 
-
 template<>
 struct SimpleComputeKernelTraits<Platform::AMD64, DataType::Float32>
 {
-  using DType = float;
+  using DType = glinthawk::float32_t;
 
   using Stories_110M = models::llama2::amd64::Stories_110M<DType>;
   using Llama2_7B_Chat = models::llama2::amd64::Llama2_7B_Chat<DType>;
@@ -81,7 +80,7 @@ struct SimpleComputeKernelTraits<Platform::AMD64, DataType::Float32>
 template<>
 struct SimpleComputeKernelTraits<Platform::AMD64, DataType::Float16>
 {
-  using DType = _Float16;
+  using DType = glinthawk::float16_t;
 
   using Stories_110M = models::llama2::amd64::Stories_110M<DType>;
   using Llama2_7B_Chat = models::llama2::amd64::Llama2_7B_Chat<DType>;
@@ -99,7 +98,7 @@ struct SimpleComputeKernelTraits<Platform::AMD64, DataType::Float16>
 template<>
 struct SimpleComputeKernelTraits<Platform::CUDA, DataType::Float32>
 {
-  using DType = float;
+  using DType = glinthawk::float32_t;
 
   using Stories_110M = models::llama2::cuda::Stories_110M<DType>;
   using Llama2_7B_Chat = models::llama2::cuda::Llama2_7B_Chat<DType>;
@@ -115,7 +114,7 @@ struct SimpleComputeKernelTraits<Platform::CUDA, DataType::Float32>
 template<>
 struct SimpleComputeKernelTraits<Platform::CUDA, DataType::Float16>
 {
-  using DType = __half;
+  using DType = glinthawk::float16_t;
 
   using Stories_110M = models::llama2::cuda::Stories_110M<DType>;
   using Llama2_7B_Chat = models::llama2::cuda::Llama2_7B_Chat<DType>;
