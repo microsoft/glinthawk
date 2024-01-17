@@ -14,6 +14,11 @@ if ( CMAKE_CUDA_COMPILER )
 
   add_compile_options ( "$<$<COMPILE_LANGUAGE:CUDA>:--extended-lambda>" )
   add_compile_options ( "$<$<COMPILE_LANGUAGE:CUDA>:--compiler-options=-fopenmp>" )
+  add_compile_options ( "$<$<COMPILE_LANGUAGE:CUDA>:--compiler-options=-O3>" )
+  add_compile_options ( "$<$<COMPILE_LANGUAGE:CUDA>:--optimize=3>" )
+  add_compile_options ( "$<$<COMPILE_LANGUAGE:CUDA>:--compiler-options=-ffast-math>" )
+  add_compile_options ( "$<$<COMPILE_LANGUAGE:CUDA>:--compiler-options=-fsingle-precision-constant>" )
+  add_compile_options ( "$<$<COMPILE_LANGUAGE:CUDA>:--ptxas-options=-O3>" )
 
   set_property ( GLOBAL PROPERTY CUDA_SEPARABLE_COMPILATION ON )
   set_property ( GLOBAL PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS ON )
