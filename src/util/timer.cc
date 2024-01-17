@@ -39,7 +39,6 @@ string Timer::summary() const
   size_t WIDTH = 25;
 
   for ( size_t i = 0; i < num_categories; i++ ) {
-    cout << _category_names.at( i ) << endl;
     WIDTH = max( WIDTH, strlen( _category_names.at( i ) ) );
   }
 
