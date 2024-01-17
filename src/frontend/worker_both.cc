@@ -42,8 +42,8 @@ int main( int argc, char* argv[] )
 
   signal( SIGINT, signal_handler );
 
-  FLAGS_logtostderr = true;
-  FLAGS_colorlogtostderr = true;
+  FLAGS_logtostderr = false;
+  FLAGS_colorlogtostderr = false;
   google::InitGoogleLogging( argv[0] );
 
   const filesystem::path model_path { argv[1] };

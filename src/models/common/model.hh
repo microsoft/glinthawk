@@ -70,6 +70,7 @@ public:
 
   std::string serialize() const;
   std::string to_string() const;
+  std::string to_log() const;
 
   PromptID prompt_id() const { return prompt_id_; }
   RouteID route_id() const { return route_id_; }

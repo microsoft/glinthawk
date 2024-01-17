@@ -196,6 +196,13 @@ string InferenceState::to_string() const
   return oss.str();
 }
 
+string InferenceState::to_log() const
+{
+  ostringstream oss;
+  oss << prompt_id_.base58digest().substr( 0, 8 ) << "," << token_pos_ << "," << next_layer_ << "," << next_stage_;
+  return oss.str();
+}
+
 size_t InferenceState::serialized_size() const
 {
   return sizeof( PromptID )                                                            /* prompt_id_ */
