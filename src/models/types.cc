@@ -17,6 +17,10 @@ DataBufferPool DataBuffer::pool_ {};
 
 void DataBufferDeleter::operator()( uint8_t* ptr ) const
 {
+  if ( !ptr ) {
+    return;
+  }
+
   if ( ENABLE_DATA_BUFFER_POOL && pool_ && buffer_len_ >= MIN_BUFFER_SIZE_POOLED ) {
     pool_->release( ptr, buffer_len_ );
   } else {
@@ -46,7 +50,7 @@ DataBufferPool::PtrType DataBufferPool::get( const size_t n )
 
   // do we have a buffer already allocated in the pool?
   auto it = unused_buffers_.find( n );
-  if ( it != unused_buffers_.end() or it->second.empty() ) {
+  if ( it == unused_buffers_.end() or it->second.empty() ) {
     result = PtrType { new uint8_t[n], DataBufferDeleter() };
   } else {
     // return the one from the pool
