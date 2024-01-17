@@ -17,7 +17,7 @@ COPY . ./
 
 WORKDIR /app/build
 ENV CXX="g++-12" CC="gcc-12"
-RUN cmake -DCMAKE_BUILD_TYPE=MinSizeRel -DGCC_TARGET_ARCH=znver2 ../src
+RUN cmake -DCMAKE_BUILD_TYPE=Release -DGCC_TARGET_ARCH=znver2 ../src
 RUN cmake --build . --target worker-cuda-fp16 worker-amd64-fp32 -j$(nproc)
 RUN cmake --build . --target worker_both-cuda-fp16 -j$(nproc)
 
