@@ -21,8 +21,6 @@ enum class DataType : uint8_t
 
 size_t DataTypeSize( const DataType dtype );
 
-constexpr size_t MIN_BUFFER_SIZE_POOLED = 8 * 1024; // 8 KiB
-
 class DataBufferPool;
 
 class DataBufferDeleter

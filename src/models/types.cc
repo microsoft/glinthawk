@@ -6,11 +6,18 @@ using namespace std;
 
 namespace glinthawk {
 
+namespace {
+
+constexpr bool ENABLE_DATA_BUFFER_POOL = false;
+constexpr size_t MIN_BUFFER_SIZE_POOLED = 8 * 1024; // 8 KiB
+
+}
+
 DataBufferPool DataBuffer::pool_ {};
 
 void DataBufferDeleter::operator()( uint8_t* ptr ) const
 {
-  if ( pool_ && buffer_len_ >= MIN_BUFFER_SIZE_POOLED ) {
+  if ( ENABLE_DATA_BUFFER_POOL && pool_ && buffer_len_ >= MIN_BUFFER_SIZE_POOLED ) {
     pool_->release( ptr, buffer_len_ );
   } else {
     delete[] ptr;
@@ -19,13 +26,17 @@ void DataBufferDeleter::operator()( uint8_t* ptr ) const
 
 void DataBufferDeleter::set_buffer_pool( DataBufferPool* pool, const size_t len )
 {
+  if ( !ENABLE_DATA_BUFFER_POOL ) {
+    return;
+  }
+
   this->pool_ = pool;
   this->buffer_len_ = len;
 }
 
 DataBufferPool::PtrType DataBufferPool::get( const size_t n )
 {
-  if ( n < MIN_BUFFER_SIZE_POOLED ) {
+  if ( !ENABLE_DATA_BUFFER_POOL || n < MIN_BUFFER_SIZE_POOLED ) {
     // small buffers are not pooled
     return PtrType { new uint8_t[n], DataBufferDeleter() };
   }
