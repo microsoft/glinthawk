@@ -13,6 +13,7 @@ if ( CMAKE_CUDA_COMPILER )
   set ( CUDA_ENABLED ON )
 
   add_compile_options ( "$<$<COMPILE_LANGUAGE:CUDA>:--extended-lambda>" )
+  add_compile_options ( "$<$<COMPILE_LANGUAGE:CUDA>:--compiler-options=-fopenmp>" )
 
   set_property ( GLOBAL PROPERTY CUDA_SEPARABLE_COMPILATION ON )
   set_property ( GLOBAL PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS ON )
