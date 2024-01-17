@@ -158,7 +158,7 @@ public:
     }
 
     // do a "fake" forward: remove self from propagation list and set next worker
-    for (int i = 0; i < n_layers_gpu_; i++){
+    for ( int i = 0; i < n_layers_gpu_; i++ ) {
       model_gpu_->dummy_forward( state );
       model_cpu_->dummy_forward( state );
       model_gpu_->dummy_forward( state );
@@ -289,8 +289,8 @@ void ComputeKernelMerged<Model_GPU, Model_CPU>::execution_thread_gpu_func()
     switch ( next_stage ) {
       case models::InferenceState::Stage::PreAttention: {
         for ( auto& state : input_states ) {
-          __stats__.add_point<IntDistributions::PreKernelIncoming2BatchingTime>( start.time_since_epoch().count()
-                                                                                 - state.timestamp() );
+          __stats__.add_point<IntDistributions::MergedPreKernelIncoming2BatchingTime>( start.time_since_epoch().count()
+                                                                                       - state.timestamp() );
         }
         results = model_gpu_->pre_attention_forward( std::move( input_states ), contexts );
         const auto end = std::chrono::steady_clock::now();
@@ -305,17 +305,17 @@ void ComputeKernelMerged<Model_GPU, Model_CPU>::execution_thread_gpu_func()
       } break;
       case models::InferenceState::Stage::Attention: {
         for ( auto& state : input_states ) {
-          __stats__.add_point<IntDistributions::AttKernelContext2BatchingTime>( start.time_since_epoch().count()
+          __stats__.add_point<IntDistributions::MergedAttContext2BatchingTime>( start.time_since_epoch().count()
                                                                                 - state.timestamp() );
           if ( state.batch_last() ) {
-            __stats__.add_point<IntDistributions::AttKernelContext2BatchingTimeBatch>( start.time_since_epoch().count()
+            __stats__.add_point<IntDistributions::MergedAttContext2BatchingTimeBatch>( start.time_since_epoch().count()
                                                                                        - state.batch_timestamp() );
           }
         }
         results = model_gpu_->attention_forward( std::move( input_states ), contexts );
         const auto end = std::chrono::steady_clock::now();
         const auto duration = std::chrono::duration_cast<std::chrono::microseconds>( end - start );
-        __stats__.add_point<IntDistributions::KernelAttentionForwardTime>( duration.count() );
+        __stats__.add_point<IntDistributions::CUDAKernelAttentionForwardTime>( duration.count() );
         for ( auto& result : results ) {
           result.set_timestamp( end.time_since_epoch().count() );
           result.set_batch_timestamp( end.time_since_epoch().count() );
@@ -325,10 +325,10 @@ void ComputeKernelMerged<Model_GPU, Model_CPU>::execution_thread_gpu_func()
       } break;
       case models::InferenceState::Stage::PostAttention: {
         for ( auto& state : input_states ) {
-          __stats__.add_point<IntDistributions::PostKernelIncoming2BatchingTime>( start.time_since_epoch().count()
-                                                                                  - state.timestamp() );
+          __stats__.add_point<IntDistributions::MergedAttInference2PostBatchingTime>( start.time_since_epoch().count()
+                                                                                      - state.timestamp() );
           if ( state.batch_last() ) {
-            __stats__.add_point<IntDistributions::PostKernelIncoming2BatchingTimeBatch>(
+            __stats__.add_point<IntDistributions::MergedAttInference2PostBatchingTimeBatch>(
               start.time_since_epoch().count() - state.batch_timestamp() );
           }
         }
@@ -345,8 +345,8 @@ void ComputeKernelMerged<Model_GPU, Model_CPU>::execution_thread_gpu_func()
       } break;
       case models::InferenceState::Stage::Classification: {
         for ( auto& state : input_states ) {
-          __stats__.add_point<IntDistributions::ClsKernelIncoming2BatchingTime>( start.time_since_epoch().count()
-                                                                                 - state.timestamp() );
+          __stats__.add_point<IntDistributions::MergedClsKernelIncoming2BatchingTime>( start.time_since_epoch().count()
+                                                                                       - state.timestamp() );
         }
         results = model_gpu_->classify_forward( std::move( input_states ) );
         const auto end = std::chrono::steady_clock::now();
@@ -380,6 +380,14 @@ void ComputeKernelMerged<Model_GPU, Model_CPU>::execution_thread_gpu_func()
           if ( context_cpu->empty() ) {
             waiting_states.emplace_back( std::move( results[j] ) );
           } else {
+            const auto current_time = std::chrono::steady_clock::now().time_since_epoch().count();
+            __stats__.add_point<IntDistributions::MergedPreInference2AttContextTime>( current_time
+                                                                                      - results[j].timestamp() );
+            if ( results[j].batch_last() ) {
+              __stats__.add_point<IntDistributions::MergedPreInference2AttContextTimeBatch>(
+                current_time - results[j].batch_timestamp() );
+            }
+            results[j].set_timestamp( current_time );
             processing_states_cpu.emplace_back( std::move( results[j] ), context_cpu );
           }
         }
@@ -523,17 +531,17 @@ void ComputeKernelMerged<Model_GPU, Model_CPU>::execution_thread_cpu_func()
     std::vector<models::InferenceState> results;
 
     for ( auto& state : input_states ) {
-      __stats__.add_point<IntDistributions::AttKernelContext2BatchingTime>( start.time_since_epoch().count()
+      __stats__.add_point<IntDistributions::MergedAttContext2BatchingTime>( start.time_since_epoch().count()
                                                                             - state.timestamp() );
       if ( state.batch_last() ) {
-        __stats__.add_point<IntDistributions::AttKernelContext2BatchingTimeBatch>( start.time_since_epoch().count()
+        __stats__.add_point<IntDistributions::MergedAttContext2BatchingTimeBatch>( start.time_since_epoch().count()
                                                                                    - state.batch_timestamp() );
       }
     }
     results = model_cpu_->attention_forward( std::move( input_states ), contexts );
     const auto end = std::chrono::steady_clock::now();
     const auto duration = std::chrono::duration_cast<std::chrono::microseconds>( end - start );
-    __stats__.add_point<IntDistributions::KernelAttentionForwardTime>( duration.count() );
+    __stats__.add_point<IntDistributions::AMD64KernelAttentionForwardTime>( duration.count() );
     for ( auto& result : results ) {
       result.set_timestamp( end.time_since_epoch().count() );
       result.set_batch_timestamp( end.time_since_epoch().count() );
@@ -553,7 +561,7 @@ void ComputeKernelMerged<Model_GPU, Model_CPU>::execution_thread_cpu_func()
       }
     }
 
-    {
+    if ( outgoing_states.size() > 0 ) {
       std::lock_guard lock( outgoing_mutex_ );
       for ( auto& state : outgoing_states ) {
         outgoing_.emplace( std::move( state ) );
@@ -564,7 +572,7 @@ void ComputeKernelMerged<Model_GPU, Model_CPU>::execution_thread_cpu_func()
       event_fd_.write_event();
     }
 
-    {
+    if ( processing_states.size() > 0 ) {
       std::lock_guard lock( processing_gpu_mutex_ );
       for ( auto& state : processing_states ) {
         processing_post_attention_gpu_[state.next_layer() - start_layer_gpu_].emplace( std::move( state ) );
@@ -599,7 +607,7 @@ void ComputeKernelMerged<Model_GPU, Model_CPU>::bookkeeping_thread_func()
     const auto current_time = std::chrono::steady_clock::now().time_since_epoch().count();
     switch ( action.next_stage() ) {
       case models::InferenceState::Stage::PreAttention: {
-        __stats__.add_point<IntDistributions::PreWorker2KernelIncomingTime>( current_time - action.timestamp() );
+        __stats__.add_point<IntDistributions::MergedPreWorker2KernelIncomingTime>( current_time - action.timestamp() );
         action.set_timestamp( current_time );
 
         // for action in pre-attention stage, get (try to create) context and just push to compute.
@@ -625,13 +633,6 @@ void ComputeKernelMerged<Model_GPU, Model_CPU>::bookkeeping_thread_func()
       }
 
       case models::InferenceState::Stage::Attention: {
-        __stats__.add_point<IntDistributions::AttWorker2KernelIncomingTime>( current_time - action.timestamp() );
-        if ( action.batch_last() ) {
-          __stats__.add_point<IntDistributions::AttWorker2KernelIncomingTimeBatch>( current_time
-                                                                                    - action.batch_timestamp() );
-        }
-        action.set_timestamp( current_time );
-
         // for action in attention stage, get non-empty context and just push to compute.
         // if the context doesn't exist, just wait
         CHECK_GT( target_conc_att_cpu_size_, 0 ) << "This machine does not service the Attention pipeline";
@@ -646,13 +647,6 @@ void ComputeKernelMerged<Model_GPU, Model_CPU>::bookkeeping_thread_func()
           context = context_manager_cpu_.get_context( action.prompt_id(), false );
         }
         if ( not context.get()->empty() ) {
-          const auto current_time_ctx = std::chrono::steady_clock::now().time_since_epoch().count();
-          __stats__.add_point<IntDistributions::AttKernelIncoming2ContextTime>( current_time_ctx - action.timestamp() );
-          if ( action.batch_last() ) {
-            __stats__.add_point<IntDistributions::AttKernelIncoming2ContextTimeBatch>( current_time
-                                                                                       - action.batch_timestamp() );
-          }
-          action.set_timestamp( current_time_ctx );
           {
             std::lock_guard lock( processing_cpu_mutex_ );
             processing_attention_cpu_.emplace( std::move( action ), context );
@@ -675,12 +669,6 @@ void ComputeKernelMerged<Model_GPU, Model_CPU>::bookkeeping_thread_func()
       }
 
       case models::InferenceState::Stage::PostAttention: {
-        __stats__.add_point<IntDistributions::PostWorker2KernelIncomingTime>( current_time - action.timestamp() );
-        if ( action.batch_last() ) {
-          __stats__.add_point<IntDistributions::PostWorker2KernelIncomingTimeBatch>( current_time
-                                                                                     - action.batch_timestamp() );
-        }
-        action.set_timestamp( current_time );
         // for action in post-attention stage, push to compute without context
         CHECK_GT( target_conc_post_gpu_size_, 0 ) << "This machine does not service the PostAttention pipeline";
         {
@@ -693,7 +681,7 @@ void ComputeKernelMerged<Model_GPU, Model_CPU>::bookkeeping_thread_func()
       }
 
       case models::InferenceState::Stage::Classification: {
-        __stats__.add_point<IntDistributions::ClsWorker2KernelIncomingTime>( current_time - action.timestamp() );
+        __stats__.add_point<IntDistributions::MergedClsWorker2KernelIncomingTime>( current_time - action.timestamp() );
         action.set_timestamp( current_time );
         // for action in classification stage, push to compute without context
         CHECK_GT( target_conc_cls_gpu_size_, 0 ) << "This machine does not service the Classification pipeline";
@@ -737,10 +725,10 @@ void ComputeKernelMerged<Model_GPU, Model_CPU>::backlog_thread_func()
     CHECK_EQ( context.get()->empty(), false ) << "Context should not be empty";
 
     const auto current_time = std::chrono::steady_clock::now().time_since_epoch().count();
-    __stats__.add_point<IntDistributions::AttKernelIncoming2ContextTime>( current_time - action.timestamp() );
+    __stats__.add_point<IntDistributions::MergedPreInference2AttContextTime>( current_time - action.timestamp() );
     if ( action.batch_last() ) {
-      __stats__.add_point<IntDistributions::AttKernelIncoming2ContextTimeBatch>( current_time
-                                                                                 - action.batch_timestamp() );
+      __stats__.add_point<IntDistributions::MergedPreInference2AttContextTimeBatch>( current_time
+                                                                                     - action.batch_timestamp() );
     }
     action.set_timestamp( current_time );
 
@@ -763,7 +751,7 @@ void ComputeKernelMerged<Model_GPU, Model_CPU>::qmeasure_thread_func()
     {
       std::lock_guard lock( processing_gpu_mutex_ );
       __stats__.add_point<IntDistributions::ProcessingClassificationQueue>( processing_classification_gpu_.size() );
-      //      __stats__.add_point<IntDistributions::ProcessingAttentionQueue>( processing_attention_gpu_.size() );
+      __stats__.add_point<IntDistributions::CUDAProcessingAttentionQueue>( processing_attention_gpu_.size() );
       for ( uint64_t layer_idx = 0; layer_idx < n_layers_gpu_; layer_idx++ ) {
         __stats__.add_point<IntDistributions::ProcessingPreAttentionQueue>(
           processing_pre_attention_gpu_[layer_idx].size() );
@@ -774,7 +762,7 @@ void ComputeKernelMerged<Model_GPU, Model_CPU>::qmeasure_thread_func()
 
     {
       std::lock_guard lock( processing_cpu_mutex_ );
-      __stats__.add_point<IntDistributions::ProcessingAttentionQueue>( processing_attention_cpu_.size() );
+      __stats__.add_point<IntDistributions::AMD64ProcessingAttentionQueue>( processing_attention_cpu_.size() );
     }
 
     {
@@ -794,19 +782,19 @@ void ComputeKernelMerged<Model_GPU, Model_CPU>::qmeasure_thread_func()
 
     {
       std::lock_guard lock( ctx_mgr_gpu_mutex_ );
-      __stats__.add_point<IntDistributions::AllocatedContexts>( context_manager_gpu_.allocated() );
-      __stats__.add_point<IntDistributions::FreeContexts>( context_manager_gpu_.free() );
-      __stats__.add_point<IntDistributions::EmptyContexts>( context_manager_gpu_.empty() );
+      __stats__.add_point<IntDistributions::CUDAAllocatedContexts>( context_manager_gpu_.allocated() );
+      __stats__.add_point<IntDistributions::CUDAFreeContexts>( context_manager_gpu_.free() );
+      __stats__.add_point<IntDistributions::CUDAEmptyContexts>( context_manager_gpu_.empty() );
     }
 
     {
       std::lock_guard lock( ctx_mgr_cpu_mutex_ );
-      __stats__.add_point<IntDistributions::AllocatedContexts>( context_manager_cpu_.allocated() );
-      __stats__.add_point<IntDistributions::FreeContexts>( context_manager_cpu_.free() );
-      __stats__.add_point<IntDistributions::EmptyContexts>( context_manager_cpu_.empty() );
+      __stats__.add_point<IntDistributions::AMD64AllocatedContexts>( context_manager_cpu_.allocated() );
+      __stats__.add_point<IntDistributions::AMD64FreeContexts>( context_manager_cpu_.free() );
+      __stats__.add_point<IntDistributions::AMD64EmptyContexts>( context_manager_cpu_.empty() );
     }
 
-    std::this_thread::sleep_for( std::chrono::seconds { 1 } );
+    std::this_thread::sleep_for( std::chrono::seconds { 2 } );
   }
 }
 

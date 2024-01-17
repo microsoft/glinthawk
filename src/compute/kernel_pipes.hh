@@ -382,7 +382,13 @@ void ComputeKernelPiped<Model>::execution_thread_func()
         results = model_->attention_forward( std::move( input_states ), contexts );
         const auto end = std::chrono::steady_clock::now();
         const auto duration = std::chrono::duration_cast<std::chrono::microseconds>( end - start );
-        __stats__.add_point<IntDistributions::KernelAttentionForwardTime>( duration.count() );
+#if defined( TARGET_PLATFORM_AMD64 )
+        __stats__.add_point<IntDistributions::AMD64KernelAttentionForwardTime>( duration.count() );
+#elif defined( TARGET_PLATFORM_CUDA )
+        __stats__.add_point<IntDistributions::CUDAKernelAttentionForwardTime>( duration.count() );
+#else
+#error "Unknown target platform"
+#endif
         for ( auto& result : results ) {
           result.set_timestamp( end.time_since_epoch().count() );
           result.set_batch_timestamp( end.time_since_epoch().count() );
@@ -711,7 +717,13 @@ void ComputeKernelPiped<Model>::qmeasure_thread_func()
     {
       std::lock_guard lock( processing_mutex_ );
       __stats__.add_point<IntDistributions::ProcessingClassificationQueue>( processing_classification_.size() );
-      __stats__.add_point<IntDistributions::ProcessingAttentionQueue>( processing_attention_.size() );
+#if defined( TARGET_PLATFORM_AMD64 )
+      __stats__.add_point<IntDistributions::AMD64ProcessingAttentionQueue>( processing_attention_.size() );
+#elif defined( TARGET_PLATFORM_CUDA )
+      __stats__.add_point<IntDistributions::CUDAProcessingAttentionQueue>( processing_attention_.size() );
+#else
+#error "Unknown target platform"
+#endif
       for ( uint64_t layer_idx = 0; layer_idx < n_layers_; layer_idx++ ) {
         __stats__.add_point<IntDistributions::ProcessingPreAttentionQueue>(
           processing_pre_attention_[layer_idx].size() );
@@ -737,9 +749,17 @@ void ComputeKernelPiped<Model>::qmeasure_thread_func()
 
     {
       std::lock_guard lock( ctx_mgr_mutex_ );
-      __stats__.add_point<IntDistributions::AllocatedContexts>( context_manager_.allocated() );
-      __stats__.add_point<IntDistributions::FreeContexts>( context_manager_.free() );
-      __stats__.add_point<IntDistributions::EmptyContexts>( context_manager_.empty() );
+#if defined( TARGET_PLATFORM_AMD64 )
+      __stats__.add_point<IntDistributions::AMD64AllocatedContexts>( context_manager_.allocated() );
+      __stats__.add_point<IntDistributions::AMD64FreeContexts>( context_manager_.free() );
+      __stats__.add_point<IntDistributions::AMD64EmptyContexts>( context_manager_.empty() );
+#elif defined( TARGET_PLATFORM_CUDA )
+      __stats__.add_point<IntDistributions::CUDAAllocatedContexts>( context_manager_.allocated() );
+      __stats__.add_point<IntDistributions::CUDAFreeContexts>( context_manager_.free() );
+      __stats__.add_point<IntDistributions::CUDAEmptyContexts>( context_manager_.empty() );
+#else
+#error "Unknown target platform"
+#endif
     }
 
     std::this_thread::sleep_for( std::chrono::seconds { 1 } );

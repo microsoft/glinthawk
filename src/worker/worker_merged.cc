@@ -80,18 +80,6 @@ void WorkerMerged<Model_GPU, Model_CPU>::setup_peer( std::map<net::Address, Peer
             __stats__.add_point<IntDistributions::PreWorker2SerializeTimeBatch>( current_time
                                                                                  - state.batch_timestamp() );
           }
-        } else if ( state.next_stage() == InferenceState::Stage::Attention and not state.finished() ) {
-          __stats__.add_point<IntDistributions::AttWorker2SerializeTime>( current_time - state.timestamp() );
-          if ( state.batch_last() ) {
-            __stats__.add_point<IntDistributions::AttWorker2SerializeTimeBatch>( current_time
-                                                                                 - state.batch_timestamp() );
-          }
-        } else if ( state.next_stage() == InferenceState::Stage::PostAttention and not state.finished() ) {
-          __stats__.add_point<IntDistributions::PostWorker2SerializeTime>( current_time - state.timestamp() );
-          if ( state.batch_last() ) {
-            __stats__.add_point<IntDistributions::PostWorker2SerializeTimeBatch>( current_time
-                                                                                  - state.batch_timestamp() );
-          }
         } else if ( state.next_stage() == InferenceState::Stage::Classification and not state.finished() ) {
           __stats__.add_point<IntDistributions::ClsWorker2SerializeTime>( current_time - state.timestamp() );
           if ( state.batch_last() ) {
@@ -450,16 +438,6 @@ void WorkerMerged<Model_GPU, Model_CPU>::handle_compute_kernel_event()
       if ( state.batch_last() ) {
         __stats__.add_point<IntDistributions::PreInference2WorkerTimeBatch>( current_time - state.batch_timestamp() );
       }
-    } else if ( state.next_stage() == InferenceState::Stage::Attention and not state.finished() ) {
-      __stats__.add_point<IntDistributions::AttInference2WorkerTime>( current_time - state.timestamp() );
-      if ( state.batch_last() ) {
-        __stats__.add_point<IntDistributions::AttInference2WorkerTimeBatch>( current_time - state.batch_timestamp() );
-      }
-    } else if ( state.next_stage() == InferenceState::Stage::PostAttention and not state.finished() ) {
-      __stats__.add_point<IntDistributions::PostInference2WorkerTime>( current_time - state.timestamp() );
-      if ( state.batch_last() ) {
-        __stats__.add_point<IntDistributions::PostInference2WorkerTimeBatch>( current_time - state.batch_timestamp() );
-      }
     } else if ( state.next_stage() == InferenceState::Stage::Classification and not state.finished() ) {
       __stats__.add_point<IntDistributions::ClsInference2WorkerTime>( current_time - state.timestamp() );
       if ( state.batch_last() ) {
@@ -508,19 +486,6 @@ bool WorkerMerged<Model_GPU, Model_CPU>::handle_peer_message( core::Message&& ms
       DLOG( INFO ) << "Inference state: " << state.to_string();
 
       const auto current_time = std::chrono::steady_clock::now().time_since_epoch().count();
-      if ( state.next_stage() == InferenceState::Stage::Attention and not state.finished() ) {
-        __stats__.add_point<IntDistributions::PreSerialize2AttWorkerTime>( current_time - state.timestamp() );
-        if ( state.batch_last() ) {
-          __stats__.add_point<IntDistributions::PreSerialize2AttWorkerTimeBatch>( current_time
-                                                                                  - state.batch_timestamp() );
-        }
-      } else if ( state.next_stage() == InferenceState::Stage::PostAttention and not state.finished() ) {
-        __stats__.add_point<IntDistributions::AttSerialize2PostWorkerTime>( current_time - state.timestamp() );
-        if ( state.batch_last() ) {
-          __stats__.add_point<IntDistributions::AttSerialize2PostWorkerTimeBatch>( current_time
-                                                                                   - state.batch_timestamp() );
-        }
-      }
       state.set_timestamp( current_time );
 
       this->compute_kernel_->check_finished( state );
@@ -569,19 +534,6 @@ bool WorkerMerged<Model_GPU, Model_CPU>::handle_peer_message( core::Message&& ms
       if ( state.finished() ) {
         this->compute_kernel_->push_finished( move( state ) );
       } else {
-        if ( msg_counter_ != 0 ) {
-          if ( state.next_stage() == InferenceState::Stage::PreAttention ) {
-            __stats__.add_point<IntDistributions::PreSerialize2AttWorkerVarTime>( current_time - past_msg_time_ );
-          } else if ( state.next_stage() == InferenceState::Stage::Attention ) {
-            __stats__.add_point<IntDistributions::AttSerialize2PostWorkerVarTime>( current_time - past_msg_time_ );
-          } else if ( state.next_stage() == InferenceState::Stage::PostAttention ) {
-            __stats__.add_point<IntDistributions::PostSerialize2ClsWorkerVarTime>( current_time - past_msg_time_ );
-          } else if ( state.next_stage() == InferenceState::Stage::Classification ) {
-            __stats__.add_point<IntDistributions::ClsSerialize2PreWorkerVarTime>( current_time - past_msg_time_ );
-          }
-        }
-        msg_counter_ = ( msg_counter_ + 1 ) % 24;
-        past_msg_time_ = current_time;
         this->compute_kernel_->push( move( state ) );
       }
       break;

@@ -40,7 +40,8 @@ enum class IntDistributions
   InNetLatency,
   KernelForwardTime,
   KernelPreAttentionForwardTime,
-  KernelAttentionForwardTime,
+  CUDAKernelAttentionForwardTime,
+  AMD64KernelAttentionForwardTime,
   KernelPostAttentionForwardTime,
   KernelClassificationForwardTime,
 
@@ -98,13 +99,34 @@ enum class IntDistributions
   OutgoingQueue,
 
   ProcessingPreAttentionQueue,
-  ProcessingAttentionQueue,
+  CUDAProcessingAttentionQueue,
+  AMD64ProcessingAttentionQueue,
   ProcessingPostAttentionQueue,
   ProcessingClassificationQueue,
 
-  AllocatedContexts,
-  FreeContexts,
-  EmptyContexts,
+  CUDAAllocatedContexts,
+  CUDAFreeContexts,
+  CUDAEmptyContexts,
+
+  AMD64AllocatedContexts,
+  AMD64FreeContexts,
+  AMD64EmptyContexts,
+
+  MergedPreInference2AttContextTimeBatch,
+  MergedAttContext2BatchingTimeBatch,
+
+  MergedAttInference2PostBatchingTimeBatch,
+
+  MergedPreWorker2KernelIncomingTime,
+  MergedPreKernelIncoming2BatchingTime,
+
+  MergedPreInference2AttContextTime,
+  MergedAttContext2BatchingTime,
+
+  MergedAttInference2PostBatchingTime,
+
+  MergedClsWorker2KernelIncomingTime,
+  MergedClsKernelIncoming2BatchingTime,
 
   _Count
 };
@@ -131,9 +153,11 @@ constexpr std::array<std::string_view, static_cast<size_t>( IntDistributions::_C
   "prompt_latency",
   "in_node_latency",
   "in_net_latency",
+
   "kernel_forward_time",
   "kernel_pre_attention_forward_time",
-  "kernel_attention_forward_time",
+  "cuda_kernel_attention_forward_time",
+  "amd64_kernel_attention_forward_time",
   "kernel_post_attention_forward_time",
   "kernel_classification_forward_time",
 
@@ -189,14 +213,36 @@ constexpr std::array<std::string_view, static_cast<size_t>( IntDistributions::_C
   "incoming_queue",
   "waiting_queue",
   "outgoing_queue",
+
   "processing_pre_attention_queue",
-  "processing_attention_queue",
+  "cuda_processing_attention_queue",
+  "amd64_processing_attention_queue",
   "processing_post_attention_queue",
   "processing_classification_queue",
 
-  "allocated_contexts",
-  "free_contexts",
-  "empty_contexts",
+  "cuda_allocated_contexts",
+  "cuda_free_contexts",
+  "cuda_empty_contexts",
+
+  "amd64_allocated_contexts",
+  "amd64_free_contexts",
+  "amd64_empty_contexts",
+
+  "merged_pre_inference_to_att_context_time_batch",
+  "merged_att_context_to_batching_time_batch",
+
+  "merged_att_inference_to_post_batching_time_batch",
+
+  "merged_pre_worker_to_kernel_incoming_time",
+  "merged_pre_kernel_incoming_to_batching_time",
+
+  "merged_pre_inference_to_att_context_time",
+  "merged_att_context_to_batching_time",
+
+  "merged_att_inference_to_post_batching_time",
+
+  "merged_classification_worker_to_kernel_incoming_time",
+  "merged_classification_kernel_incoming_to_batching_time",
 };
 
 constexpr std::array<std::string_view, static_cast<size_t>( FloatDistributions::_Count )> float_dist_keys {};
