@@ -44,6 +44,8 @@ private:
   const uint64_t end_layer_gpu_;
   const uint64_t n_layers_gpu_;
 
+  uint32_t mode = 2;
+
   std::vector<std::queue<StateContextPairGPU>> processing_pre_attention_gpu_;
   std::vector<std::queue<models::InferenceState>> processing_post_attention_gpu_;
 
@@ -229,13 +231,13 @@ void ComputeKernelMerged<Model_GPU, Model_CPU>::execution_thread_gpu_func()
 
         for ( int layer_idx = static_cast<int>( n_layers_gpu_ - 1 ); layer_idx >= 0; layer_idx-- ) {
           if ( processing_post_attention_gpu_[layer_idx].size() >= target_conc_post_gpu_size_
-               and target_conc_post_gpu_size_ > 0 ) {
+               and target_conc_post_gpu_size_ > 0 and (mode == 0 or (layer_idx == 0 and start_layer_gpu_ == 0)) ) {
             next_stage = models::InferenceState::Stage::PostAttention;
             next_layer_idx = static_cast<uint32_t>( layer_idx );
             return true;
           }
           if ( processing_pre_attention_gpu_[layer_idx].size() >= target_conc_pre_gpu_size_
-               and target_conc_pre_gpu_size_ > 0 ) {
+               and target_conc_pre_gpu_size_ > 0 and (mode > 0 or (layer_idx == 0 and start_layer_gpu_ == 0)) ) {
             next_stage = models::InferenceState::Stage::PreAttention;
             next_layer_idx = static_cast<uint32_t>( layer_idx );
             return true;
@@ -253,6 +255,7 @@ void ComputeKernelMerged<Model_GPU, Model_CPU>::execution_thread_gpu_func()
             input_states.push_back( std::move( action.first ) );
             contexts.push_back( action.second );
           }
+          mode -= 1;
           break;
         }
         case models::InferenceState::Stage::Attention: {
@@ -270,6 +273,7 @@ void ComputeKernelMerged<Model_GPU, Model_CPU>::execution_thread_gpu_func()
             processing_post_attention_gpu_[next_layer_idx].pop();
             input_states.push_back( std::move( action ) );
           }
+          mode = 1;
           break;
         }
         case models::InferenceState::Stage::Classification: {
