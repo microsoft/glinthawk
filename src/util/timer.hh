@@ -60,6 +60,9 @@ public:
     MemoryAllocationHost,
     MemoryAllocationDevice,
 
+    MemoryInitializationHost,
+    MemoryInitializationDevice,
+
     COUNT,
   };
 
@@ -83,6 +86,9 @@ public:
 
     "Mem Alloc (Host)",
     "Mem Alloc (Device)",
+
+    "Mem Init (Host)",
+    "Mem Init (Device)",
   } };
 
 private:

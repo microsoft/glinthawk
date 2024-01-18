@@ -43,6 +43,9 @@ private:
   mutable std::mutex mutex_ {};
   std::map<size_t, std::queue<PtrType>> unused_buffers_ {};
 
+  size_t reused_count_ { 0 };
+  size_t reused_bytes_ { 0 };
+
 public:
   DataBufferPool() = default;
   ~DataBufferPool() { print_stats(); }
