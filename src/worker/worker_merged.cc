@@ -73,8 +73,6 @@ void WorkerMerged<Model_GPU, Model_CPU>::setup_peer( std::map<net::Address, Peer
       for ( auto& state : peer_it->second.outgoing_states ) {
         DLOG( INFO ) << "Sending state to " << peer_it->first.to_string() << ": " << state.to_string();
 
-        LOG(INFO) << "[EVENT]," << std::chrono::steady_clock::now().time_since_epoch().count() << "," << state.to_log() << ",serialized_begin";
-
         const auto current_time = std::chrono::steady_clock::now().time_since_epoch().count();
         if ( state.next_stage() == InferenceState::Stage::PreAttention and not state.finished() ) {
           __stats__.add_point<IntDistributions::PreWorker2SerializeTime>( current_time - state.timestamp() );
@@ -94,7 +92,6 @@ void WorkerMerged<Model_GPU, Model_CPU>::setup_peer( std::map<net::Address, Peer
 
         auto state_ser = state.serialize();
 
-        LOG(INFO) << "[EVENT]," << std::chrono::steady_clock::now().time_since_epoch().count() << "," << state.to_log() << ",serialized_end";
         peer_it->second.message_handler.push_message( Message( Message::OpCode::InferenceState, move( state_ser ) ) );
       }
 
@@ -436,8 +433,6 @@ void WorkerMerged<Model_GPU, Model_CPU>::handle_compute_kernel_event()
   while ( this->compute_kernel_->pop( state ) ) {
     __stats__.increment<Counters::StatesProcessed>();
 
-    LOG(INFO) << "[EVENT]," << std::chrono::steady_clock::now().time_since_epoch().count() << "," << state.to_log() << ",kernel_pop";
-
     const auto current_time = std::chrono::steady_clock::now().time_since_epoch().count();
     if ( state.next_stage() == InferenceState::Stage::PreAttention and not state.finished() ) {
       __stats__.add_point<IntDistributions::PreInference2WorkerTime>( current_time - state.timestamp() );
@@ -470,8 +465,6 @@ void WorkerMerged<Model_GPU, Model_CPU>::handle_compute_kernel_event()
       setup_peer( peer_it );
     }
 
-    LOG(INFO) << "[EVENT]," << std::chrono::steady_clock::now().time_since_epoch().count() << "," << state.to_log() << ",kernel_peer_it";
-
     peer_it->second.outgoing_states.push_back( move( state ) );
   }
 }
@@ -492,8 +485,6 @@ bool WorkerMerged<Model_GPU, Model_CPU>::handle_peer_message( core::Message&& ms
                      << " in route set for prompt: " << state;
       state.set_layer_workers( it->second );
       DLOG( INFO ) << "Inference state: " << state.to_string();
-
-      LOG(INFO) << "[EVENT]," << std::chrono::steady_clock::now().time_since_epoch().count() << "," << state.to_log() << ",peer_recv";
 
       const auto current_time = std::chrono::steady_clock::now().time_since_epoch().count();
       state.set_timestamp( current_time );
@@ -540,8 +531,6 @@ bool WorkerMerged<Model_GPU, Model_CPU>::handle_peer_message( core::Message&& ms
       }
 
       state.set_time_in_node( state.time_in_node() - current_time );
-
-      LOG(INFO) << "[EVENT]," << std::chrono::steady_clock::now().time_since_epoch().count() << "," << state.to_log() << ",peer_push";
 
       if ( state.finished() ) {
         this->compute_kernel_->push_finished( move( state ) );
