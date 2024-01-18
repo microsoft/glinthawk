@@ -284,6 +284,7 @@ void ComputeKernelMerged<Model_GPU, Model_CPU>::execution_thread_gpu_func()
       }
     }
 
+    LOG(INFO) << "[COMPUTE]" << std::chrono::steady_clock::now().time_since_epoch().count() << "," << next_stage << "," << mode;
     const auto start = std::chrono::steady_clock::now();
     std::vector<models::InferenceState> results;
     switch ( next_stage ) {
