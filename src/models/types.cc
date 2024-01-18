@@ -8,7 +8,7 @@ namespace glinthawk {
 
 namespace {
 
-constexpr bool ENABLE_DATA_BUFFER_POOL = false;
+constexpr bool ENABLE_DATA_BUFFER_POOL = true;
 constexpr size_t MIN_BUFFER_SIZE_POOLED = 8 * 1024; // 8 KiB
 
 }
@@ -54,6 +54,8 @@ DataBufferPool::PtrType DataBufferPool::get( const size_t n )
     result = PtrType { new uint8_t[n], DataBufferDeleter() };
   } else {
     // return the one from the pool
+    reused_bytes_ += n;
+    reused_count_++;
     result = move( it->second.front() );
     it->second.pop();
   }
@@ -82,6 +84,7 @@ void DataBufferPool::print_stats() const
   }
 
   LOG( INFO ) << "DataBufferPool: " << total_unused_buffers << " buffers, " << total_unused_bytes << " bytes";
+  LOG( INFO ) << "DataBufferPool: " << reused_count_ << " reused buffers, " << reused_bytes_ << " bytes";
 }
 
 } // namespace glinthawk
