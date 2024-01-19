@@ -44,10 +44,13 @@ private:
   const uint64_t end_layer_gpu_;
   const uint64_t n_layers_gpu_;
 
-  uint32_t mode = 2;
+  uint32_t pre_token_ = 2;
+  uint32_t att_token_ = 0;
+  uint32_t att_ctx_schedule_;
 
   std::vector<std::queue<StateContextPairGPU>> processing_pre_attention_gpu_;
-  std::vector<std::queue<models::InferenceState>> processing_post_attention_gpu_;
+  std::vector<std::queue<models::InferenceState>> processing_post_attention_gpu_from_gpu_;
+  std::vector<std::queue<models::InferenceState>> processing_post_attention_gpu_from_cpu_;
 
   std::queue<StateContextPairGPU> processing_attention_gpu_ {};
   std::queue<models::InferenceState> processing_classification_gpu_ {};
@@ -56,11 +59,11 @@ private:
 
   std::queue<models::InferenceState> incoming_ {}, waiting_attention_ {}, outgoing_ {};
 
-  std::mutex ctx_mgr_gpu_mutex_ {}, ctx_mgr_cpu_mutex_ {}, outgoing_mutex_ {}, incoming_mutex_ {},
-    waiting_attention_mutex_ {}, processing_gpu_mutex_ {}, processing_cpu_mutex_ {};
+  std::mutex ctx_mgr_mutex_ {}, outgoing_mutex_ {}, incoming_mutex_ {}, waiting_attention_mutex_ {},
+    processing_gpu_mutex_ {}, processing_cpu_mutex_ {};
 
-  std::condition_variable ctx_mgr_gpu_cv_ {}, ctx_mgr_cpu_cv_ {}, incoming_cv_ {}, processing_gpu_cv_ {},
-    processing_cpu_cv_ {}, waiting_attention_cv_ {};
+  std::condition_variable ctx_mgr_cv_ {}, incoming_cv_ {}, processing_gpu_cv_ {}, processing_cpu_cv_ {},
+    waiting_attention_cv_ {};
 
   EventFD event_fd_ {};
 
@@ -99,11 +102,13 @@ public:
     , start_layer_gpu_( start_layer_gpu )
     , end_layer_gpu_( end_layer_gpu )
     , n_layers_gpu_( end_layer_gpu_ - start_layer_gpu_ + 1 )
+    , att_ctx_schedule_( target_conc_post_gpu_size )
     , model_cpu_( std::move( model_cpu ) )
     , context_manager_cpu_( model_cpu_->settings() )
     , target_conc_att_cpu_size_( target_conc_att_cpu_size )
     , processing_pre_attention_gpu_( n_layers_gpu_ )
-    , processing_post_attention_gpu_( n_layers_gpu_ )
+    , processing_post_attention_gpu_from_gpu_( n_layers_gpu_ )
+    , processing_post_attention_gpu_from_cpu_( n_layers_gpu_ )
     , running_( true )
     , execution_thread_gpu_( &ComputeKernelMerged::execution_thread_gpu_func, this )
     , execution_thread_cpu_( &ComputeKernelMerged::execution_thread_cpu_func, this )
@@ -111,6 +116,7 @@ public:
     , backlog_thread_( &ComputeKernelMerged::backlog_thread_func, this )
     , qmeasure_thread_( &ComputeKernelMerged::qmeasure_thread_func, this )
   {
+    CHECK_EQ( target_conc_att_cpu_size_ + target_conc_att_gpu_size_, target_conc_post_gpu_size_ );
   }
 
   void push( glinthawk::models::InferenceState&& state )
@@ -149,14 +155,11 @@ public:
   {
     // Release the context in GPU and CPU managers
     {
-      std::lock_guard lock( ctx_mgr_gpu_mutex_ );
+      std::lock_guard lock( ctx_mgr_mutex_ );
       if ( context_manager_gpu_.release( state.prompt_id() ) )
-        ctx_mgr_gpu_cv_.notify_one();
-    }
-    {
-      std::lock_guard lock( ctx_mgr_cpu_mutex_ );
+        ctx_mgr_cv_.notify_one();
       if ( context_manager_cpu_.release( state.prompt_id() ) )
-        ctx_mgr_cpu_cv_.notify_one();
+        ctx_mgr_cv_.notify_one();
     }
 
     // do a "fake" forward: remove self from propagation list and set next worker
@@ -222,22 +225,25 @@ void ComputeKernelMerged<Model_GPU, Model_CPU>::execution_thread_gpu_func()
           return true;
         }
 
-        //        if ( processing_attention_gpu_.size() >= target_conc_att_gpu_size_ and target_conc_att_gpu_size_ > 0 )
-        //        {
-        //          next_stage = models::InferenceState::Stage::Attention;
-        //          next_layer_idx = static_cast<uint32_t>( -1 );
-        //          return true;
-        //        }
+        if ( processing_attention_gpu_.size() >= target_conc_att_gpu_size_ and target_conc_att_gpu_size_ > 0
+             and att_token_ > 0 ) {
+          next_stage = models::InferenceState::Stage::Attention;
+          next_layer_idx = static_cast<uint32_t>( -1 );
+          return true;
+        }
 
         for ( int layer_idx = static_cast<int>( n_layers_gpu_ - 1 ); layer_idx >= 0; layer_idx-- ) {
-          if ( processing_post_attention_gpu_[layer_idx].size() >= target_conc_post_gpu_size_
-               and target_conc_post_gpu_size_ > 0 and (mode == 0 or (layer_idx == 0 and start_layer_gpu_ == 0)) ) {
+          if ( processing_post_attention_gpu_from_gpu_[layer_idx].size() >= target_conc_att_gpu_size_
+               and processing_post_attention_gpu_from_cpu_[layer_idx].size() >= target_conc_att_cpu_size_
+               and target_conc_post_gpu_size_ > 0
+               and ( ( att_token_ == 0 and pre_token_ == 0 ) or ( layer_idx == 0 and start_layer_gpu_ == 0 ) ) ) {
             next_stage = models::InferenceState::Stage::PostAttention;
             next_layer_idx = static_cast<uint32_t>( layer_idx );
             return true;
           }
           if ( processing_pre_attention_gpu_[layer_idx].size() >= target_conc_pre_gpu_size_
-               and target_conc_pre_gpu_size_ > 0 and (mode > 0 or (layer_idx == 0 and start_layer_gpu_ == 0)) ) {
+               and target_conc_pre_gpu_size_ > 0
+               and ( pre_token_ > 0 or ( layer_idx == 0 and start_layer_gpu_ == 0 ) ) ) {
             next_stage = models::InferenceState::Stage::PreAttention;
             next_layer_idx = static_cast<uint32_t>( layer_idx );
             return true;
@@ -255,7 +261,8 @@ void ComputeKernelMerged<Model_GPU, Model_CPU>::execution_thread_gpu_func()
             input_states.push_back( std::move( action.first ) );
             contexts.push_back( action.second );
           }
-          mode -= 1;
+          pre_token_ -= 1;
+          att_token_ += 1;
           break;
         }
         case models::InferenceState::Stage::Attention: {
@@ -265,15 +272,23 @@ void ComputeKernelMerged<Model_GPU, Model_CPU>::execution_thread_gpu_func()
             input_states.push_back( std::move( action.first ) );
             contexts.push_back( action.second );
           }
+          att_token_ -= 1;
           break;
         }
         case models::InferenceState::Stage::PostAttention: {
-          for ( size_t j = 0; j < target_conc_post_gpu_size_; j++ ) {
-            models::InferenceState action = std::move( processing_post_attention_gpu_[next_layer_idx].front() );
-            processing_post_attention_gpu_[next_layer_idx].pop();
+          for ( size_t j = 0; j < target_conc_att_gpu_size_; j++ ) {
+            models::InferenceState action
+              = std::move( processing_post_attention_gpu_from_gpu_[next_layer_idx].front() );
+            processing_post_attention_gpu_from_gpu_[next_layer_idx].pop();
             input_states.push_back( std::move( action ) );
           }
-          mode = 1;
+          for ( size_t j = 0; j < target_conc_att_cpu_size_; j++ ) {
+            models::InferenceState action
+              = std::move( processing_post_attention_gpu_from_cpu_[next_layer_idx].front() );
+            processing_post_attention_gpu_from_cpu_[next_layer_idx].pop();
+            input_states.push_back( std::move( action ) );
+          }
+          pre_token_ = 1;
           break;
         }
         case models::InferenceState::Stage::Classification: {
@@ -374,25 +389,38 @@ void ComputeKernelMerged<Model_GPU, Model_CPU>::execution_thread_gpu_func()
       case models::InferenceState::Stage::PreAttention: {
         // the next stage is attention, so if we hold the context and serve attention, add it directly to processing
         for ( size_t j = 0; j < target_conc_pre_gpu_size_; j++ ) {
-          CHECK_GT( target_conc_att_cpu_size_, 0 );
-          CHECK_EQ( contexts[j].get()->empty(), true );
-          ContextPtrCPU context_cpu;
-          {
-            std::lock_guard lock( ctx_mgr_cpu_mutex_ );
-            context_cpu = context_manager_cpu_.get_context( results[j].prompt_id(), false );
-          }
-          if ( context_cpu->empty() ) {
-            waiting_states.emplace_back( std::move( results[j] ) );
-          } else {
+          if ( not contexts[j].get()->empty() ) {
+            // GPU context was not empty. Proceed straight to attention.
             const auto current_time = std::chrono::steady_clock::now().time_since_epoch().count();
             __stats__.add_point<IntDistributions::MergedPreInference2AttContextTime>( current_time
                                                                                       - results[j].timestamp() );
             if ( results[j].batch_last() ) {
+              // TODO: this batch time probably doesn't make sense anymore
               __stats__.add_point<IntDistributions::MergedPreInference2AttContextTimeBatch>(
                 current_time - results[j].batch_timestamp() );
             }
             results[j].set_timestamp( current_time );
-            processing_states_cpu.emplace_back( std::move( results[j] ), context_cpu );
+            processing_states_gpu.emplace_back( std::move( results[j] ), contexts[j] );
+          } else {
+            ContextPtrCPU context_cpu;
+            {
+              std::lock_guard lock( ctx_mgr_mutex_ );
+              context_cpu = context_manager_cpu_.get_context( results[j].prompt_id(), false, false );
+            }
+            if ( context_cpu->empty() ) {
+              waiting_states.emplace_back( std::move( results[j] ) );
+            } else {
+              const auto current_time = std::chrono::steady_clock::now().time_since_epoch().count();
+              __stats__.add_point<IntDistributions::MergedPreInference2AttContextTime>( current_time
+                                                                                        - results[j].timestamp() );
+              if ( results[j].batch_last() ) {
+                // TODO: this batch time probably doesn't make sense anymore
+                __stats__.add_point<IntDistributions::MergedPreInference2AttContextTimeBatch>(
+                  current_time - results[j].batch_timestamp() );
+              }
+              results[j].set_timestamp( current_time );
+              processing_states_cpu.emplace_back( std::move( results[j] ), context_cpu );
+            }
           }
         }
         break;
@@ -412,10 +440,10 @@ void ComputeKernelMerged<Model_GPU, Model_CPU>::execution_thread_gpu_func()
         if ( results[0].next_stage() == models::InferenceState::Stage::PreAttention and target_conc_pre_gpu_size_ > 0
              and results[0].next_layer() <= end_layer_gpu_ and results[0].next_layer() >= start_layer_gpu_ ) {
           // If the next stage is pre-attention, and we serve that layer, get context and add it directly to processing
-          std::lock_guard lock( ctx_mgr_gpu_mutex_ );
+          std::lock_guard lock( ctx_mgr_mutex_ );
           for ( size_t j = 0; j < target_conc_post_gpu_size_; j++ ) {
-            processing_states_gpu.emplace_back(
-              std::move( results[j] ), context_manager_gpu_.get_context( results[j].prompt_id(), true, true ) );
+            ContextPtrGPU context_pre = context_manager_gpu_.get_context( results[j].prompt_id(), false, false );
+            processing_states_gpu.emplace_back( std::move( results[j] ), context_pre );
           }
         } else if ( results[0].next_stage() == models::InferenceState::Stage::Classification
                     and target_conc_cls_gpu_size_ > 0 ) {
@@ -462,7 +490,7 @@ void ComputeKernelMerged<Model_GPU, Model_CPU>::execution_thread_gpu_func()
           break;
         case models::InferenceState::Stage::Attention:
           for ( auto& action : processing_states_gpu ) {
-            processing_post_attention_gpu_[action.first.next_layer() - start_layer_gpu_].emplace(
+            processing_post_attention_gpu_from_gpu_[action.first.next_layer() - start_layer_gpu_].emplace(
               std::move( action.first ) );
           }
           break;
@@ -579,7 +607,7 @@ void ComputeKernelMerged<Model_GPU, Model_CPU>::execution_thread_cpu_func()
     if ( processing_states.size() > 0 ) {
       std::lock_guard lock( processing_gpu_mutex_ );
       for ( auto& state : processing_states ) {
-        processing_post_attention_gpu_[state.next_layer() - start_layer_gpu_].emplace( std::move( state ) );
+        processing_post_attention_gpu_from_cpu_[state.next_layer() - start_layer_gpu_].emplace( std::move( state ) );
       }
       processing_gpu_cv_.notify_one();
     }
@@ -615,18 +643,18 @@ void ComputeKernelMerged<Model_GPU, Model_CPU>::bookkeeping_thread_func()
         action.set_timestamp( current_time );
 
         // for action in pre-attention stage, get (try to create) context and just push to compute.
-        CHECK_GT( target_conc_pre_gpu_size_, 0 ) << "This machine does not service the PreAttention pipeline";
         ContextPtrGPU context;
         {
           // let's get the context for this action, but it doesn't matter if it's empty
-          std::lock_guard lock( ctx_mgr_gpu_mutex_ );
-          //          if ( ctx_balance_ < 0 and context_manager_gpu_.free() > 0 ) {
-          //            context = context_manager_gpu_.get_context( action.prompt_id(), true, false );
-          //            ctx_balance += ratio_ctx_;
-          //          } else {
-          context = context_manager_gpu_.get_context( action.prompt_id(), true, true );
-          //          }
+          std::lock_guard lock( ctx_mgr_mutex_ );
+          if ( att_ctx_schedule_ > target_conc_att_cpu_size_ )
+            context = context_manager_gpu_.get_context( action.prompt_id(), true, false );
+          else
+            context = context_manager_gpu_.get_context( action.prompt_id(), true, true );
         }
+        att_ctx_schedule_ -= 1;
+        if ( att_ctx_schedule_ == 0 )
+          att_ctx_schedule_ = target_conc_post_gpu_size_;
         {
           std::lock_guard lock( processing_gpu_mutex_ );
           processing_pre_attention_gpu_[next_layer_index].emplace( std::move( action ), context );
@@ -640,15 +668,13 @@ void ComputeKernelMerged<Model_GPU, Model_CPU>::bookkeeping_thread_func()
         // for action in attention stage, get non-empty context and just push to compute.
         // if the context doesn't exist, just wait
         CHECK_GT( target_conc_att_cpu_size_, 0 ) << "This machine does not service the Attention pipeline";
-        CHECK_EQ( target_conc_att_gpu_size_, 0 ) << "GPU Attention is closed for now";
-
-        bool scheduled = false;
+        // It does not make sense to allocate GPU context over the network. So we don't do that (yet).
 
         ContextPtrCPU context;
         {
           // let's get the context for this action
-          std::lock_guard lock( ctx_mgr_cpu_mutex_ );
-          context = context_manager_cpu_.get_context( action.prompt_id(), false );
+          std::lock_guard lock( ctx_mgr_mutex_ );
+          context = context_manager_cpu_.get_context( action.prompt_id(), false, false );
         }
         if ( not context.get()->empty() ) {
           {
@@ -657,10 +683,7 @@ void ComputeKernelMerged<Model_GPU, Model_CPU>::bookkeeping_thread_func()
           }
 
           processing_cpu_cv_.notify_one();
-          scheduled = true;
-        }
-
-        if ( not scheduled ) {
+        } else {
           {
             std::lock_guard lock( waiting_attention_mutex_ );
             waiting_attention_.emplace( std::move( action ) );
@@ -673,14 +696,7 @@ void ComputeKernelMerged<Model_GPU, Model_CPU>::bookkeeping_thread_func()
       }
 
       case models::InferenceState::Stage::PostAttention: {
-        // for action in post-attention stage, push to compute without context
-        CHECK_GT( target_conc_post_gpu_size_, 0 ) << "This machine does not service the PostAttention pipeline";
-        {
-          std::lock_guard lock( processing_gpu_mutex_ );
-          processing_post_attention_gpu_[next_layer_index].emplace( std::move( action ) );
-        }
-
-        processing_gpu_cv_.notify_one();
+        LOG( FATAL ) << "Did not expect PostAtt message over network";
         break;
       }
 
@@ -709,7 +725,9 @@ void ComputeKernelMerged<Model_GPU, Model_CPU>::backlog_thread_func()
 
   while ( running_ ) {
     models::InferenceState action;
-    ContextPtrCPU context;
+    ContextPtrCPU context_cpu;
+    ContextPtrGPU context_gpu;
+    bool from_gpu = false;
 
     // let's get an action from the waiting_attention_
     {
@@ -721,12 +739,25 @@ void ComputeKernelMerged<Model_GPU, Model_CPU>::backlog_thread_func()
 
     // let's get a free context from context_manager_
     {
-      std::unique_lock<std::mutex> lock( ctx_mgr_cpu_mutex_ );
-      ctx_mgr_cpu_cv_.wait( lock, [this] { return context_manager_cpu_.free() > 0; } );
-      context = context_manager_cpu_.get_context( action.prompt_id(), false );
+      std::unique_lock<std::mutex> lock( ctx_mgr_mutex_ );
+      ctx_mgr_cv_.wait( lock, [this] { return context_manager_cpu_.free() > 0 or context_manager_gpu_.free() > 0; } );
+      if ( context_manager_gpu_.free() > 0 ) {
+        context_gpu = context_manager_gpu_.get_context( action.prompt_id(), false, false );
+        if ( context_gpu.get()->empty() ) {
+          context_manager_gpu_.release( action.prompt_id() );
+          context_gpu = context_manager_gpu_.get_context( action.prompt_id(), false, false );
+        }
+        from_gpu = true;
+      } else if ( context_manager_cpu_.free() > 0 ) {
+        context_cpu = context_manager_cpu_.get_context( action.prompt_id(), false, false );
+      }
     }
 
-    CHECK_EQ( context.get()->empty(), false ) << "Context should not be empty";
+    if ( from_gpu ) {
+      CHECK_EQ( context_gpu.get()->empty(), false ) << "Context should not be empty";
+    } else {
+      CHECK_EQ( context_cpu.get()->empty(), false ) << "Context should not be empty";
+    }
 
     const auto current_time = std::chrono::steady_clock::now().time_since_epoch().count();
     __stats__.add_point<IntDistributions::MergedPreInference2AttContextTime>( current_time - action.timestamp() );
@@ -736,12 +767,21 @@ void ComputeKernelMerged<Model_GPU, Model_CPU>::backlog_thread_func()
     }
     action.set_timestamp( current_time );
 
-    {
-      std::lock_guard lock( processing_cpu_mutex_ );
-      processing_attention_cpu_.emplace( std::move( action ), context );
-    }
+    if ( from_gpu ) {
+      {
+        std::lock_guard lock( processing_gpu_mutex_ );
+        processing_attention_gpu_.emplace( std::move( action ), context_gpu );
+      }
 
-    processing_cpu_cv_.notify_one();
+      processing_gpu_cv_.notify_one();
+    } else {
+      {
+        std::lock_guard lock( processing_cpu_mutex_ );
+        processing_attention_cpu_.emplace( std::move( action ), context_cpu );
+      }
+
+      processing_cpu_cv_.notify_one();
+    }
   }
 }
 
@@ -760,7 +800,8 @@ void ComputeKernelMerged<Model_GPU, Model_CPU>::qmeasure_thread_func()
         __stats__.add_point<IntDistributions::ProcessingPreAttentionQueue>(
           processing_pre_attention_gpu_[layer_idx].size() );
         __stats__.add_point<IntDistributions::ProcessingPostAttentionQueue>(
-          processing_post_attention_gpu_[layer_idx].size() );
+          processing_post_attention_gpu_from_gpu_[layer_idx].size()
+          + processing_post_attention_gpu_from_cpu_[layer_idx].size() );
       }
     }
 
@@ -785,14 +826,11 @@ void ComputeKernelMerged<Model_GPU, Model_CPU>::qmeasure_thread_func()
     }
 
     {
-      std::lock_guard lock( ctx_mgr_gpu_mutex_ );
+      std::lock_guard lock( ctx_mgr_mutex_ );
       __stats__.add_point<IntDistributions::CUDAAllocatedContexts>( context_manager_gpu_.allocated() );
       __stats__.add_point<IntDistributions::CUDAFreeContexts>( context_manager_gpu_.free() );
       __stats__.add_point<IntDistributions::CUDAEmptyContexts>( context_manager_gpu_.empty() );
-    }
 
-    {
-      std::lock_guard lock( ctx_mgr_cpu_mutex_ );
       __stats__.add_point<IntDistributions::AMD64AllocatedContexts>( context_manager_cpu_.allocated() );
       __stats__.add_point<IntDistributions::AMD64FreeContexts>( context_manager_cpu_.free() );
       __stats__.add_point<IntDistributions::AMD64EmptyContexts>( context_manager_cpu_.empty() );

@@ -337,7 +337,6 @@ class Coordinator:
 @click.option("--concurrency-size-cls", "-C4", type=click.INT, default=1)
 @click.option("--concurrency-size-att-cpu", "-C2CPU", type=click.INT, default=1)
 def main(listen_address, listen_port, **kwargs):
-    assert kwargs['gpu_context_count'] == 0
     coordinator = Coordinator(**kwargs)
     asyncio.run(coordinator.main(listen_address, listen_port))
 
