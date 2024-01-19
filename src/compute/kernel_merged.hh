@@ -207,6 +207,7 @@ template<typename Model_GPU, typename Model_CPU>
 void ComputeKernelMerged<Model_GPU, Model_CPU>::execution_thread_gpu_func()
 {
   LOG( INFO ) << "ComputeKernelMerged execution thread for GPU started.";
+  auto last_activity_not_reported = std::chrono::steady_clock::now();
 
   while ( running_ ) {
     std::vector<models::InferenceState> input_states;
@@ -315,6 +316,9 @@ void ComputeKernelMerged<Model_GPU, Model_CPU>::execution_thread_gpu_func()
         const auto end = std::chrono::steady_clock::now();
         const auto duration = std::chrono::duration_cast<std::chrono::microseconds>( end - start );
         __stats__.add_point<IntDistributions::KernelPreAttentionForwardTime>( duration.count() );
+        const auto duration_total = std::chrono::duration_cast<std::chrono::microseconds>( end - last_activity_not_reported );
+        __stats__.add_point<Ratios::CUDAActiveTime>( duration.count(), duration_total.count() );
+        last_activity_not_reported = end;
         for ( auto& result : results ) {
           result.set_timestamp( end.time_since_epoch().count() );
           result.set_batch_timestamp( end.time_since_epoch().count() );
@@ -335,6 +339,9 @@ void ComputeKernelMerged<Model_GPU, Model_CPU>::execution_thread_gpu_func()
         const auto end = std::chrono::steady_clock::now();
         const auto duration = std::chrono::duration_cast<std::chrono::microseconds>( end - start );
         __stats__.add_point<IntDistributions::CUDAKernelAttentionForwardTime>( duration.count() );
+        const auto duration_total = std::chrono::duration_cast<std::chrono::microseconds>( end - last_activity_not_reported );
+        __stats__.add_point<Ratios::CUDAActiveTime>( duration.count(), duration_total.count() );
+        last_activity_not_reported = end;
         for ( auto& result : results ) {
           result.set_timestamp( end.time_since_epoch().count() );
           result.set_batch_timestamp( end.time_since_epoch().count() );
@@ -355,6 +362,9 @@ void ComputeKernelMerged<Model_GPU, Model_CPU>::execution_thread_gpu_func()
         const auto end = std::chrono::steady_clock::now();
         const auto duration = std::chrono::duration_cast<std::chrono::microseconds>( end - start );
         __stats__.add_point<IntDistributions::KernelPostAttentionForwardTime>( duration.count() );
+        const auto duration_total = std::chrono::duration_cast<std::chrono::microseconds>( end - last_activity_not_reported );
+        __stats__.add_point<Ratios::CUDAActiveTime>( duration.count(), duration_total.count() );
+        last_activity_not_reported = end;
         for ( auto& result : results ) {
           result.set_timestamp( end.time_since_epoch().count() );
           result.set_batch_timestamp( end.time_since_epoch().count() );
@@ -371,6 +381,9 @@ void ComputeKernelMerged<Model_GPU, Model_CPU>::execution_thread_gpu_func()
         const auto end = std::chrono::steady_clock::now();
         const auto duration = std::chrono::duration_cast<std::chrono::microseconds>( end - start );
         __stats__.add_point<IntDistributions::KernelClassificationForwardTime>( duration.count() );
+        const auto duration_total = std::chrono::duration_cast<std::chrono::microseconds>( end - last_activity_not_reported );
+        __stats__.add_point<Ratios::CUDAActiveTime>( duration.count(), duration_total.count() );
+        last_activity_not_reported = end;
         for ( auto& result : results ) {
           result.set_timestamp( end.time_since_epoch().count() );
           result.set_batch_timestamp( end.time_since_epoch().count() );
@@ -540,6 +553,7 @@ template<typename Model_GPU, typename Model_CPU>
 void ComputeKernelMerged<Model_GPU, Model_CPU>::execution_thread_cpu_func()
 {
   LOG( INFO ) << "ComputeKernelMerged execution thread for CPU started.";
+  auto last_activity_not_reported = std::chrono::steady_clock::now();
 
   while ( running_ ) {
     std::vector<models::InferenceState> input_states;
@@ -574,6 +588,9 @@ void ComputeKernelMerged<Model_GPU, Model_CPU>::execution_thread_cpu_func()
     const auto end = std::chrono::steady_clock::now();
     const auto duration = std::chrono::duration_cast<std::chrono::microseconds>( end - start );
     __stats__.add_point<IntDistributions::AMD64KernelAttentionForwardTime>( duration.count() );
+    const auto duration_total = std::chrono::duration_cast<std::chrono::microseconds>( end - last_activity_not_reported );
+    __stats__.add_point<Ratios::AMD64ActiveTime>( duration.count(), duration_total.count() );
+    last_activity_not_reported = end;
     for ( auto& result : results ) {
       result.set_timestamp( end.time_since_epoch().count() );
       result.set_batch_timestamp( end.time_since_epoch().count() );

@@ -138,6 +138,8 @@ enum class FloatDistributions
 
 enum class Ratios
 {
+  CUDAActiveTime,
+  AMD64ActiveTime,
   _Count
 };
 
@@ -247,7 +249,10 @@ constexpr std::array<std::string_view, static_cast<size_t>( IntDistributions::_C
 
 constexpr std::array<std::string_view, static_cast<size_t>( FloatDistributions::_Count )> float_dist_keys {};
 
-constexpr std::array<std::string_view, static_cast<size_t>( Ratios::_Count )> ratio_keys {};
+constexpr std::array<std::string_view, static_cast<size_t>( Ratios::_Count )> ratio_keys {
+  "cuda_active_time",
+  "amd64_active_time",
+};
 
 } // namespace
 
