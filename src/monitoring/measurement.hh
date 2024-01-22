@@ -36,6 +36,7 @@ enum class IntDistributions
 {
   PromptLength,
   PromptLatency,
+  PromptLatencyNoQueue,
   InNodeLatency,
   InNetLatency,
   KernelForwardTime,
@@ -153,6 +154,7 @@ constexpr std::array<std::string_view, static_cast<size_t>( Counters::_Count )> 
 constexpr std::array<std::string_view, static_cast<size_t>( IntDistributions::_Count )> int_dist_keys {
   "prompt_length",
   "prompt_latency",
+  "prompt_latency_no_queue",
   "in_node_latency",
   "in_net_latency",
 
@@ -420,7 +422,7 @@ public:
       }
 
       const auto ratio = static_cast<double>( r.numerator ) / static_cast<double>( r.denominator );
-      result += std::string { ratio_keys[i] } + "_num=" + std::to_string( ratio ) + "u,";
+      result += std::string { ratio_keys[i] } + "=" + std::to_string( ratio ) + ",";
 
       i++;
     }

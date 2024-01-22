@@ -497,11 +497,13 @@ bool WorkerMerged<Model_GPU, Model_CPU>::handle_peer_message( core::Message&& ms
         const auto current_time_prompt = std::chrono::steady_clock::now().time_since_epoch().count();
         if ( state.token_pos() > 1 and not state.finished() ) {
           __stats__.add_point<IntDistributions::PromptLatency>( current_time_prompt - state.loop_start_timestamp() );
+          __stats__.add_point<IntDistributions::PromptLatencyNoQueue>( current_time_prompt - state.comp_start_timestamp() );
           __stats__.add_point<IntDistributions::InNodeLatency>( state.time_in_node() );
           __stats__.add_point<IntDistributions::InNetLatency>( current_time_prompt - state.loop_start_timestamp()
                                                                - state.time_in_node() );
         }
         state.set_loop_start_timestamp( current_time_prompt );
+        state.set_comp_start_timestamp( current_time_prompt );
         state.set_time_in_node( 0 );
 
         // We are the first layer: if this inference state contains a generated token, we should save it.
