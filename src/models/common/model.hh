@@ -36,6 +36,7 @@ private:
   uint32_t prompt_length_ { 1 };
   float temperature_ { 0.0f };
   bool finished_ { false };
+  bool last_on_cpu_ { false };
 
   // XXX temporary hack for getting some measurements
   uint64_t timestamp_ { 0 };
@@ -82,6 +83,7 @@ public:
   uint32_t prompt_length() const { return prompt_length_; }
   float temperature() const { return temperature_; }
   bool finished() const { return finished_; }
+  bool last_on_cpu() const { return last_on_cpu_; }
   const decltype( layer_workers_ )& layer_workers() const { return layer_workers_; }
   DataType dtype() const { return dtype_; }
   uint64_t timestamp() const { return timestamp_; }
@@ -105,6 +107,7 @@ public:
   void set_activations( DataBuffer&& activations ) { activations_ = std::move( activations ); }
   void set_layer_workers( const decltype( layer_workers_ )& layer_workers ) { layer_workers_ = layer_workers; }
   void set_finished() { finished_ = true; }
+  void set_last_on_cpu(const bool last_on_cpu) { last_on_cpu_ = last_on_cpu; }
   void set_timestamp( const uint64_t timestamp ) { timestamp_ = timestamp; }
   void set_loop_start_timestamp( const uint64_t loop_start_timestamp ) { loop_start_timestamp_ = loop_start_timestamp; }
   void set_time_in_node( const uint64_t time_in_node ) { time_in_node_ = time_in_node; }
