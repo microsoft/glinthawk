@@ -31,6 +31,7 @@ concept OperationsConcept = requires( T t,
   { t.template matmul<UI64, UI64>( ptr1, ptr2, ptr2, size ) } -> std::same_as<void>;
   { t.copy( ptr1, ptr2, size, cpt, flag ) } -> std::same_as<void>;
   { t.device_allocate( size ) } -> std::same_as<typename T::DeviceUniquePtr>;
+  { t.randomize_device_buffer( ptr1, size, val_f, val_f ) } -> std::same_as<void>;
 };
 
 } // namespace glinthawk::models::common

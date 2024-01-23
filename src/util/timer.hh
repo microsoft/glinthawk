@@ -54,6 +54,15 @@ public:
     ConcurrentCopyGPU,
     // LEGACY CATEGORIES END; PUT NEW CATEGORIES BELOW
 
+    Serializing,
+    Deserializing,
+
+    MemoryAllocationHost,
+    MemoryAllocationDevice,
+
+    MemoryInitializationHost,
+    MemoryInitializationDevice,
+
     COUNT,
   };
 
@@ -69,9 +78,17 @@ public:
     "Partial Inference",
     "Copy Mem to GPU",
     "Copy Mem from GPU",
-    "Concurrent Copy To/From GPU"
+    "Concurrent Copy To/From GPU",
     // LEGACY CATEGORIES END; PUT NEW CATEGORIES BELOW
 
+    "Serializing",
+    "Deserializing",
+
+    "Mem Alloc (Host)",
+    "Mem Alloc (Device)",
+
+    "Mem Init (Host)",
+    "Mem Init (Device)",
   } };
 
 private:

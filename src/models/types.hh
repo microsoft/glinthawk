@@ -1,6 +1,9 @@
 #pragma once
 
+#include <map>
 #include <memory>
+#include <mutex>
+#include <queue>
 
 #include "util/digest.hh"
 
@@ -18,11 +21,46 @@ enum class DataType : uint8_t
 
 size_t DataTypeSize( const DataType dtype );
 
+class DataBufferPool;
+
+class DataBufferDeleter
+{
+private:
+  DataBufferPool* pool_ { nullptr };
+  size_t buffer_len_ { 0 };
+
+public:
+  constexpr DataBufferDeleter() = default;
+  void operator()( uint8_t* ptr ) const;
+  void set_buffer_pool( DataBufferPool* pool, const size_t len );
+};
+
+class DataBufferPool
+{
+private:
+  using PtrType = std::unique_ptr<uint8_t[], DataBufferDeleter>;
+
+  mutable std::mutex mutex_ {};
+  std::map<size_t, std::queue<PtrType>> unused_buffers_ {};
+
+  size_t reused_count_ { 0 };
+  size_t reused_bytes_ { 0 };
+
+public:
+  DataBufferPool() = default;
+  ~DataBufferPool() { print_stats(); }
+
+  PtrType get( const size_t n );
+  void release( uint8_t* ptr, const size_t n );
+  void print_stats() const;
+};
+
 /* note: DataBuffer is always on the host */
 struct DataBuffer
 {
 private:
-  std::unique_ptr<uint8_t[]> ptr_ { nullptr };
+  static DataBufferPool pool_;
+  std::unique_ptr<uint8_t[], DataBufferDeleter> ptr_ {};
 
   /// Length of the buffer in bytes
   uint64_t len_ { 0 };
@@ -49,15 +87,16 @@ public:
   }
 
   DataBuffer( const size_t n )
-    : ptr_( std::make_unique<uint8_t[]>( n ) )
+    : ptr_( pool_.get( n ) )
     , len_( n )
   {
   }
 
   DataBuffer( std::unique_ptr<uint8_t[]>&& other_ptr, const uint64_t other_len )
-    : ptr_( std::move( other_ptr ) )
+    : ptr_( other_ptr.release(), DataBufferDeleter() )
     , len_( other_len )
   {
+    ptr_.get_deleter().set_buffer_pool( &pool_, other_len );
   }
 
   uint64_t len() const { return len_; }

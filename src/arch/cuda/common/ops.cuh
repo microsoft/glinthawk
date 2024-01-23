@@ -10,6 +10,8 @@
 #include <curand.h>
 #include <curand_kernel.h>
 
+#include "util/random.hh"
+
 namespace glinthawk::models::common::cuda {
 
 constexpr size_t TPB = 64;    /* threads per block */
@@ -48,7 +50,7 @@ protected:
   constexpr static float beta = 0.0f;
 
 public:
-  Operations( const int num_streams );
+  Operations( const size_t num_streams );
   ~Operations();
 
   Operations( const Operations& ) = delete;
@@ -75,6 +77,8 @@ public:
   void soft_sample( DType* v, const std::vector<float>& temp_s, const uint64_t batch_size );
 
   DeviceUniquePtr device_allocate( const uint64_t size_bytes );
+
+  void randomize_device_buffer( DType* buffer, const uint64_t len, const float min, const float max );
 
   void copy( DType* dst, const DType* l, const uint64_t batch_size, const CopyType type, const bool async = false );
 };
@@ -407,16 +411,36 @@ __global__ void silu_direct( __half* _hb, const __half* _hb2, const uint64_t hid
 
 }
 
+namespace { // randomize
+
+// XXX too slow
+/*
+template<typename DType>
+__global__ void init_random_kernel( DType* buffer, uint64_t len, float min, float max, const uint64_t seed )
+{
+  const uint64_t idx = blockIdx.x * blockDim.x + threadIdx.x;
+
+  if ( idx < len ) {
+    curandState state;
+    curand_init( seed, idx, 0, &state );
+    DType val = curand_uniform( &state ) * ( max - min ) + min;
+    buffer[idx] = val;
+  }
+}
+*/
+
 }
 
+} // namespace
+
 template<typename DType>
-Operations<DType>::Operations( const int num_streams )
+Operations<DType>::Operations( const size_t num_streams )
 {
   CHECK_CUBLAS( cublasCreate( &cublas_handle_default ) );
   cublas_handle_count = num_streams;
   streams = (cudaStream_t*)malloc( num_streams * sizeof( cudaStream_t ) );
   cublas_handle_array = (cublasHandle_t*)malloc( num_streams * sizeof( cublasHandle_t ) );
-  for ( int i = 0; i < num_streams; i++ ) {
+  for ( size_t i = 0; i < num_streams; i++ ) {
     cudaStreamCreate( &( streams[i] ) );
     CHECK_CUBLAS( cublasCreate( &( cublas_handle_array[i] ) ) );
     CHECK_CUBLAS( cublasSetStream( cublas_handle_array[i], streams[i] ) );
@@ -561,6 +585,14 @@ void Operations<DType>::copy( DType* dst,
   } else {
     CHECK_CUDA( cudaMemcpy( dst, l, size_bytes, convert_to_cuda( type ) ) );
   }
+}
+
+template<typename DType>
+void Operations<DType>::randomize_device_buffer( DType* buffer, const uint64_t len, const float min, const float max )
+{
+  std::unique_ptr<DType[]> host_buffer { new DType[len] };
+  util::randomize_buffer( host_buffer.get(), len, min, max );
+  CHECK_CUDA( cudaMemcpy( buffer, host_buffer.get(), len * sizeof( DType ), cudaMemcpyHostToDevice ) );
 }
 
 } // namespace glinthawk::models::common::cuda
