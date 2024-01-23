@@ -56,7 +56,8 @@ public:
   size_t total() const { return total_contexts; }
 
   std::shared_ptr<typename Model::ContextType> get_context( const glinthawk::PromptID& prompt_id,
-                                                            const bool emplace_empty = false )
+                                                            const bool emplace_empty = false,
+                                                            const bool produce_empty = false )
   {
     auto it = assigned_contexts_.find( prompt_id );
     if ( it != assigned_contexts_.end() ) {
@@ -65,7 +66,7 @@ public:
 
     std::shared_ptr<typename Model::ContextType> context;
 
-    if ( free_contexts_.empty() ) {
+    if ( free_contexts_.empty() or produce_empty ) {
       context = std::make_shared<typename Model::ContextType>( settings_, true );
 
       if ( emplace_empty ) {
@@ -128,7 +129,7 @@ private:
   const uint64_t n_layers_;
 
   std::vector<std::queue<StateContextPair>> processing_pre_attention_;
-  std::vector<std::queue<models::InferenceState>> processing_post_attention_;
+  std::vector<std::queue<models::InferenceState>> processing_post_cpu_attention_, processing_post_gpu_attention_;
 
   std::queue<StateContextPair> processing_attention_ {};
   std::queue<models::InferenceState> incoming_ {}, waiting_attention_ {}, outgoing_ {}, processing_classification_ {};
@@ -176,7 +177,8 @@ public:
     , end_layer_( end_layer )
     , n_layers_( end_layer_ - start_layer_ + 1 )
     , processing_pre_attention_( n_layers_ )
-    , processing_post_attention_( n_layers_ )
+    , processing_post_cpu_attention_( n_layers_ )
+    , processing_post_gpu_attention_( n_layers_ )
     , running_( true )
     , execution_thread_( &ComputeKernelPiped::execution_thread_func, this )
     , bookkeeping_thread_( &ComputeKernelPiped::bookkeeping_thread_func, this )
@@ -292,7 +294,9 @@ void ComputeKernelPiped<Model>::execution_thread_func()
         // TODO: these orders must be carefully examined here
 
         for ( int layer_idx = static_cast<int>( n_layers_ - 1 ); layer_idx >= 0; layer_idx-- ) {
-          if ( processing_post_attention_[layer_idx].size() >= target_conc_post_size_ and process_post_ ) {
+          if ( processing_post_gpu_attention_[layer_idx].size() >= target_conc_att_size_
+               and processing_post_cpu_attention_[layer_idx].size() >= target_conc_post_size_ - target_conc_att_size_
+               and process_post_ ) {
             next_stage = models::InferenceState::Stage::PostAttention;
             next_layer_idx = static_cast<uint32_t>( layer_idx );
             return true;
@@ -329,10 +333,16 @@ void ComputeKernelPiped<Model>::execution_thread_func()
           break;
         }
         case models::InferenceState::Stage::PostAttention: {
-          for ( size_t j = 0; j < target_conc_post_size_; j++ ) {
-            models::InferenceState action = std::move( processing_post_attention_[next_layer_idx].front() );
+          for ( size_t j = 0; j < target_conc_att_size_; j++ ) {
+            models::InferenceState action = std::move( processing_post_gpu_attention_[next_layer_idx].front() );
             //            LOG_EVERY_N( INFO, 384 ) << "got this in processing: " << action;
-            processing_post_attention_[next_layer_idx].pop();
+            processing_post_gpu_attention_[next_layer_idx].pop();
+            input_states.push_back( std::move( action ) );
+          }
+          for ( size_t j = target_conc_att_size_; j < target_conc_post_size_; j++ ) {
+            models::InferenceState action = std::move( processing_post_cpu_attention_[next_layer_idx].front() );
+            //            LOG_EVERY_N( INFO, 384 ) << "got this in processing: " << action;
+            processing_post_cpu_attention_[next_layer_idx].pop();
             input_states.push_back( std::move( action ) );
           }
           break;
@@ -386,6 +396,11 @@ void ComputeKernelPiped<Model>::execution_thread_func()
           result.set_timestamp( end.time_since_epoch().count() );
           result.set_batch_timestamp( end.time_since_epoch().count() );
           result.set_batch_last( false );
+#ifdef TARGET_PLATFORM_AMD64
+          result.set_last_on_cpu( true );
+#elif defined( TARGET_PLATFORM_CUDA )
+          result.set_last_on_cpu( false );
+#endif
         }
         results.back().set_batch_last( true );
       } break;
@@ -505,7 +520,14 @@ void ComputeKernelPiped<Model>::execution_thread_func()
           break;
         case models::InferenceState::Stage::Attention:
           for ( auto& action : processing_states ) {
-            processing_post_attention_[action.first.next_layer() - start_layer_].emplace( std::move( action.first ) );
+
+#ifdef TARGET_PLATFORM_AMD64
+            processing_post_cpu_attention_[action.first.next_layer() - start_layer_].emplace(
+              std::move( action.first ) );
+#elif defined( TARGET_PLATFORM_CUDA )
+            processing_post_gpu_attention_[action.first.next_layer() - start_layer_].emplace(
+              std::move( action.first ) );
+#endif
           }
           break;
         case models::InferenceState::Stage::PostAttention:
@@ -568,7 +590,12 @@ void ComputeKernelPiped<Model>::bookkeeping_thread_func()
         {
           // let's get the context for this action, but it doesn't matter if it's empty
           std::lock_guard lock( ctx_mgr_mutex_ );
-          context = context_manager_.get_context( action.prompt_id(), true );
+          if ( context_manager_.allocated() / target_conc_att_size_
+               < context_manager_.empty() / ( target_conc_post_size_ - target_conc_att_size_ ) ) {
+            context = context_manager_.get_context( action.prompt_id(), true );
+          } else {
+            context = context_manager_.get_context( action.prompt_id(), true, true );
+          }
         }
         {
           std::lock_guard lock( processing_mutex_ );
@@ -632,7 +659,10 @@ void ComputeKernelPiped<Model>::bookkeeping_thread_func()
         CHECK_EQ( process_post_, true ) << "This machine does not service the PostAttention pipeline";
         {
           std::lock_guard lock( processing_mutex_ );
-          processing_post_attention_[next_layer_index].emplace( std::move( action ) );
+          if ( action.last_on_cpu() )
+            processing_post_cpu_attention_[next_layer_index].emplace( std::move( action ) );
+          else
+            processing_post_gpu_attention_[next_layer_index].emplace( std::move( action ) );
         }
 
         processing_cv_.notify_one();
@@ -715,7 +745,7 @@ void ComputeKernelPiped<Model>::qmeasure_thread_func()
         __stats__.add_point<IntDistributions::ProcessingPreAttentionQueue>(
           processing_pre_attention_[layer_idx].size() );
         __stats__.add_point<IntDistributions::ProcessingPostAttentionQueue>(
-          processing_post_attention_[layer_idx].size() );
+          processing_post_gpu_attention_[layer_idx].size() + processing_post_cpu_attention_[layer_idx].size() );
       }
     }
 
