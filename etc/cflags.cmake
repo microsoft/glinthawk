@@ -12,7 +12,12 @@ else ()
 
   message ( NOTICE "GCC_TARGET_ARCH: ${GCC_TARGET_ARCH}" )
 
-  list ( APPEND OPTIMIZATION_FLAGS -march=${GCC_TARGET_ARCH} -O3 -ffast-math -fsingle-precision-constant )
+  set ( CMAKE_CXX_FLAGS "" )
+  set ( CMAKE_CXX_FLAGS_DEBUG "-g" )
+  set ( CMAKE_CXX_FLAGS_RELEASE "-O3" )
+  set ( CMAKE_CXX_FLAGS_RELWITHDEBINFO "-O3 -g" )
+
+  list ( APPEND OPTIMIZATION_FLAGS -march=${GCC_TARGET_ARCH} -ffast-math -fsingle-precision-constant )
   list ( APPEND GCC_STRICT_FLAGS -pedantic -pedantic-errors -Werror -Wall -Wextra -Wshadow -Wpointer-arith -Wcast-qual -Wformat=2 -Weffc++ -Wold-style-cast )
 
   foreach ( flag IN LISTS OPTIMIZATION_FLAGS  )
