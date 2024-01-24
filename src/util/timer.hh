@@ -30,6 +30,8 @@ public:
     uint64_t min_ns = std::numeric_limits<uint64_t>::max();
     uint64_t max_ns = 0;
 
+    void reset() { *this = Record {}; }
+
     void log( const uint64_t time_ns )
     {
       count++;
@@ -119,6 +121,8 @@ public:
     _records[static_cast<size_t>( category )].log( now - _start_time );
     _current_category.reset();
   }
+
+  void reset() { *this = Timer {}; }
 
   std::string summary() const;
 };
