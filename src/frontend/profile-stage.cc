@@ -80,16 +80,12 @@ int main( int argc, char* argv[] )
         }
         {
           GlobalScopeTimer<Timer::Category::MemoryInitializationDevice> _ {};
-          memset( reinterpret_cast<uint8_t*>( contexts[i]->layer( start_layer ).token( 0 ).key() ),
-                  1,
-                  contexts[i]->max_size( model.settings().n_layers_loaded() ) );
+          ops.randomize_device_buffer( contexts[i]->layer( start_layer ).token( 0 ).key(),
+                                       contexts[i]->max_size( model.settings().n_layers_loaded() )
+                                         / sizeof( _GLINTHAWK_DTYPE_ ),
+                                       -10.0 / sqrtf( ConfigType::dim ),
+                                       10.0 / sqrtf( ConfigType::dim ) );
         }
-
-        ops.randomize_device_buffer( contexts[i]->layer( start_layer ).token( 0 ).key(),
-                                     contexts[i]->max_size( model.settings().n_layers_loaded() )
-                                       / sizeof( _GLINTHAWK_DTYPE_ ),
-                                     -10.0 / sqrtf( ConfigType::dim ),
-                                     10.0 / sqrtf( ConfigType::dim ) );
 
         DataBuffer state_buffer;
         {
@@ -98,13 +94,11 @@ int main( int argc, char* argv[] )
         }
         {
           GlobalScopeTimer<Timer::Category::MemoryInitializationHost> _ {};
-          memset( state_buffer.data(), 1, state_buffer.len() );
+          util::randomize_buffer( reinterpret_cast<_GLINTHAWK_DTYPE_*>( state_buffer.data() ),
+                                  state_buffer.len() / sizeof( _GLINTHAWK_DTYPE_ ),
+                                  -10.0 / sqrtf( ConfigType::dim ),
+                                  10.0 / sqrtf( ConfigType::dim ) );
         }
-
-        util::randomize_buffer( reinterpret_cast<_GLINTHAWK_DTYPE_*>( state_buffer.data() ),
-                                state_buffer.len() / sizeof( _GLINTHAWK_DTYPE_ ),
-                                -10.0 / sqrtf( ConfigType::dim ),
-                                10.0 / sqrtf( ConfigType::dim ) );
 
         states[i] = { DataType::_GLINTHAWK_DTYPE_NAME_ };
         states[i].set_token_pos( ConfigType::seq_len - 1 );
