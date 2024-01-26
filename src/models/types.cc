@@ -40,6 +40,10 @@ void DataBufferDeleter::set_buffer_pool( DataBufferPool* pool, const size_t len 
 
 DataBufferPool::PtrType DataBufferPool::get( const size_t n )
 {
+  if ( n == 0 ) {
+    return nullptr;
+  }
+
   if ( !ENABLE_DATA_BUFFER_POOL || n < MIN_BUFFER_SIZE_POOLED ) {
     // small buffers are not pooled
     return PtrType { new uint8_t[n], DataBufferDeleter() };
