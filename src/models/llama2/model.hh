@@ -1,6 +1,7 @@
 #pragma once
 
 #include "base.hh"
+#include "models/common/state.hh"
 #include "ops/concept.hh"
 #include "variants.hh"
 
@@ -45,16 +46,28 @@ protected:
                     const ContextVector& contexts,
                     const InferenceState::Stage stage ) const;
 
+  void check_batch( const BatchedInferenceState& inference_states,
+                    const ContextVector& contexts,
+                    const InferenceState::Stage stage ) const;
+
   void load_embedding( const StateVector& inference_state );
+  void load_embedding( const BatchedInferenceState& inference_state );
 
   void forward_prelude( StateVector& inference_state, const ContextVector& contexts );
+  void forward_prelude( BatchedInferenceState& inference_state, const ContextVector& contexts );
+
   void pre_attention_ops( const int32_t layer_num );
   void attention_ops();
   void post_attention_ops( const int32_t layer_num );
   void classify_ops();
+
   [[nodiscard]] StateVector forward_postlude( StateVector&& inference_state,
                                               const int32_t most_recent_layer_num,
                                               const bool classified );
+
+  [[nodiscard]] BatchedInferenceState forward_postlude( BatchedInferenceState&& inference_state,
+                                                        const int32_t most_recent_layer_num,
+                                                        const bool classified );
 
 public:
   Llama2( const std::filesystem::path& model_dir,
@@ -78,6 +91,12 @@ public:
   [[nodiscard]] StateVector attention_forward( StateVector&& states, const ContextVector& ctxs );
   [[nodiscard]] StateVector post_attention_forward( StateVector&& states );
   [[nodiscard]] StateVector classify_forward( StateVector&& states );
+
+  [[nodiscard]] BatchedInferenceState forward( BatchedInferenceState&& state, const ContextVector& ctxs );
+  [[nodiscard]] BatchedInferenceState pre_attention_forward( BatchedInferenceState&& state, const ContextVector& ctxs );
+  [[nodiscard]] BatchedInferenceState attention_forward( BatchedInferenceState&& state, const ContextVector& ctxs );
+  [[nodiscard]] BatchedInferenceState post_attention_forward( BatchedInferenceState&& state );
+  [[nodiscard]] BatchedInferenceState classify_forward( BatchedInferenceState&& state );
 
   void dummy_forward( InferenceState& inference_state );
   bool is_finished( const InferenceState& inference_state );
