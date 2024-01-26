@@ -151,48 +151,46 @@ BatchedInferenceState<Config>::BatchedInferenceState( const std::string_view ser
   size_t expected_size = sizeof( Metadata );
   CHECK_GE( serialized_state.size(), expected_size ) << "Serialized state is too small to contain metadata";
 
-  // copy the metadata
   std::memcpy( &metadata_, ptr, sizeof( Metadata ) );
   ptr += sizeof( Metadata );
 
-  // check if the serialized state is big enough to contain the prompts
   expected_size += metadata_.batch_size * sizeof( PromptData );
   CHECK_GE( serialized_state.size(), expected_size ) << "Serialized state is too small to contain prompts";
 
-  // resize the prompts
   prompts_.resize( metadata_.batch_size );
 
-  // copy the prompts
   std::memcpy( prompts_.data(), ptr, metadata_.batch_size * sizeof( PromptData ) );
   ptr += metadata_.batch_size * sizeof( PromptData );
 
   if ( has_activations() ) {
     expected_size += metadata_.batch_size * activation_len();
-    // check if the serialized state is big enough to contain the activations
     CHECK_GE( serialized_state.size(), expected_size ) << "Serialized state is too small to contain activations";
 
-    // copy the activations
+    activations_ = DataBuffer( metadata_.batch_size * activation_len() );
     std::memcpy( activations_.get(), ptr, metadata_.batch_size * activation_len() );
     ptr += metadata_.batch_size * activation_len();
   }
 
   if ( has_queries() ) {
-    // check if the serialized state is big enough to contain the queries
     expected_size += metadata_.batch_size * q_len();
     CHECK_GE( serialized_state.size(), expected_size ) << "Serialized state is too small to contain queries";
 
-    // copy the queries
+    queries_ = DataBuffer( metadata_.batch_size * q_len() );
     std::memcpy( queries_.get(), ptr, metadata_.batch_size * q_len() );
+    ptr += metadata_.batch_size * q_len();
   }
 
   if ( has_kvs() ) {
-    // check if the serialized state is big enough to contain the key-values
     expected_size += metadata_.batch_size * kv_len();
     CHECK_GE( serialized_state.size(), expected_size ) << "Serialized state is too small to contain key-values";
 
-    // copy the key-values
+    kvs_ = DataBuffer( metadata_.batch_size * kv_len() );
     std::memcpy( kvs_.get(), ptr, metadata_.batch_size * kv_len() );
+    ptr += metadata_.batch_size * kv_len();
   }
+
+  CHECK_EQ( ptr, serialized_state.data() + serialized_state.size() )
+    << "Serialized state contains more data than expected";
 }
 
 template<typename Config>
