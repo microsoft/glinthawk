@@ -15,7 +15,7 @@ namespace glinthawk::models::llama2 {
 template<typename Config, typename DType, typename LlamaOperations, typename Context>
 requires ModelConfig<Config> && LlamaOperationsConcept<LlamaOperations, DType, Settings<Config>>
          && ContextConcept<Context, DType>
-class Llama2 : public glinthawk::models::Model<Context>
+class Llama2
 {
 public:
   using StateVector = std::vector<InferenceState>;
@@ -64,21 +64,20 @@ public:
           const uint64_t max_context_count = 1,
           const bool randomize_parameters = false );
 
-  [[nodiscard]] InferenceState forward( InferenceState&& inference_state, ContextPtr context ) override;
-  [[nodiscard]] InferenceState pre_attention_forward( InferenceState&& inference_state, ContextPtr context ) override;
-  [[nodiscard]] InferenceState attention_forward( InferenceState&& inference_state, ContextPtr context ) override;
-  [[nodiscard]] InferenceState post_attention_forward( InferenceState&& inference_state ) override;
-  [[nodiscard]] InferenceState classify_forward( InferenceState&& inference_state ) override;
+  [[nodiscard]] InferenceState forward( InferenceState&& state, ContextPtr ctx );
+  [[nodiscard]] InferenceState pre_attention_forward( InferenceState&& state, ContextPtr ctx );
+  [[nodiscard]] InferenceState attention_forward( InferenceState&& state, ContextPtr ctx );
+  [[nodiscard]] InferenceState post_attention_forward( InferenceState&& state );
+  [[nodiscard]] InferenceState classify_forward( InferenceState&& state );
 
-  [[nodiscard]] StateVector forward( StateVector&& inference_states, const ContextVector& contexts ) override;
-  [[nodiscard]] StateVector pre_attention_forward( StateVector&& inference_states,
-                                                   const ContextVector& contexts ) override;
-  [[nodiscard]] StateVector attention_forward( StateVector&& inference_states, const ContextVector& contexts ) override;
-  [[nodiscard]] StateVector post_attention_forward( StateVector&& inference_states ) override;
-  [[nodiscard]] StateVector classify_forward( StateVector&& inference_states ) override;
+  [[nodiscard]] StateVector forward( StateVector&& states, const ContextVector& ctxs );
+  [[nodiscard]] StateVector pre_attention_forward( StateVector&& states, const ContextVector& ctxs );
+  [[nodiscard]] StateVector attention_forward( StateVector&& states, const ContextVector& ctxs );
+  [[nodiscard]] StateVector post_attention_forward( StateVector&& states );
+  [[nodiscard]] StateVector classify_forward( StateVector&& states );
 
-  void dummy_forward( InferenceState& inference_state ) override;
-  bool is_finished( const InferenceState& inference_state ) override;
+  void dummy_forward( InferenceState& inference_state );
+  bool is_finished( const InferenceState& inference_state );
 
   Settings<Config> settings() const { return settings_; }
 };

@@ -126,32 +126,6 @@ public:
   void erase_from_workers( const uint32_t next_layer, const Stage next_stage );
 };
 
-template<typename Context>
-class Model
-{
-public:
-  using ContextPtr = std::shared_ptr<Context>;
-  using StateVector = std::vector<InferenceState>;
-  using ContextVector = std::vector<ContextPtr>;
-
-  virtual ~Model() = default;
-
-  virtual void dummy_forward( InferenceState& inference_state ) = 0;
-  virtual bool is_finished( const InferenceState& inference_state ) = 0;
-
-  virtual InferenceState forward( InferenceState&& inference_state, ContextPtr context ) = 0;
-  virtual InferenceState pre_attention_forward( InferenceState&& inference_state, ContextPtr context ) = 0;
-  virtual InferenceState attention_forward( InferenceState&& inference_state, ContextPtr context ) = 0;
-  virtual InferenceState post_attention_forward( InferenceState&& inference_state ) = 0;
-  virtual InferenceState classify_forward( InferenceState&& inference_state ) = 0;
-
-  virtual StateVector forward( StateVector&& inference_states, const ContextVector& contexts ) = 0;
-  virtual StateVector pre_attention_forward( StateVector&& inference_states, const ContextVector& contexts ) = 0;
-  virtual StateVector attention_forward( StateVector&& inference_states, const ContextVector& contexts ) = 0;
-  virtual StateVector post_attention_forward( StateVector&& inference_states ) = 0;
-  virtual StateVector classify_forward( StateVector&& inference_states ) = 0;
-};
-
 } // namespace glinthawk::models
 
 std::ostream& operator<<( std::ostream& os, const glinthawk::DataType& v );
