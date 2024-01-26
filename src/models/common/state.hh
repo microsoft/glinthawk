@@ -60,15 +60,32 @@ private:
   uint8_t* kv_ptr( const size_t i ) { return kvs_.get() + i * kv_len(); }
 
 public:
-  BatchedInferenceState( uint32_t batch_size, DataType dtype, RouteID route_id, ModelID model_id )
+  BatchedInferenceState( uint32_t batch_size,
+                         DataType dtype,
+                         RouteID route_id,
+                         ModelID model_id,
+                         const bool state_has_activations,
+                         const bool state_has_queries,
+                         const bool state_has_kvs )
     : batch_size_( batch_size )
     , dtype_( dtype )
     , route_id_( route_id )
     , model_id_( model_id )
-    , activations_( batch_size * Config::dim * DataTypeSize( dtype_ ) )
-    , queries_( batch_size * Config::dim * DataTypeSize( dtype_ ) )
-    , kvs_( batch_size * Config::kv_dim * DataTypeSize( dtype_ ) )
   {
+    if ( state_has_activations ) {
+      activations_ = DataBuffer( batch_size * activation_len() );
+      set_has_activations( true );
+    }
+
+    if ( state_has_queries ) {
+      queries_ = DataBuffer( batch_size * q_len() );
+      set_has_queries( true );
+    }
+
+    if ( state_has_kvs ) {
+      kvs_ = DataBuffer( batch_size * kv_len() );
+      set_has_kvs( true );
+    }
   }
 
   // TODO(sadjad) eventually we got to get rid of the default constructor.
@@ -194,7 +211,7 @@ BatchedInferenceState<Config>::BatchedInferenceState( const std::string_view ser
 }
 
 template<typename Config>
-std::string serialize() const
+std::string BatchedInferenceState<Config>::serialize() const
 {
   std::string serialized_state;
   const size_t expected_size = sizeof( Metadata ) + metadata_.batch_size * sizeof( PromptData )
