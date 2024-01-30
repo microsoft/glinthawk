@@ -19,6 +19,7 @@ requires ModelConfig<Config> && LlamaOperationsConcept<LlamaOperations, DType, S
 class Llama2
 {
 public:
+  using BatchedState = BatchedInferenceState<Config>;
   using StateVector = std::vector<InferenceState>;
   using ContextPtr = std::shared_ptr<Context>;
   using ContextVector = std::vector<ContextPtr>;
@@ -46,15 +47,15 @@ protected:
                     const ContextVector& contexts,
                     const InferenceState::Stage stage ) const;
 
-  void check_batch( const BatchedInferenceState& inference_states,
+  void check_batch( const BatchedState& inference_states,
                     const ContextVector& contexts,
                     const InferenceState::Stage stage ) const;
 
   void load_embedding( const StateVector& inference_state );
-  void load_embedding( const BatchedInferenceState& inference_state );
+  void load_embedding( const BatchedState& inference_state );
 
   void forward_prelude( StateVector& inference_state, const ContextVector& contexts );
-  void forward_prelude( BatchedInferenceState& inference_state, const ContextVector& contexts );
+  void forward_prelude( BatchedState& inference_state, const ContextVector& contexts );
 
   void pre_attention_ops( const int32_t layer_num );
   void attention_ops();
@@ -65,9 +66,9 @@ protected:
                                               const int32_t most_recent_layer_num,
                                               const bool classified );
 
-  [[nodiscard]] BatchedInferenceState forward_postlude( BatchedInferenceState&& inference_state,
-                                                        const int32_t most_recent_layer_num,
-                                                        const bool classified );
+  [[nodiscard]] BatchedState forward_postlude( BatchedState&& inference_state,
+                                               const int32_t most_recent_layer_num,
+                                               const bool classified );
 
 public:
   Llama2( const std::filesystem::path& model_dir,
@@ -80,23 +81,17 @@ public:
           const uint64_t max_context_count = 1,
           const bool randomize_parameters = false );
 
-  [[nodiscard]] InferenceState forward( InferenceState&& state, ContextPtr ctx );
-  [[nodiscard]] InferenceState pre_attention_forward( InferenceState&& state, ContextPtr ctx );
-  [[nodiscard]] InferenceState attention_forward( InferenceState&& state, ContextPtr ctx );
-  [[nodiscard]] InferenceState post_attention_forward( InferenceState&& state );
-  [[nodiscard]] InferenceState classify_forward( InferenceState&& state );
-
   [[nodiscard]] StateVector forward( StateVector&& states, const ContextVector& ctxs );
   [[nodiscard]] StateVector pre_attention_forward( StateVector&& states, const ContextVector& ctxs );
   [[nodiscard]] StateVector attention_forward( StateVector&& states, const ContextVector& ctxs );
   [[nodiscard]] StateVector post_attention_forward( StateVector&& states );
   [[nodiscard]] StateVector classify_forward( StateVector&& states );
 
-  [[nodiscard]] BatchedInferenceState forward( BatchedInferenceState&& state, const ContextVector& ctxs );
-  [[nodiscard]] BatchedInferenceState pre_attention_forward( BatchedInferenceState&& state, const ContextVector& ctxs );
-  [[nodiscard]] BatchedInferenceState attention_forward( BatchedInferenceState&& state, const ContextVector& ctxs );
-  [[nodiscard]] BatchedInferenceState post_attention_forward( BatchedInferenceState&& state );
-  [[nodiscard]] BatchedInferenceState classify_forward( BatchedInferenceState&& state );
+  [[nodiscard]] BatchedState forward( BatchedState&& state, const ContextVector& ctxs );
+  [[nodiscard]] BatchedState pre_attention_forward( BatchedState&& state, const ContextVector& ctxs );
+  [[nodiscard]] BatchedState attention_forward( BatchedState&& state, const ContextVector& ctxs );
+  [[nodiscard]] BatchedState post_attention_forward( BatchedState&& state );
+  [[nodiscard]] BatchedState classify_forward( BatchedState&& state );
 
   void dummy_forward( InferenceState& inference_state );
   bool is_finished( const InferenceState& inference_state );
