@@ -196,10 +196,48 @@ void Llama2<Config, DType, LlamaOperations, Context>::check_batch(
 }
 
 template<typename Config, typename DType, typename LlamaOperations, typename Context>
+void Llama2<Config, DType, LlamaOperations, Context>::check_batch(
+  const BatchedState& states,
+  const std::vector<std::shared_ptr<Context>>& contexts,
+  const InferenceState::Stage stage ) const
+{
+  CHECK_GT( states.batch_size(), 0 );
+  CHECK_LE( states.batch_size(), settings_.concurrency_limit );
+
+  if ( stage == InferenceState::Stage::PreAttention or stage == InferenceState::Stage::Attention ) {
+    CHECK_EQ( states.batch_size(), contexts.size() );
+  }
+
+  const uint32_t next_layer_batch = states.next_layer();
+
+  CHECK_LE( settings_.start_layer_num, next_layer_batch );
+  CHECK_LE( next_layer_batch, settings_.end_layer_num );
+
+  CHECK( states.next_stage() == stage );
+
+  if ( stage != InferenceState::Stage::Attention ) {
+    CHECK_DTYPE<DType>( states.dtype() );
+    CHECK_EQ( states.next_layer(), next_layer_batch );
+  }
+}
+
+template<typename Config, typename DType, typename LlamaOperations, typename Context>
 void Llama2<Config, DType, LlamaOperations, Context>::load_embedding( const std::vector<InferenceState>& states )
 {
   for ( size_t i = 0; i < states.size(); i++ ) {
     const auto token = states[i].token();
+    CHECK_LT( token, Config::vocab_size );
+
+    const DType* content_row = this->base_weights_.token_embedding_table + token * Config::dim;
+    ops_.copy( this->state_.x + i * Config::dim, content_row, Config::dim * sizeof( DType ), CopyType::HostToDevice );
+  }
+}
+
+template<typename Config, typename DType, typename LlamaOperations, typename Context>
+void Llama2<Config, DType, LlamaOperations, Context>::load_embedding( const BatchedState& states )
+{
+  for ( size_t i = 0; i < states.batch_size(); i++ ) {
+    const auto token = states.token( i );
     CHECK_LT( token, Config::vocab_size );
 
     const DType* content_row = this->base_weights_.token_embedding_table + token * Config::dim;
@@ -347,6 +385,34 @@ void Llama2<Config, DType, LlamaOperations, Context>::forward_prelude(
 }
 
 template<typename Config, typename DType, typename LlamaOperations, typename Context>
+void Llama2<Config, DType, LlamaOperations, Context>::forward_prelude( BatchedState& states,
+                                                                       const ContextVector& contexts )
+{
+  this->check_batch( states, contexts, InferenceState::Stage::PreAttention );
+
+  this->state_.curr_concurrency_size = states.batch_size();
+  const uint32_t next_layer_batch = states.next_layer();
+
+  for ( size_t i = 0; i < contexts.size(); i++ ) {
+    this->state_.batch_token_positions[i] = states.token_pos( i );
+    this->state_.batch_layer_contexts[i] = contexts[i]->layer( next_layer_batch );
+    this->state_.batch_token_contexts[i] = contexts[i]->layer( next_layer_batch ).token( states.token_pos( i ) );
+  }
+
+  if ( next_layer_batch == 0 ) {
+    /* THE FIRST LAYER, just read the tokens */
+    load_embedding( states );
+  } else {
+    /* NOT THE FIRST LAYER, load the activations */
+    ops_.copy( this->state_.x,
+               reinterpret_cast<DType*>( states.activations().data() ),
+               states.activations().len(),
+               CopyType::HostToDevice,
+               true );
+  }
+}
+
+template<typename Config, typename DType, typename LlamaOperations, typename Context>
 std::vector<InferenceState> Llama2<Config, DType, LlamaOperations, Context>::forward_postlude(
   std::vector<InferenceState>&& states,
   const int32_t most_recent_layer_num,
@@ -396,6 +462,56 @@ std::vector<InferenceState> Llama2<Config, DType, LlamaOperations, Context>::for
 }
 
 template<typename Config, typename DType, typename LlamaOperations, typename Context>
+BatchedInferenceState<Config> Llama2<Config, DType, LlamaOperations, Context>::forward_postlude(
+  BatchedState&& states,
+  const int32_t most_recent_layer_num,
+  const bool classified )
+{
+  if ( classified ) {
+    CHECK_EQ( most_recent_layer_num, Config::n_layers - 1 );
+
+    std::vector<float> batch_temps;
+    for ( size_t i = 0; i < states.batch_size(); i++ ) {
+      batch_temps.push_back( states.temperature( i ) );
+    }
+
+    extract_batch_token( this->ops_, this->state_, batch_temps );
+
+    // we don't need to send the activations (or anything else) to the next worker, just the token
+    states.deallocate_activations();
+    states.deallocate_queries();
+    states.deallocate_kvs();
+
+    states.set_next_layer( 0 );
+    states.set_next_stage( InferenceState::Stage::PreAttention );
+
+    // XXX(sadjad): what do we do if the token is EOS?
+    for ( size_t i = 0; i < states.batch_size(); i++ ) {
+      states.set_token( i, this->state_.argmax_pos[i] );
+      states.set_token_pos( i, states.token_pos( i ) + 1 );
+    }
+  } else {
+    // all we need to send is activations; the memory is already allocated
+    states.deallocate_queries();
+    states.deallocate_kvs();
+
+    ops_.copy( reinterpret_cast<DType*>( states.activations().data() ),
+               this->state_.x,
+               states.batch_size() * Config::dim * sizeof( DType ),
+               CopyType::DeviceToHost );
+
+    if ( most_recent_layer_num == Config::n_layers - 1 ) {
+      states.set_next_stage( InferenceState::Stage::Classification );
+    } else {
+      states.set_next_stage( InferenceState::Stage::PreAttention );
+      states.set_next_layer( most_recent_layer_num + 1 );
+    }
+  }
+
+  return std::move( states );
+}
+
+template<typename Config, typename DType, typename LlamaOperations, typename Context>
 std::vector<InferenceState> Llama2<Config, DType, LlamaOperations, Context>::forward(
   std::vector<InferenceState>&& states,
   const ContextVector& contexts )
@@ -406,6 +522,31 @@ std::vector<InferenceState> Llama2<Config, DType, LlamaOperations, Context>::for
     for ( size_t i = 0; i < contexts.size(); i++ ) {
       this->state_.batch_layer_contexts[i] = contexts[i]->layer( layer_num );
       this->state_.batch_token_contexts[i] = contexts[i]->layer( layer_num ).token( states[i].token_pos() );
+    }
+
+    pre_attention_ops( layer_num );
+    attention_ops();
+    post_attention_ops( layer_num );
+  }
+
+  if ( this->settings_.end_layer_num == Config::n_layers - 1 ) {
+    classify_ops();
+    return forward_postlude( std::move( states ), this->settings_.end_layer_num, true );
+  } else {
+    return forward_postlude( std::move( states ), this->settings_.end_layer_num, false );
+  }
+}
+
+template<typename Config, typename DType, typename LlamaOperations, typename Context>
+BatchedInferenceState<Config> Llama2<Config, DType, LlamaOperations, Context>::forward( BatchedState&& states,
+                                                                                        const ContextVector& contexts )
+{
+  forward_prelude( states, contexts );
+
+  for ( size_t layer_num = states.next_layer(); layer_num <= this->settings_.end_layer_num; layer_num++ ) {
+    for ( size_t i = 0; i < contexts.size(); i++ ) {
+      this->state_.batch_layer_contexts[i] = contexts[i]->layer( layer_num );
+      this->state_.batch_token_contexts[i] = contexts[i]->layer( layer_num ).token( states.token_pos( i ) );
     }
 
     pre_attention_ops( layer_num );
@@ -462,6 +603,44 @@ std::vector<InferenceState> Llama2<Config, DType, LlamaOperations, Context>::pre
   }
 
   return output_states;
+}
+
+template<typename Config, typename DType, typename LlamaOperations, typename Context>
+BatchedInferenceState<Config> Llama2<Config, DType, LlamaOperations, Context>::pre_attention_forward(
+  BatchedState&& states,
+  const ContextVector& contexts )
+{
+  forward_prelude( states, contexts );
+  pre_attention_ops( states.next_layer() );
+
+  if ( not states.has_activations() ) {
+    states.allocate_activations();
+  }
+
+  if ( not states.has_queries() ) {
+    states.allocate_queries();
+  }
+
+  if ( not states.has_kvs() ) {
+    states.allocate_kvs();
+  }
+
+  ops_.copy( reinterpret_cast<DType*>( states.activations().data() ),
+             this->state_.x,
+             states.activations().len(),
+             CopyType::DeviceToHost );
+
+  ops_.copy( reinterpret_cast<DType*>( states.queries().data() ),
+             this->state_.q,
+             states.queries().len(),
+             CopyType::DeviceToHost );
+
+  // XXX(sadjad): Copying KV is not always necessary (i.e., if context[i]->empty()), but for convenience we always do it
+  ops_.copy(
+    reinterpret_cast<DType*>( states.kvs().data() ), this->state_.kv, states.kvs().len(), CopyType::DeviceToHost );
+
+  states.set_next_stage( InferenceState::Stage::Attention );
+  return std::move( states );
 }
 
 template<typename Config, typename DType, typename LlamaOperations, typename Context>
@@ -564,6 +743,92 @@ std::vector<InferenceState> Llama2<Config, DType, LlamaOperations, Context>::att
 }
 
 template<typename Config, typename DType, typename LlamaOperations, typename Context>
+BatchedInferenceState<Config> Llama2<Config, DType, LlamaOperations, Context>::attention_forward(
+  BatchedState&& states,
+  const ContextVector& contexts )
+{
+  this->check_batch( states, contexts, InferenceState::Stage::Attention );
+  this->state_.curr_concurrency_size = states.batch_size();
+
+  for ( size_t i = 0; i < states.batch_size(); i++ ) {
+    this->state_.batch_token_positions[i] = states.token_pos( i );
+    this->state_.batch_layer_contexts[i] = contexts[i]->layer( states.next_layer() );
+    this->state_.batch_token_contexts[i] = contexts[i]->layer( states.next_layer() ).token( states.token_pos( i ) );
+  }
+
+  switch ( states.dtype() ) {
+    case DataType::Float16:
+      ops_.template convert_and_copy( this->state_.q,
+                                      reinterpret_cast<LlamaOperations::Float16*>( states.activations().data() ),
+                                      states.activations().len() / sizeof( typename LlamaOperations::Float16 ),
+                                      CopyType::HostToDevice );
+      break;
+
+    case DataType::Float32:
+      ops_.template convert_and_copy( this->state_.q,
+                                      reinterpret_cast<LlamaOperations::Float32*>( states.activations().data() ),
+                                      states.activations().len() / sizeof( typename LlamaOperations::Float32 ),
+                                      CopyType::HostToDevice );
+      break;
+
+    default: LOG( FATAL ) << "invalid dtype";
+  }
+
+  if ( states.has_kvs() ) {
+    for ( size_t i = 0; i < states.batch_size(); i++ ) {
+      switch ( states.dtype() ) {
+        case DataType::Float16:
+          ops_.template convert_and_copy(
+            contexts[i]->layer( states.next_layer() ).token( states.token_pos( i ) ).key(),
+            reinterpret_cast<LlamaOperations::Float16*>( states.kv( i ).data() ),
+            Config::kv_dim * 2,
+            CopyType::HostToDevice );
+          break;
+
+        case DataType::Float32:
+          ops_.template convert_and_copy(
+            contexts[i]->layer( states.next_layer() ).token( states.token_pos( i ) ).key(),
+            reinterpret_cast<LlamaOperations::Float32*>( states.kv( i ).data() ),
+            Config::kv_dim * 2,
+            CopyType::HostToDevice );
+          break;
+
+        default: LOG( FATAL ) << "invalid dtype";
+      }
+    }
+  }
+
+  attention_ops();
+
+  if ( not states.has_queries() ) {
+    states.allocate_queries();
+  }
+
+  // FIXME(sadjad): what we're copying here is not actually the query, but for the sake of simplicity we're reusing the
+  // query buffer. I'm not proud of this.
+  switch ( states.dtype() ) {
+    case DataType::Float16:
+      ops_.template convert_and_copy( reinterpret_cast<LlamaOperations::Float16*>( states.queries().data() ),
+                                      this->state_.xb,
+                                      states.queries().len() / sizeof( typename LlamaOperations::Float16 ),
+                                      CopyType::DeviceToHost );
+      break;
+
+    case DataType::Float32:
+      ops_.template convert_and_copy( reinterpret_cast<LlamaOperations::Float32*>( states.queries().data() ),
+                                      this->state_.xb,
+                                      states.queries().len() / sizeof( typename LlamaOperations::Float32 ),
+                                      CopyType::DeviceToHost );
+      break;
+
+    default: throw std::runtime_error( "invalid dtype" );
+  }
+
+  states.set_next_stage( InferenceState::Stage::PostAttention );
+  return std::move( states );
+}
+
+template<typename Config, typename DType, typename LlamaOperations, typename Context>
 std::vector<InferenceState> Llama2<Config, DType, LlamaOperations, Context>::post_attention_forward(
   std::vector<InferenceState>&& states )
 {
@@ -589,6 +854,28 @@ std::vector<InferenceState> Llama2<Config, DType, LlamaOperations, Context>::pos
 }
 
 template<typename Config, typename DType, typename LlamaOperations, typename Context>
+BatchedInferenceState<Config> Llama2<Config, DType, LlamaOperations, Context>::post_attention_forward(
+  BatchedState&& states )
+{
+  this->check_batch( states, {}, InferenceState::Stage::PostAttention );
+  this->state_.curr_concurrency_size = states.batch_size();
+
+  ops_.copy( this->state_.x,
+             reinterpret_cast<DType*>( states.activations().data() ),
+             states.activations().len(),
+             CopyType::HostToDevice );
+
+  ops_.copy( this->state_.xb,
+             reinterpret_cast<DType*>( states.queries().data() ),
+             states.queries().len(),
+             CopyType::HostToDevice );
+
+  post_attention_ops( states.next_layer() );
+
+  return forward_postlude( std::move( states ), states.next_layer(), false );
+}
+
+template<typename Config, typename DType, typename LlamaOperations, typename Context>
 std::vector<InferenceState> Llama2<Config, DType, LlamaOperations, Context>::classify_forward(
   std::vector<InferenceState>&& states )
 {
@@ -609,47 +896,20 @@ std::vector<InferenceState> Llama2<Config, DType, LlamaOperations, Context>::cla
 }
 
 template<typename Config, typename DType, typename LlamaOperations, typename Context>
-InferenceState Llama2<Config, DType, LlamaOperations, Context>::forward( InferenceState&& state,
-                                                                         std::shared_ptr<Context> context )
+BatchedInferenceState<Config> Llama2<Config, DType, LlamaOperations, Context>::classify_forward( BatchedState&& states )
 {
-  std::vector<InferenceState> states;
-  states.push_back( std::move( state ) );
-  return std::move( forward( std::move( states ), std::vector { context } ).at( 0 ) );
-}
+  this->check_batch( states, {}, InferenceState::Stage::Classification );
+  this->state_.curr_concurrency_size = states.batch_size();
 
-template<typename Config, typename DType, typename LlamaOperations, typename Context>
-InferenceState Llama2<Config, DType, LlamaOperations, Context>::pre_attention_forward(
-  InferenceState&& state,
-  std::shared_ptr<Context> context )
-{
-  std::vector<InferenceState> states;
-  states.push_back( std::move( state ) );
-  return std::move( pre_attention_forward( std::move( states ), std::vector { context } ).at( 0 ) );
-}
+  // load the activations
+  ops_.copy( this->state_.x,
+             reinterpret_cast<DType*>( states.activations().data() ),
+             states.activations().len(),
+             CopyType::HostToDevice );
 
-template<typename Config, typename DType, typename LlamaOperations, typename Context>
-InferenceState Llama2<Config, DType, LlamaOperations, Context>::attention_forward( InferenceState&& state,
-                                                                                   std::shared_ptr<Context> context )
-{
-  std::vector<InferenceState> states;
-  states.push_back( std::move( state ) );
-  return std::move( attention_forward( std::move( states ), std::vector { context } ).at( 0 ) );
-}
+  classify_ops();
 
-template<typename Config, typename DType, typename LlamaOperations, typename Context>
-InferenceState Llama2<Config, DType, LlamaOperations, Context>::post_attention_forward( InferenceState&& state )
-{
-  std::vector<InferenceState> states;
-  states.push_back( std::move( state ) );
-  return std::move( post_attention_forward( std::move( states ) ).at( 0 ) );
-}
-
-template<typename Config, typename DType, typename LlamaOperations, typename Context>
-InferenceState Llama2<Config, DType, LlamaOperations, Context>::classify_forward( InferenceState&& state )
-{
-  std::vector<InferenceState> states;
-  states.push_back( std::move( state ) );
-  return std::move( classify_forward( std::move( states ) ).at( 0 ) );
+  return forward_postlude( std::move( states ), states.next_layer(), true );
 }
 
 #define INSTANTIATE_MODEL( PLATFORM, MODEL, DTYPE )                                                                    \
