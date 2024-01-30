@@ -19,15 +19,6 @@ public:
   using Stage = InferenceState::Stage;
 
 private:
-  struct __attribute__( ( packed ) ) PromptData
-  {
-    PromptID prompt_id;
-    uint32_t token;
-    uint32_t token_pos;
-    uint8_t temperature; // compact temprature, between [0, 255]; has to be divided by 255.0f
-    uint32_t prompt_length;
-  };
-
   struct __attribute__( ( packed ) ) Metadata
   {
     uint32_t batch_size {};
@@ -43,21 +34,30 @@ private:
     bool has_kvs { false };
   };
 
-  Metadata metadata_;
-  std::vector<PromptData> prompts_( batch_size_ );
+  struct __attribute__( ( packed ) ) PromptData
+  {
+    PromptID prompt_id {};
+    uint32_t token {};
+    uint32_t token_pos {};
+    uint8_t temperature {}; // compact temprature, between [0, 255]; has to be divided by 255.0f before use.
+    uint32_t prompt_length {};
+  };
+
+  Metadata metadata_ {};
+  std::vector<PromptData> prompts_ {};
 
   // we use contiguous memory for activations, queries, and key-values; allowing one-shot copying.
   DataBuffer activations_ {};
   DataBuffer queries_ {};
   DataBuffer kvs_ {};
 
-  size_t activation_len() const { return Config::dim * DataTypeSize( dtype_ ); }
-  size_t q_len() const { return Config::dim * DataTypeSize( dtype_ ); }
-  size_t kv_len() const { return 2 * Config::kv_dim * DataTypeSize( dtype_ ); }
+  size_t activation_len() const { return Config::dim * DataTypeSize( metadata_.dtype ); }
+  size_t q_len() const { return Config::dim * DataTypeSize( metadata_.dtype ); }
+  size_t kv_len() const { return 2 * Config::kv_dim * DataTypeSize( metadata_.dtype ); }
 
-  uint8_t* activation_ptr( const size_t i ) { return activations_.get() + i * activation_len(); }
-  uint8_t* q_ptr( const size_t i ) { return queries_.get() + i * q_len(); }
-  uint8_t* kv_ptr( const size_t i ) { return kvs_.get() + i * kv_len(); }
+  uint8_t* activation_ptr( const size_t i ) { return activations_.data() + i * activation_len(); }
+  uint8_t* q_ptr( const size_t i ) { return queries_.data() + i * q_len(); }
+  uint8_t* kv_ptr( const size_t i ) { return kvs_.data() + i * kv_len(); }
 
 public:
   BatchedInferenceState( uint32_t batch_size,
@@ -67,24 +67,27 @@ public:
                          const bool state_has_activations,
                          const bool state_has_queries,
                          const bool state_has_kvs )
-    : batch_size_( batch_size )
-    , dtype_( dtype )
-    , route_id_( route_id )
-    , model_id_( model_id )
   {
+    metadata_.batch_size = batch_size;
+    metadata_.dtype = dtype;
+    metadata_.route_id = route_id;
+    metadata_.model_id = model_id;
+    metadata_.has_activations = state_has_activations;
+    metadata_.has_queries = state_has_queries;
+    metadata_.has_kvs = state_has_kvs;
+
+    prompts_.resize( metadata_.batch_size );
+
     if ( state_has_activations ) {
-      activations_ = DataBuffer( batch_size * activation_len() );
-      set_has_activations( true );
+      allocate_activations();
     }
 
     if ( state_has_queries ) {
-      queries_ = DataBuffer( batch_size * q_len() );
-      set_has_queries( true );
+      allocate_queries();
     }
 
     if ( state_has_kvs ) {
-      kvs_ = DataBuffer( batch_size * kv_len() );
-      set_has_kvs( true );
+      allocate_kvs();
     }
   }
 
@@ -149,14 +152,37 @@ public:
   uint32_t prompt_length( const size_t i ) const { return prompts_[i].prompt_length; }
   float temperature( const size_t i ) const { return prompts_[i].temperature / 255.0f; }
 
+  // prompt setters
+  void set_prompt_id( const size_t i, PromptID prompt_id ) { prompts_[i].prompt_id = prompt_id; }
+  void set_token( const size_t i, uint32_t token ) { prompts_[i].token = token; }
+  void set_token_pos( const size_t i, uint32_t token_pos ) { prompts_[i].token_pos = token_pos; }
+  void set_prompt_length( const size_t i, uint32_t prompt_length ) { prompts_[i].prompt_length = prompt_length; }
+  void set_temperature( const size_t i, float t ) { prompts_[i].temperature = static_cast<uint8_t>( t * 255.0f ); }
+
   // The memory is owned by the inference state; be careful with the lifetime of the returned spans.
   std::span<uint8_t> activations( const size_t i ) { return { activation_ptr( i ), activation_len() }; }
   std::span<uint8_t> q( const size_t i ) { return { q_ptr( i ), q_len() }; }
   std::span<uint8_t> kv( const size_t i ) { return { kv_ptr( i ), kv_len() }; }
 
   std::span<const uint8_t> activations( const size_t i ) const { return { activation_ptr( i ), activation_len() }; }
-  std::span<const uint8_t> q( const size_t i ) const { q_ptr( i ), q_len() };
+  std::span<const uint8_t> q( const size_t i ) const { return { q_ptr( i ), q_len() }; }
   std::span<const uint8_t> kv( const size_t i ) const { return { kv_ptr( i ), kv_len() }; }
+
+  DataBuffer& activations() { return activations_; }
+  DataBuffer& queries() { return queries_; }
+  DataBuffer& kvs() { return kvs_; }
+
+  const DataBuffer& activations() const { return activations_; }
+  const DataBuffer& queries() const { return queries_; }
+  const DataBuffer& kvs() const { return kvs_; }
+
+  void allocate_activations();
+  void allocate_queries();
+  void allocate_kvs();
+
+  void deallocate_activations();
+  void deallocate_queries();
+  void deallocate_kvs();
 };
 
 template<typename Config>
@@ -184,7 +210,7 @@ BatchedInferenceState<Config>::BatchedInferenceState( const std::string_view ser
     CHECK_GE( serialized_state.size(), expected_size ) << "Serialized state is too small to contain activations";
 
     activations_ = DataBuffer( metadata_.batch_size * activation_len() );
-    std::memcpy( activations_.get(), ptr, metadata_.batch_size * activation_len() );
+    std::memcpy( activations_.data(), ptr, metadata_.batch_size * activation_len() );
     ptr += metadata_.batch_size * activation_len();
   }
 
@@ -193,7 +219,7 @@ BatchedInferenceState<Config>::BatchedInferenceState( const std::string_view ser
     CHECK_GE( serialized_state.size(), expected_size ) << "Serialized state is too small to contain queries";
 
     queries_ = DataBuffer( metadata_.batch_size * q_len() );
-    std::memcpy( queries_.get(), ptr, metadata_.batch_size * q_len() );
+    std::memcpy( queries_.data(), ptr, metadata_.batch_size * q_len() );
     ptr += metadata_.batch_size * q_len();
   }
 
@@ -202,7 +228,7 @@ BatchedInferenceState<Config>::BatchedInferenceState( const std::string_view ser
     CHECK_GE( serialized_state.size(), expected_size ) << "Serialized state is too small to contain key-values";
 
     kvs_ = DataBuffer( metadata_.batch_size * kv_len() );
-    std::memcpy( kvs_.get(), ptr, metadata_.batch_size * kv_len() );
+    std::memcpy( kvs_.data(), ptr, metadata_.batch_size * kv_len() );
     ptr += metadata_.batch_size * kv_len();
   }
 
@@ -228,19 +254,61 @@ std::string BatchedInferenceState<Config>::serialize() const
                            metadata_.batch_size * sizeof( PromptData ) );
 
   if ( has_activations() ) {
-    serialized_state.append( reinterpret_cast<const char*>( activations_.get() ),
+    serialized_state.append( reinterpret_cast<const char*>( activations_.data() ),
                              metadata_.batch_size * activation_len() );
   }
 
   if ( has_queries() ) {
-    serialized_state.append( reinterpret_cast<const char*>( queries_.get() ), metadata_.batch_size * q_len() );
+    serialized_state.append( reinterpret_cast<const char*>( queries_.data() ), metadata_.batch_size * q_len() );
   }
 
   if ( has_kvs() ) {
-    serialized_state.append( reinterpret_cast<const char*>( kvs_.get() ), metadata_.batch_size * kv_len() );
+    serialized_state.append( reinterpret_cast<const char*>( kvs_.data() ), metadata_.batch_size * kv_len() );
   }
 
   return serialized_state;
+}
+
+template<typename Config>
+void BatchedInferenceState<Config>::allocate_activations()
+{
+  activations_ = { metadata_.batch_size * activation_len() };
+  set_has_activations( true );
+}
+
+template<typename Config>
+void BatchedInferenceState<Config>::allocate_queries()
+{
+  queries_ = { metadata_.batch_size * q_len() };
+  set_has_queries( true );
+}
+
+template<typename Config>
+void BatchedInferenceState<Config>::allocate_kvs()
+{
+  kvs_ = { metadata_.batch_size * kv_len() };
+  set_has_kvs( true );
+}
+
+template<typename Config>
+void BatchedInferenceState<Config>::deallocate_activations()
+{
+  activations_ = {};
+  set_has_activations( false );
+}
+
+template<typename Config>
+void BatchedInferenceState<Config>::deallocate_queries()
+{
+  queries_ = {};
+  set_has_queries( false );
+}
+
+template<typename Config>
+void BatchedInferenceState<Config>::deallocate_kvs()
+{
+  kvs_ = {};
+  set_has_kvs( false );
 }
 
 } // namespace glinthawk::models
