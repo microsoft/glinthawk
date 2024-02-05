@@ -51,7 +51,8 @@ void Worker<Model>::setup_stats_handler()
   if ( filesystem::is_socket( telegraf_socket, err ) ) {
     LOG( INFO ) << "Telegraf socket found at " << telegraf_socket.string();
     telegraf_logger_ = make_unique<monitoring::TelegrafLogger>( telegraf_socket );
-    telegraf_logger_->install_rules( event_loop_, telegraf_rule_categories_, []( auto&& ) { return true; }, [] {} );
+    telegraf_logger_->install_rules(
+      event_loop_, telegraf_rule_categories_, []( auto&& ) { return true; }, [] {} );
   } else {
     LOG( WARNING ) << "Telegraf socket not found at " << telegraf_socket.string();
   }
@@ -112,22 +113,33 @@ void Worker<Model>::setup_compute_kernel( const filesystem::path& model_root,
 {
   CHECK_LE( start_layer, end_layer ) << "start_layer must be less than or equal to end_layer";
 
-  const int max_concurrency_size = std::max( { concurrency_size_pre_attention,
-                                               concurrency_size_attention,
-                                               concurrency_size_post_attention,
-                                               concurrency_size_classification } );
-
-  //  compute_kernel_ = make_unique<compute::ComputeKernel<Model>>(
-  //    make_unique<Model>( model_root, start_layer, end_layer, max_concurrency_size, max_context_count, randomize ),
-  //    max_concurrency_size );
-  compute_kernel_ = make_unique<compute::ComputeKernelPiped<Model>>(
-    make_unique<Model>( model_root, start_layer, end_layer, max_concurrency_size, max_context_count, randomize ),
-    concurrency_size_pre_attention,
-    concurrency_size_attention,
-    concurrency_size_post_attention,
-    concurrency_size_classification,
-    start_layer,
-    end_layer );
+//  compute_kernel_ = make_unique<compute::ComputeKernel<Model>>( make_unique<Model>( model_root,
+//                                                                                    start_layer,
+//                                                                                    end_layer,
+//                                                                                    concurrency_size_pre_attention,
+//                                                                                    concurrency_size_attention,
+//                                                                                    concurrency_size_post_attention,
+//                                                                                    concurrency_size_classification,
+//                                                                                    ,
+//                                                                                    max_context_count,
+//                                                                                    randomize ),
+//                                                                max_concurrency_size );
+  compute_kernel_
+    = make_unique<compute::ComputeKernelPiped<Model>>( make_unique<Model>( model_root,
+                                                                           start_layer,
+                                                                           end_layer,
+                                                                           concurrency_size_pre_attention,
+                                                                           concurrency_size_attention,
+                                                                           concurrency_size_post_attention,
+                                                                           concurrency_size_classification,
+                                                                           max_context_count,
+                                                                           randomize ),
+                                                       concurrency_size_pre_attention,
+                                                       concurrency_size_attention,
+                                                       concurrency_size_post_attention,
+                                                       concurrency_size_classification,
+                                                       start_layer,
+                                                       end_layer );
 
   event_loop_.add_rule( "Compute Kernel",
                         Direction::In,
