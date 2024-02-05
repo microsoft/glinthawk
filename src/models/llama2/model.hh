@@ -60,7 +60,10 @@ public:
   Llama2( const std::filesystem::path& model_dir,
           const uint32_t start_layer = 0,
           const uint32_t end_layer = std::numeric_limits<uint32_t>::max(),
-          const uint64_t concurrency_limit = 1,
+          const uint64_t pre_att_concurrency_limit = 1,
+          const uint64_t att_concurrency_limit = 1,
+          const uint64_t post_att_concurrency_limit = 1,
+          const uint64_t cls_concurrency_limit = 1,
           const uint64_t max_context_count = 1,
           const bool randomize_parameters = false );
 
