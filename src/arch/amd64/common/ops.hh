@@ -45,6 +45,14 @@ public:
   DeviceUniquePtr device_allocate( const uint64_t size_bytes );
 
   void copy( DType* dst, const DType* src, const uint64_t len_bytes, const CopyType type, const bool async = false );
+
+  void copy_table( DType* dst,
+                   const DType* src,
+                   const std::vector<uint64_t>& dst_offset,
+                   const std::vector<uint64_t>& src_offset,
+                   const std::vector<uint64_t>& len_bytes,
+                   const CopyType type,
+                   const bool async = false );
 };
 
 static_assert( OperationsConcept<Operations<float>, float> );
@@ -190,6 +198,21 @@ template<typename DType>
 void Operations<DType>::copy( DType* dst, const DType* src, const uint64_t len_bytes, const CopyType, const bool )
 {
   std::memcpy( dst, src, len_bytes );
+}
+
+template<typename DType>
+void Operations<DType>::copy_table( DType* dst,
+                                    const DType* src,
+                                    const std::vector<uint64_t>& dst_offset,
+                                    const std::vector<uint64_t>& src_offset,
+                                    const std::vector<uint64_t>& len_bytes,
+                                    const CopyType,
+                                    const bool )
+{
+  for ( size_t i = 0; i < dst_offset.size(); i++ ) {
+    if ( len_bytes[i] > 0 )
+      std::memcpy( dst + dst_offset[i], src + src_offset[i], len_bytes[i] );
+  }
 }
 
 } // namespace glinthawk::models::common::amd64
