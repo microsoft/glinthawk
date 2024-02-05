@@ -34,7 +34,15 @@ public:
                            const uint32_t end_slice,
                            const uint64_t batch_size,
                            const bool randomize_parameters )
-    : model_( model_path, start_slice, end_slice, batch_size, randomize_parameters )
+    : model_( model_path,
+              start_slice,
+              end_slice,
+              batch_size,
+              batch_size,
+              batch_size,
+              batch_size,
+              batch_size,
+              randomize_parameters )
   {
   }
 
@@ -60,7 +68,6 @@ template<Platform platform, DataType data_type>
 struct SimpleComputeKernelTraits;
 
 #if defined( TARGET_PLATFORM_AMD64 )
-
 
 template<>
 struct SimpleComputeKernelTraits<Platform::AMD64, DataType::Float32>
