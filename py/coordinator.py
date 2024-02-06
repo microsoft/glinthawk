@@ -95,16 +95,6 @@ class Coordinator:
             n_layers=kwargs.get("n_layers", 80),
             layers_per_worker=kwargs.get("layers_per_worker", 1),
         )
-        # self.model = ModelInfo(
-        #     name="llama2-7b-chat",
-        #     n_layers=kwargs.get("n_layers", 12),
-        #     layers_per_worker=kwargs.get("layers_per_worker", 6),
-        # )
-        # self.model = ModelInfo(
-        #     name="stories-110m",
-        #     n_layers=kwargs.get("n_layers", 12),
-        #     layers_per_worker=kwargs.get("layers_per_worker", 6),
-        # )
 
         # Dummy prompt generation
         self.initial_dummy_count = kwargs.get("dummy_count", 0)
@@ -116,6 +106,9 @@ class Coordinator:
         self.concurrency_size_att = kwargs.get("concurrency_size_att", 16)
         self.concurrency_size_post = kwargs.get("concurrency_size_post", 16)
         self.concurrency_size_cls = kwargs.get("concurrency_size_cls", 16)
+
+        self.cpu_context_count = kwargs.get("cpu_context_count", 36*81*2)
+        self.gpu_context_count = kwargs.get("gpu_context_count", 18*81)
 
         self.logger = logging.getLogger("coordinator")
         self.logger.setLevel(logging.INFO)
@@ -208,26 +201,33 @@ class Coordinator:
                         worker.max_concurrency_size_pre = 0
                         worker.max_concurrency_size_att = self.concurrency_size_att
                         worker.max_concurrency_size_post = 0
-                        context_count = 32 * 81 * 2
+                        worker.max_concurrency_size_cls = 0
+                        context_count = self.cpu_context_count
                     else:
                         worker.start_layer = self.model.n_layers - 1
                         worker.end_layer = self.model.n_layers - 1
-                        worker.max_concurrency_size_cls = self.concurrency_size_cls
+                        worker.max_concurrency_size_pre = 0
+                        worker.max_concurrency_size_att = 0
+                        worker.max_concurrency_size_post = 0
+                        worker.max_concurrency_size_cls = 0
                         context_count = 0
                 else:
                     if self.ip_port_to_index[worker.ip] < self.model.n_layers / self.model.layers_per_worker:
                         worker.start_layer = self.ip_port_to_index[worker.ip] * self.model.layers_per_worker
                         worker.end_layer = (self.ip_port_to_index[worker.ip] + 1) * self.model.layers_per_worker - 1
+                        worker.max_concurrency_size_pre = self.concurrency_size_pre
+                        worker.max_concurrency_size_att = 0
+                        worker.max_concurrency_size_post = self.concurrency_size_post
                         worker.max_concurrency_size_cls = 0
-                        context_count = 16 * 81
+                        context_count = self.gpu_context_count
                     else:
                         worker.start_layer = self.model.n_layers - 1
                         worker.end_layer = self.model.n_layers - 1
+                        worker.max_concurrency_size_pre = 0
+                        worker.max_concurrency_size_att = 0
+                        worker.max_concurrency_size_post = 0
                         worker.max_concurrency_size_cls = self.concurrency_size_cls
                         context_count = 0
-                    worker.max_concurrency_size_pre = self.concurrency_size_pre
-                    worker.max_concurrency_size_att = self.concurrency_size_att
-                    worker.max_concurrency_size_post = self.concurrency_size_post
 
                 initialization_message = glinthawk_pb.InitializeWorker(
                     model_name=self.model.name,
@@ -238,7 +238,7 @@ class Coordinator:
                     concurrency_post_att_size=worker.max_concurrency_size_post,
                     concurrency_cls_size=worker.max_concurrency_size_cls,
                     max_context_count=context_count,
-                    randomize=message.opcode == Message.OpCode.HeyCPU,
+                    randomize=False,
                     blobstore_uri=settings.GLINTHAWK_PROMPT_BLOBSTORE,
                 )
 
@@ -252,13 +252,14 @@ class Coordinator:
                     ]
                 )
 
+                ignore = False
                 if message.opcode == Message.OpCode.HeyCPU:
                     if self.ip_port_to_index[worker.ip] < self.model.n_layers / self.model.layers_per_worker:
                         if worker.start_layer not in self.layer_workers:
                             self.layer_workers[worker.start_layer] = [None, None]
                         self.layer_workers[worker.start_layer][1] = worker
                     else:
-                        pass
+                        ignore = True
                 else:
                     if self.ip_port_to_index[worker.ip] < self.model.n_layers / self.model.layers_per_worker:
                         if worker.start_layer not in self.layer_workers:
@@ -269,7 +270,7 @@ class Coordinator:
 
                 if len(self.layer_workers) == self.model.n_layers / self.model.layers_per_worker and \
                         all(self.layer_workers[key][0] is not None and self.layer_workers[key][1] is not None for key in self.layer_workers) and \
-                        self.cls_gpu_worker is not None:
+                        self.cls_gpu_worker is not None and not ignore:
                     # all layers have been assigned
                     # setting the route for the first worker
                     self.outgoing_messages.put_nowait(
@@ -355,6 +356,8 @@ class Coordinator:
     type=click.INT,
     default=0,
 )
+@click.option("--cpu_context_count", "-NCPU", type=click.INT, default=0)
+@click.option("--gpu_context_count", "-NGPU", type=click.INT, default=0)
 @click.option("--concurrency-size-pre", "-C1", type=click.INT, default=1)
 @click.option("--concurrency-size-att", "-C2", type=click.INT, default=1)
 @click.option("--concurrency-size-post", "-C3", type=click.INT, default=1)
