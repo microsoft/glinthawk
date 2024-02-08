@@ -59,7 +59,7 @@ public:
         }
       }
 
-      cout << vocabulary_.get_word( state_.token( 0 ) );
+      cout << vocabulary_.get_word( state_.token( 0 ) ) << flush;
     }
   }
 };

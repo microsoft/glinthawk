@@ -777,15 +777,15 @@ BatchedInferenceState<Config> Llama2<Config, DType, LlamaOperations, Context>::a
   switch ( states.dtype() ) {
     case DataType::Float16:
       ops_.template convert_and_copy( this->state_.q,
-                                      reinterpret_cast<LlamaOperations::Float16*>( states.activations().data() ),
-                                      states.activations().len() / sizeof( typename LlamaOperations::Float16 ),
+                                      reinterpret_cast<LlamaOperations::Float16*>( states.queries().data() ),
+                                      states.queries().len() / sizeof( typename LlamaOperations::Float16 ),
                                       CopyType::HostToDevice );
       break;
 
     case DataType::Float32:
       ops_.template convert_and_copy( this->state_.q,
-                                      reinterpret_cast<LlamaOperations::Float32*>( states.activations().data() ),
-                                      states.activations().len() / sizeof( typename LlamaOperations::Float32 ),
+                                      reinterpret_cast<LlamaOperations::Float32*>( states.queries().data() ),
+                                      states.queries().len() / sizeof( typename LlamaOperations::Float32 ),
                                       CopyType::HostToDevice );
       break;
 
