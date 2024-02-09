@@ -1,8 +1,9 @@
-list ( APPEND GLINTHAWK_TARGETS  worker profile infer profile-stage infer-batch )
+list ( APPEND GLINTHAWK_TARGETS  worker profile infer infer-batch )
 list ( APPEND GLINTHAWK_DTYPES FLOAT16 FLOAT32 )
 
 foreach ( TARGET ${GLINTHAWK_TARGETS} )
   foreach ( DTYPE ${GLINTHAWK_DTYPES} )
+
     if ( DTYPE STREQUAL FLOAT16 )
       set ( TYPE_SUFFIX "fp16" )
     elseif ( DTYPE STREQUAL FLOAT32 )
