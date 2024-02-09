@@ -11,9 +11,7 @@ void randomize_buffer( DType* buffer, size_t len, const float min, const float m
   static thread_local std::mt19937 generator { std::random_device {}() };
   std::uniform_real_distribution<float> distribution( min, max );
 
-  size_t i;
-#pragma omp parallel for schedule( static ) private( i )
-  for ( i = 0; i < len; i++ ) {
+  for ( size_t i = 0; i < len; i++ ) {
     if constexpr ( std::is_same_v<DType, float> ) {
       buffer[i] = distribution( generator );
     } else {
