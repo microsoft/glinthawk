@@ -94,6 +94,7 @@ public:
   bool is_finished( const InferenceState& inference_state );
 
   Settings<Config> settings() const { return settings_; }
+  Operations& ops() { return ops_; }
 };
 
 #define DECLARE_MODEL( PLATFORM, MODEL_NAME )                                                                          \
