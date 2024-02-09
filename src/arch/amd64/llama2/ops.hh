@@ -179,7 +179,7 @@ void LlamaOperations<Config, DType, ContextType>::attention_0_gemm(
   const uint64_t batch_size,
   const uint32_t* token_positions )
 {
-  constexpr float scale = 1.0f / sqrtf( Config::head_size );
+  const float scale = 1.0f / sqrtf( Config::head_size );
 
   constexpr uint64_t ld_qry = Config::head_size;
   constexpr uint64_t ld_att = Config::seq_len;
