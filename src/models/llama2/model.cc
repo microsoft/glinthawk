@@ -936,16 +936,22 @@ BatchedInferenceState<Config> Llama2<Config, DType, LlamaOperations, Context>::c
                         PLATFORM::LlamaOperations<configs::MODEL, DTYPE>,                                              \
                         PLATFORM::Context<configs::MODEL, DTYPE>>;
 
-#if defined( TARGET_PLATFORM_AMD64 )
+#if defined( TARGET_PLATFORM_AMD64 ) || defined( TARGET_PLATFORM_CUDA )
 INSTANTIATE_MODEL( amd64, Stories_110M, float );
 INSTANTIATE_MODEL( amd64, Llama2_7B_Chat, float );
 INSTANTIATE_MODEL( amd64, Llama2_13B_Chat, float );
 INSTANTIATE_MODEL( amd64, Llama2_70B_Chat, float );
+#endif
+
+// _Float16 is not supported by `nvcc`
+#if defined( TARGET_PLATFORM_AMD64 )
 INSTANTIATE_MODEL( amd64, Stories_110M, _Float16 );
 INSTANTIATE_MODEL( amd64, Llama2_7B_Chat, _Float16 );
 INSTANTIATE_MODEL( amd64, Llama2_13B_Chat, _Float16 );
 INSTANTIATE_MODEL( amd64, Llama2_70B_Chat, _Float16 );
-#elif defined( TARGET_PLATFORM_CUDA )
+#endif
+
+#if defined( TARGET_PLATFORM_CUDA )
 INSTANTIATE_MODEL( cuda, Stories_110M, float );
 INSTANTIATE_MODEL( cuda, Llama2_7B_Chat, float );
 INSTANTIATE_MODEL( cuda, Llama2_13B_Chat, float );
