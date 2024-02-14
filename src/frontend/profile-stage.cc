@@ -51,14 +51,16 @@ int main( int argc, char* argv[] )
                                               models::InferenceState::Stage::PostAttention,
                                               batch_size,
                                               token_pos,
-                                              duration_s };
+                                              duration_s,
+                                              false };
 
     Profiler<Model_AMD64_FP32> profiler_amd64 { log_root / "amd64_fp32_att.log",
                                                 model_dir,
                                                 models::InferenceState::Stage::Attention,
                                                 batch_size,
                                                 token_pos,
-                                                duration_s };
+                                                duration_s,
+                                                false };
 
     profiler_cuda.run_in_thread();
     profiler_amd64.run_in_thread();
