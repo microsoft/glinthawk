@@ -33,6 +33,9 @@ private:
 
   std::thread thread_ {};
 
+  const bool run_serialization_ { false };
+  std::thread serialization_thread_ {};
+
   const std::filesystem::path log_path_;
   std::ofstream lout_ { log_path_, std::ios::out | std::ios::trunc };
 
@@ -42,12 +45,14 @@ public:
             const Stage stage,
             const size_t batch_size,
             const size_t token_pos,
-            const size_t duration_s )
+            const size_t duration_s,
+            const bool run_serialization )
     : model_( model_root, 1, 1, batch_size, batch_size, true )
     , stage_( stage )
     , batch_size_( batch_size )
     , token_pos_( token_pos )
     , duration_( duration_s )
+    , run_serialization_( run_serialization )
     , log_path_( log_path )
   {
     for ( size_t i = 0; i < batch_size; i++ ) {
@@ -94,6 +99,21 @@ public:
     }
   }
 
+  void run_serialization()
+  {
+    const auto end_time = std::chrono::steady_clock::now() + duration_;
+
+    DataBuffer state_buffer { ( 2 * ConfigType::dim + 2 * ConfigType::kv_dim ) * sizeof( ModelDataType ) };
+    models::InferenceState state { sizeof( ModelDataType ) == 2 ? DataType::Float16 : DataType::Float32 };
+
+    for ( auto now = std::chrono::steady_clock::now(); now < end_time; now = std::chrono::steady_clock::now() ) {
+      const auto sleep_util = now + std::chrono::microseconds( 500 );
+      const auto state_str = state.serialize();
+      state = { state_str };
+      std::this_thread::sleep_until( sleep_util );
+    }
+  }
+
   void run()
   {
     const auto end_time = std::chrono::steady_clock::now() + duration_;
@@ -136,12 +156,20 @@ public:
     }
 
     thread_ = std::thread( &Profiler::run, this );
+
+    if ( run_serialization_ and not serialization_thread_.joinable() ) {
+      serialization_thread_ = std::thread( &Profiler::run_serialization, this );
+    }
   }
 
   void wait()
   {
     if ( thread_.joinable() ) {
       thread_.join();
+    }
+
+    if ( serialization_thread_.joinable() ) {
+      serialization_thread_.join();
     }
   }
 };
