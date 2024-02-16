@@ -93,7 +93,7 @@ public:
 
   // TODO(sadjad) eventually we got to get rid of the default constructor.
   BatchedInferenceState()
-    : BatchedInferenceState( 0, DataType::Float32, 0, 0 )
+    : BatchedInferenceState( 0, DataType::Float32, {}, {}, {}, {}, {} )
   {
   }
 
@@ -194,7 +194,7 @@ BatchedInferenceState<Config>::BatchedInferenceState( const std::string_view ser
   size_t expected_size = sizeof( Metadata );
   CHECK_GE( serialized_state.size(), expected_size ) << "Serialized state is too small to contain metadata";
 
-  std::memcpy( &metadata_, ptr, sizeof( Metadata ) );
+  metadata_ = *reinterpret_cast<const Metadata*>( ptr );
   ptr += sizeof( Metadata );
 
   expected_size += metadata_.batch_size * sizeof( PromptData );
@@ -202,7 +202,7 @@ BatchedInferenceState<Config>::BatchedInferenceState( const std::string_view ser
 
   prompts_.resize( metadata_.batch_size );
 
-  std::memcpy( prompts_.data(), ptr, metadata_.batch_size * sizeof( PromptData ) );
+  std::memcpy( reinterpret_cast<char*>( prompts_.data() ), ptr, metadata_.batch_size * sizeof( PromptData ) );
   ptr += metadata_.batch_size * sizeof( PromptData );
 
   if ( has_activations() ) {
