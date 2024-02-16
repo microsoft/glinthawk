@@ -35,6 +35,7 @@ private:
 
   struct __attribute__( ( packed ) ) PromptData
   {
+    bool active { true };
     PromptID prompt_id {};
     uint32_t token {};
     uint32_t token_pos {};
@@ -150,6 +151,7 @@ public:
   uint32_t prompt_length( const size_t i ) const { return prompts_[i].prompt_length; }
   float temperature( const size_t i ) const { return prompts_[i].temperature / 255.0f; }
   bool finished( const size_t i ) const { return prompts_[i].finished; }
+  bool active( const size_t i ) const { return prompts_[i].active; }
 
   // prompt setters
   void set_prompt_id( const size_t i, PromptID prompt_id ) { prompts_[i].prompt_id = prompt_id; }
@@ -158,6 +160,7 @@ public:
   void set_prompt_length( const size_t i, uint32_t prompt_length ) { prompts_[i].prompt_length = prompt_length; }
   void set_temperature( const size_t i, float t ) { prompts_[i].temperature = static_cast<uint8_t>( t * 255.0f ); }
   void set_finished( const size_t i, bool finished ) { prompts_[i].finished = finished; }
+  void set_active( const size_t i, bool active ) { prompts_[i].active = active; }
 
   // The memory is owned by the inference state; be careful with the lifetime of the returned spans.
   std::span<uint8_t> activations( const size_t i ) { return { activation_ptr( i ), activation_len() }; }
