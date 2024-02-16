@@ -20,10 +20,20 @@ template<class Model>
 class BatchInference
 {
 private:
+  using StateType = models::BatchedInferenceState<typename Model::ConfigType>;
+
   Model model_;
   models::llama2::Vocabulary vocabulary_;
-  models::BatchedInferenceState<typename Model::ConfigType> state_;
+  StateType state_;
   vector<typename Model::ContextPtr> contexts_ {};
+
+  StateType ser_des( StateType&& state )
+  {
+    const std::string ser = state.serialize();
+    state = {};
+
+    return StateType { ser };
+  }
 
 public:
   BatchInference( const filesystem::path& model_path,
@@ -50,11 +60,17 @@ public:
   {
     for ( size_t i = 0; i < Model::ConfigType::seq_len; i++ ) {
       for ( size_t layer = 0; layer < Model::ConfigType::n_layers; layer++ ) {
+        state_ = ser_des( move( state_ ) );
         state_ = model_.pre_attention_forward( move( state_ ), contexts_ );
+
+        state_ = ser_des( move( state_ ) );
         state_ = model_.attention_forward( move( state_ ), contexts_ );
+
+        state_ = ser_des( move( state_ ) );
         state_ = model_.post_attention_forward( move( state_ ) );
 
         if ( state_.next_stage() == decltype( state_ )::Stage::Classification ) {
+          state_ = ser_des( move( state_ ) );
           state_ = model_.classify_forward( move( state_ ) );
         }
       }
