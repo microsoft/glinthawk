@@ -25,7 +25,6 @@ private:
     DataType dtype { DataType::Float32 };
     RouteID route_id {};
     ModelID model_id {};
-    bool finished { false };
     uint32_t next_layer { 0 };
     Stage next_stage { Stage::PreAttention };
 
@@ -41,6 +40,7 @@ private:
     uint32_t token_pos {};
     uint8_t temperature {}; // compact temprature, between [0, 255]; has to be divided by 255.0f before use.
     uint32_t prompt_length {};
+    bool finished { false };
   };
 
   Metadata metadata_ {};
@@ -111,7 +111,6 @@ public:
   void set_dtype( DataType dtype ) { metadata_.dtype_ = dtype; }
   void set_route_id( RouteID route_id ) { metadata_.route_id = route_id; }
   void set_model_id( ModelID model_id ) { metadata_.model_id = model_id; }
-  void set_finished( bool finished ) { metadata_.finished = finished; }
   void set_next_layer( uint32_t next_layer ) { metadata_.next_layer = next_layer; }
   void set_next_stage( Stage next_stage ) { metadata_.next_stage = next_stage; }
   void set_has_activations( bool has_activations ) { metadata_.has_activations = has_activations; }
@@ -123,7 +122,6 @@ public:
   DataType dtype() const { return metadata_.dtype; }
   RouteID route_id() const { return metadata_.route_id; }
   ModelID model_id() const { return metadata_.model_id; }
-  bool finished() const { return metadata_.finished; }
   uint32_t next_layer() const { return metadata_.next_layer; }
   Stage next_stage() const { return metadata_.next_stage; }
   bool has_activations() const { return metadata_.has_activations; }
@@ -151,6 +149,7 @@ public:
   uint32_t token_pos( const size_t i ) const { return prompts_[i].token_pos; }
   uint32_t prompt_length( const size_t i ) const { return prompts_[i].prompt_length; }
   float temperature( const size_t i ) const { return prompts_[i].temperature / 255.0f; }
+  bool finished( const size_t i ) const { return prompts_[i].finished; }
 
   // prompt setters
   void set_prompt_id( const size_t i, PromptID prompt_id ) { prompts_[i].prompt_id = prompt_id; }
@@ -158,6 +157,7 @@ public:
   void set_token_pos( const size_t i, uint32_t token_pos ) { prompts_[i].token_pos = token_pos; }
   void set_prompt_length( const size_t i, uint32_t prompt_length ) { prompts_[i].prompt_length = prompt_length; }
   void set_temperature( const size_t i, float t ) { prompts_[i].temperature = static_cast<uint8_t>( t * 255.0f ); }
+  void set_finished( const size_t i, bool finished ) { prompts_[i].finished = finished; }
 
   // The memory is owned by the inference state; be careful with the lifetime of the returned spans.
   std::span<uint8_t> activations( const size_t i ) { return { activation_ptr( i ), activation_len() }; }
