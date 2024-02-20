@@ -496,7 +496,7 @@ BatchedInferenceState<Config> Llama2<Config, DType, LlamaOperations, Context>::f
       states.set_token_pos( i, states.token_pos( i ) + 1 );
 
       if ( states.token( i ) == TOKEN_EOS or states.token_pos( i ) >= Config::seq_len ) {
-        states.set_finished( i, true );
+        states.set_finished( i );
       }
     }
   } else {
