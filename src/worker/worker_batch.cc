@@ -122,12 +122,7 @@ void BatchedWorker<Model>::setup_compute_kernel( const filesystem::path& model_r
 
   compute_kernel_ = make_unique<compute::BatchedComputeKernel<Model>>(
     make_unique<Model>( model_root, start_layer, end_layer, max_concurrency_size, max_context_count, randomize ),
-    concurrency_size_pre_attention,
-    concurrency_size_attention,
-    concurrency_size_post_attention,
-    concurrency_size_classification,
-    start_layer,
-    end_layer );
+    max_concurrency_size );
 
   event_loop_.add_rule( "Compute Kernel",
                         Direction::In,
@@ -291,8 +286,8 @@ bool BatchedWorker<Model>::handle_coordinator_message( core::Message&& msg )
       protobuf::PushDummyPrompts proto;
       proto.ParseFromString( msg.payload() );
 
-      const size_t prompt_count = proto.count();
-      const size_t batch_size = proto.batch_size();
+      const uint32_t prompt_count = proto.count();
+      const uint32_t batch_size = proto.batch_size();
 
       RouteID route_id_dummy;
       util::digest::sha256( "dummy_path", route_id_dummy );
@@ -323,7 +318,7 @@ bool BatchedWorker<Model>::handle_coordinator_message( core::Message&& msg )
       char prompt_id_buf[sizeof( uint64_t ) * 2];
       memcpy( prompt_id_buf, &current_time, sizeof( uint64_t ) );
 
-      const auto batch_count = ( prompt_count + ( batch_size - 1 ) ) / batch_size;
+      const uint32_t batch_count = ( prompt_count + ( batch_size - 1 ) ) / batch_size;
 
       for ( size_t i = 0; i < batch_count; i++ ) {
         BatchedInferenceState<typename Model::ConfigType> state {
@@ -343,7 +338,7 @@ bool BatchedWorker<Model>::handle_coordinator_message( core::Message&& msg )
           util::digest::sha256( { prompt_id_buf, sizeof( prompt_id_buf ) }, prompt_id );
           dummy_prompt_current_id_++;
 
-          state.set_prompt( i, prompt_id, TOKEN_BOS, 0, temp_dist( temp_gen ), 1 );
+          state.set_prompt( i, prompt_id, 1 /* TOKEN_BOS */, 0, temp_dist( temp_gen ), 1 );
         }
 
         this->compute_kernel_->push( move( state ) );
@@ -415,7 +410,7 @@ void BatchedWorker<Model>::handle_compute_kernel_event()
   while ( this->compute_kernel_->pop( state ) ) {
     __stats__.increment<Counters::StatesProcessed>( state.batch_size() );
 
-    const auto& next_worker = find_next_worker( route_set_.at( state.route_id() ), state );
+    const auto next_worker = find_next_worker( route_set_.at( state.route_id() ), state );
     auto peer_it = peers_.find( next_worker );
 
     // are we connected to this?
@@ -424,7 +419,7 @@ void BatchedWorker<Model>::handle_compute_kernel_event()
       socket.set_blocking( false );
       socket.connect( next_worker );
 
-      [ peer_it, std::ignore ] = peers_.emplace(
+      tie( peer_it, ignore ) = peers_.emplace(
         piecewise_construct, forward_as_tuple( next_worker ), forward_as_tuple( next_worker, move( socket ) ) );
 
       setup_peer( peer_it );
@@ -447,14 +442,13 @@ bool BatchedWorker<Model>::handle_peer_message( core::Message&& msg )
       auto it = route_set_.find( state.route_id() );
 
       if ( it == route_set_.end() ) {
-        LOG( FATAL ) << "No route id " << state.route_id().base58digest().substr( 0, 8 )
-                     << " in route set for prompt: " << state;
+        LOG( FATAL ) << "No route id " << state.route_id().base58digest().substr( 0, 8 ) << " in route set.";
       }
 
       if ( state.next_layer() == 0 and state.next_stage() == BatchedState::Stage::PreAttention ) {
         /* first worker in the chain */
 
-        for ( const size_t i = 0; i < state.batch_size(); i++ ) {
+        for ( size_t i = 0; i < state.batch_size(); i++ ) {
           if ( state.finished( i ) ) {
             __stats__.increment<Counters::TokensGenerated>();
 
