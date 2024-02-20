@@ -67,30 +67,7 @@ public:
                          ModelID model_id,
                          const bool state_has_activations,
                          const bool state_has_queries,
-                         const bool state_has_kvs )
-  {
-    metadata_.batch_size = batch_size;
-    metadata_.dtype = dtype;
-    metadata_.route_id = route_id;
-    metadata_.model_id = model_id;
-    metadata_.has_activations = state_has_activations;
-    metadata_.has_queries = state_has_queries;
-    metadata_.has_kvs = state_has_kvs;
-
-    prompts_.resize( metadata_.batch_size );
-
-    if ( state_has_activations ) {
-      allocate_activations();
-    }
-
-    if ( state_has_queries ) {
-      allocate_queries();
-    }
-
-    if ( state_has_kvs ) {
-      allocate_kvs();
-    }
-  }
+                         const bool state_has_kvs );
 
   // TODO(sadjad) eventually we got to get rid of the default constructor.
   BatchedInferenceState()
@@ -135,14 +112,7 @@ public:
                    uint32_t token,
                    uint32_t token_pos,
                    float temperature,
-                   uint32_t prompt_length )
-  {
-    prompts_[i].prompt_id = prompt_id;
-    prompts_[i].token = token;
-    prompts_[i].token_pos = token_pos;
-    prompts_[i].temperature = static_cast<uint8_t>( temperature * 255.0f );
-    prompts_[i].prompt_length = prompt_length;
-  }
+                   uint32_t prompt_length );
 
   // prompt getters
   PromptID prompt_id( const size_t i ) const { return prompts_[i].prompt_id; }
@@ -186,7 +156,50 @@ public:
   void deallocate_activations();
   void deallocate_queries();
   void deallocate_kvs();
+
+  size_t active_count() const
+  {
+    return std::count_if( prompts_.begin(), prompts_.end(), []( const auto& p ) { return p.active; } );
+  }
+
+  /// @brief Replace the inactive prompts in the current state with the active prompts from the other state.
+  /// @param other The state to replenish from.
+  /// @note Modifies both the current state and the other state by moving activations from the other state to current.
+  /// @return True if all inactive prompts were replaced, false otherwise.
+  bool replenish_from( BatchedInferenceState& other );
 };
+
+template<typename Config>
+BatchedInferenceState<Config>::BatchedInferenceState( uint32_t batch_size,
+                                                      DataType dtype,
+                                                      RouteID route_id,
+                                                      ModelID model_id,
+                                                      const bool state_has_activations,
+                                                      const bool state_has_queries,
+                                                      const bool state_has_kvs )
+{
+  metadata_.batch_size = batch_size;
+  metadata_.dtype = dtype;
+  metadata_.route_id = route_id;
+  metadata_.model_id = model_id;
+  metadata_.has_activations = state_has_activations;
+  metadata_.has_queries = state_has_queries;
+  metadata_.has_kvs = state_has_kvs;
+
+  prompts_.resize( metadata_.batch_size );
+
+  if ( state_has_activations ) {
+    allocate_activations();
+  }
+
+  if ( state_has_queries ) {
+    allocate_queries();
+  }
+
+  if ( state_has_kvs ) {
+    allocate_kvs();
+  }
+}
 
 template<typename Config>
 BatchedInferenceState<Config>::BatchedInferenceState( const std::string_view serialized_state )
@@ -273,6 +286,21 @@ std::string BatchedInferenceState<Config>::serialize() const
 }
 
 template<typename Config>
+void BatchedInferenceState<Config>::set_prompt( const size_t i,
+                                                PromptID prompt_id,
+                                                uint32_t token,
+                                                uint32_t token_pos,
+                                                float temperature,
+                                                uint32_t prompt_length )
+{
+  prompts_[i].prompt_id = prompt_id;
+  prompts_[i].token = token;
+  prompts_[i].token_pos = token_pos;
+  prompts_[i].temperature = static_cast<uint8_t>( temperature * 255.0f );
+  prompts_[i].prompt_length = prompt_length;
+}
+
+template<typename Config>
 void BatchedInferenceState<Config>::allocate_activations()
 {
   activations_ = { metadata_.batch_size * activation_len() };
@@ -312,6 +340,58 @@ void BatchedInferenceState<Config>::deallocate_kvs()
 {
   kvs_ = {};
   set_has_kvs( false );
+}
+
+template<typename Config>
+bool BatchedInferenceState<Config>::replenish_from( BatchedInferenceState& other )
+{
+  CHECK_EQ( metadata_.batch_size, other.metadata_.batch_size ) << "States with different batch sizes";
+  CHECK_EQ( metadata_.dtype, other.metadata_.dtype ) << "States with different data types";
+  CHECK_EQ( metadata_.route_id, other.metadata_.route_id ) << "States with different route IDs";
+  CHECK_EQ( metadata_.model_id, other.metadata_.model_id ) << "States with different model IDs";
+  CHECK_EQ( metadata_.next_layer, other.metadata_.next_layer ) << "States with different next layers";
+  CHECK_EQ( metadata_.next_stage, other.metadata_.next_stage ) << "States with different next stages";
+  CHECK_EQ( metadata_.has_activations, other.metadata_.has_activations ) << "States with different activation states";
+  CHECK_EQ( metadata_.has_queries, other.metadata_.has_queries ) << "States with different query states";
+  CHECK_EQ( metadata_.has_kvs, other.metadata_.has_kvs ) << "States with different key-value states";
+
+  size_t other_idx = 0;
+  for ( size_t my_idx = 0; my_idx < prompts_.size(); my_idx++ ) {
+    auto& prompt = prompts_[my_idx];
+
+    if ( prompt.active ) {
+      continue;
+    }
+
+    // we need to replace this with an active prompt from the other state
+    while ( other.prompts_[other_idx].active ) {
+      other_idx++;
+
+      if ( other_idx >= other.prompts_.size() ) {
+        // no more active prompts in the other state
+        return false;
+      }
+    }
+
+    prompt = other.prompts_[other_idx];
+
+    if ( metadata_.has_activations ) {
+      std::memcpy( activation_ptr( other_idx ), other.activation_ptr( other_idx ), activation_len() );
+    }
+
+    if ( metadata_.has_queries ) {
+      std::memcpy( q_ptr( other_idx ), other.q_ptr( other_idx ), q_len() );
+    }
+
+    if ( metadata_.has_kvs ) {
+      std::memcpy( kv_ptr( other_idx ), other.kv_ptr( other_idx ), kv_len() );
+    }
+
+    other.prompts_[other_idx] = {};
+    other_idx++;
+  }
+
+  return true;
 }
 
 } // namespace glinthawk::models
