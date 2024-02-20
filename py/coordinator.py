@@ -43,7 +43,6 @@ class ModelInfo:
 @dataclass
 class WorkerStats:
     # no stats for now
-
     def __add__(self, other):
         pass
 
@@ -117,8 +116,8 @@ class Coordinator:
         self.concurrency_size_post = kwargs.get("concurrency_size_post", 16)
         self.concurrency_size_cls = kwargs.get("concurrency_size_cls", 16)
 
-        self.cpu_context_count = kwargs.get("cpu_context_count", 36*81*2)
-        self.gpu_context_count = kwargs.get("gpu_context_count", 18*81)
+        self.cpu_context_count = kwargs.get("cpu_context_count", 36 * 81 * 2)
+        self.gpu_context_count = kwargs.get("gpu_context_count", 18 * 81)
 
         self.logger = logging.getLogger("coordinator")
         self.logger.setLevel(logging.INFO)
@@ -280,9 +279,15 @@ class Coordinator:
                     else:
                         self.cls_gpu_worker = worker
 
-                if len(self.layer_workers) == self.model.n_layers / self.model.layers_per_worker and \
-                        all(self.layer_workers[key][0] is not None and self.layer_workers[key][1] is not None for key in self.layer_workers) and \
-                        self.cls_gpu_worker is not None and not ignore:
+                if (
+                    len(self.layer_workers) == self.model.n_layers / self.model.layers_per_worker
+                    and all(
+                        self.layer_workers[key][0] is not None and self.layer_workers[key][1] is not None
+                        for key in self.layer_workers
+                    )
+                    and self.cls_gpu_worker is not None
+                    and not ignore
+                ):
                     # all layers have been assigned
                     # setting a route for all workers
                     dummy_routing_message = Message(
@@ -316,13 +321,14 @@ class Coordinator:
 
                     # telling the first worker to generate dummy prompts
                     if self.initial_dummy_count:
+                        proto = glinthawk_pb.PushDummyPrompts()
+                        proto.count = self.initial_dummy_count
+                        proto.batch_size = self.concurrency_size_pre
+
                         self.outgoing_messages.put_nowait(
                             [
                                 self.layer_workers[0][0],
-                                Message(
-                                    Message.OpCode.PushDummyPrompts,
-                                    str(self.initial_dummy_count).encode(),
-                                ),
+                                Message(Message.OpCode.PushDummyPrompts, proto.SerializeToString()),
                             ]
                         )
 
