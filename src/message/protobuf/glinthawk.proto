@@ -55,3 +55,9 @@ message WorkerStats
   uint64 bytes_sent = 7;
   uint64 bytes_received = 8;
 }
+
+message PushDummyPrompts
+{
+  uint32 count = 1;
+  uint32 batch_size = 2;
+}
