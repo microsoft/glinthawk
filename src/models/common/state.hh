@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <glog/logging.h>
 #include <span>
 #include <string_view>
@@ -31,11 +32,19 @@ private:
     bool has_activations { false };
     bool has_queries { false };
     bool has_kvs { false };
+
+    uint32_t discarded_contexts { 0 };
+  };
+
+  struct __attribute__( ( packed ) ) DiscardedContext
+  {
+    PromptID prompt_id {};
   };
 
   struct __attribute__( ( packed ) ) PromptData
   {
-    bool active { true };
+    bool active_slot { true };
+
     PromptID prompt_id {};
     uint32_t token {};
     uint32_t token_pos {};
@@ -45,6 +54,7 @@ private:
   };
 
   Metadata metadata_ {};
+  std::vector<DiscardedContext> discarded_contexts_ {};
   std::vector<PromptData> prompts_ {};
 
   // we use contiguous memory for activations, queries, and key-values; allowing one-shot copying.
@@ -95,6 +105,12 @@ public:
   void set_has_queries( bool has_queries ) { metadata_.has_queries = has_queries; }
   void set_has_kvs( bool has_kvs ) { metadata_.has_kvs = has_kvs; }
 
+  void clear_discards()
+  {
+    discarded_contexts_.clear();
+    metadata_.discarded_contexts = 0;
+  }
+
   // metadata getters
   uint32_t batch_size() const { return metadata_.batch_size; }
   DataType dtype() const { return metadata_.dtype; }
@@ -105,6 +121,9 @@ public:
   bool has_activations() const { return metadata_.has_activations; }
   bool has_queries() const { return metadata_.has_queries; }
   bool has_kvs() const { return metadata_.has_kvs; }
+  uint32_t discarded_contexts() const { return metadata_.discarded_contexts; }
+
+  const PromptID& discarded_prompt_id( const size_t i ) const { return discarded_contexts_.at( i ).prompt_id; }
 
   // prompt setters
   void set_prompt( const size_t i,
@@ -129,8 +148,8 @@ public:
   void set_token_pos( const size_t i, uint32_t token_pos ) { prompts_[i].token_pos = token_pos; }
   void set_prompt_length( const size_t i, uint32_t prompt_length ) { prompts_[i].prompt_length = prompt_length; }
   void set_temperature( const size_t i, float t ) { prompts_[i].temperature = static_cast<uint8_t>( t * 255.0f ); }
-  void set_finished( const size_t i, bool finished ) { prompts_[i].finished = finished; }
-  void set_active( const size_t i, bool active ) { prompts_[i].active = active; }
+  void set_finished( const size_t i ) { prompts_[i].finished = true; }
+  void set_discarded( const size_t i );
 
   // The memory is owned by the inference state; be careful with the lifetime of the returned spans.
   std::span<uint8_t> activations( const size_t i ) { return { activation_ptr( i ), activation_len() }; }
@@ -157,9 +176,9 @@ public:
   void deallocate_queries();
   void deallocate_kvs();
 
-  size_t active_count() const
+  size_t free_slots() const
   {
-    return std::count_if( prompts_.begin(), prompts_.end(), []( const auto& p ) { return p.active; } );
+    return std::count_if( prompts_.begin(), prompts_.end(), []( const auto& p ) { return !p.active; } );
   }
 
   /// @brief Replace the inactive prompts in the current state with the active prompts from the other state.
@@ -213,8 +232,14 @@ BatchedInferenceState<Config>::BatchedInferenceState( const std::string_view ser
   metadata_ = *reinterpret_cast<const Metadata*>( ptr );
   ptr += sizeof( Metadata );
 
-  expected_size += metadata_.batch_size * sizeof( PromptData );
-  CHECK_GE( serialized_state.size(), expected_size ) << "Serialized state is too small to contain prompts";
+  expected_size += sizeof( DiscardedContext ) * metadata_.discarded_contexts;
+  expected_size += sizeof( PromptData ) * metadata_.batch_size;
+
+  discarded_contexts_.resize( metadata_.discarded_contexts );
+  std::memcpy( reinterpret_cast<char*>( discarded_contexts_.data() ),
+               ptr,
+               metadata_.discarded_contexts * sizeof( DiscardedContext ) );
+  ptr += metadata_.discarded_contexts * sizeof( DiscardedContext );
 
   prompts_.resize( metadata_.batch_size );
 
@@ -256,16 +281,21 @@ template<typename Config>
 std::string BatchedInferenceState<Config>::serialize() const
 {
   std::string serialized_state;
-  const size_t expected_size = sizeof( Metadata ) + metadata_.batch_size * sizeof( PromptData )
-                               + ( has_activations() ? metadata_.batch_size * activation_len() : 0 )
-                               + ( has_queries() ? metadata_.batch_size * q_len() : 0 )
-                               + ( has_kvs() ? metadata_.batch_size * kv_len() : 0 );
+  const size_t expected_size = sizeof( Metadata )                                                    /* metadata */
+                               + sizeof( DiscardedContext ) * discarded_contexts_.size()             /* discards */
+                               + sizeof( PromptData ) * metadata_.batch_size                         /* prompts */
+                               + ( has_activations() ? metadata_.batch_size * activation_len() : 0 ) /* activations */
+                               + ( has_queries() ? metadata_.batch_size * q_len() : 0 )              /* queries */
+                               + ( has_kvs() ? metadata_.batch_size * kv_len() : 0 );                /* kvs */
 
   // reserve enough space for the state
   serialized_state.reserve( expected_size );
 
-  // copy the metadata
   serialized_state.append( reinterpret_cast<const char*>( &metadata_ ), sizeof( Metadata ) );
+
+  serialized_state.append( reinterpret_cast<const char*>( discarded_contexts_.data() ),
+                           discarded_contexts_.size() * sizeof( DiscardedContext ) );
+
   serialized_state.append( reinterpret_cast<const char*>( prompts_.data() ),
                            metadata_.batch_size * sizeof( PromptData ) );
 
@@ -282,6 +312,7 @@ std::string BatchedInferenceState<Config>::serialize() const
     serialized_state.append( reinterpret_cast<const char*>( kvs_.data() ), metadata_.batch_size * kv_len() );
   }
 
+  CHECK_EQ( serialized_state.size(), expected_size ) << "Serialized state size mismatch";
   return serialized_state;
 }
 
@@ -298,6 +329,18 @@ void BatchedInferenceState<Config>::set_prompt( const size_t i,
   prompts_[i].token_pos = token_pos;
   prompts_[i].temperature = static_cast<uint8_t>( temperature * 255.0f );
   prompts_[i].prompt_length = prompt_length;
+}
+
+template<typename Config>
+void BatchedInferenceState<Config>::set_discarded( const size_t i )
+{
+  // XXX this function should only be called by the first worker in a chain
+  CHECK_EQ( metadata_.next_stage, Stage::PreAttention ) << "Discarding prompts in a non-PreAttention stage";
+  CHECK_EQ( metadata_.next_layer, 0 ) << "Discarding prompts in a non-0 layer";
+
+  discarded_contexts_.push_back( { prompts_[i].prompt_id } );
+  prompts_[i] = {};
+  prompts_[i].active = false;
 }
 
 template<typename Config>
@@ -355,6 +398,12 @@ bool BatchedInferenceState<Config>::replenish_from( BatchedInferenceState& other
   CHECK_EQ( metadata_.has_queries, other.metadata_.has_queries ) << "States with different query states";
   CHECK_EQ( metadata_.has_kvs, other.metadata_.has_kvs ) << "States with different key-value states";
 
+  // copy the discard list
+  metadata_.discarded_contexts += other.metadata_.discarded_contexts;
+  discarded_contexts_.insert(
+    discarded_contexts_.end(), other.discarded_contexts_.begin(), other.discarded_contexts_.end() );
+  other.clear_discards();
+
   size_t other_idx = 0;
   for ( size_t my_idx = 0; my_idx < prompts_.size(); my_idx++ ) {
     auto& prompt = prompts_[my_idx];
@@ -388,6 +437,7 @@ bool BatchedInferenceState<Config>::replenish_from( BatchedInferenceState& other
     }
 
     other.prompts_[other_idx] = {};
+    other.prompts_[other_idx].active = false;
     other_idx++;
   }
 
