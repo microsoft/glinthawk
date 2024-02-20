@@ -28,6 +28,8 @@ public:
     __deprecated__WorkerStats, // DEPRECATED
     PushDummyPrompts,
 
+    BatchedInferenceState,
+
     __COUNT
   };
 
@@ -43,8 +45,9 @@ public:
     "ProcessPrompts",
     "SetRoute",
     "PromptCompleted",
-    "WorkerStats",
+    "__deprecated__WorkerStats",
     "PushDummyPrompts",
+    "BatchedInferenceState",
   };
 
   constexpr static size_t HEADER_LENGTH = 5;
