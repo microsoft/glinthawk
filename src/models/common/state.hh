@@ -43,7 +43,7 @@ private:
 
   struct __attribute__( ( packed ) ) PromptData
   {
-    bool active_slot { true };
+    bool active { true };
 
     PromptID prompt_id {};
     uint32_t token {};
@@ -335,7 +335,7 @@ template<typename Config>
 void BatchedInferenceState<Config>::set_discarded( const size_t i )
 {
   // XXX this function should only be called by the first worker in a chain
-  CHECK_EQ( metadata_.next_stage, Stage::PreAttention ) << "Discarding prompts in a non-PreAttention stage";
+  CHECK( metadata_.next_stage == Stage::PreAttention ) << "Discarding prompts in a non-PreAttention stage";
   CHECK_EQ( metadata_.next_layer, 0 ) << "Discarding prompts in a non-0 layer";
 
   discarded_contexts_.push_back( { prompts_[i].prompt_id } );
@@ -389,11 +389,11 @@ template<typename Config>
 bool BatchedInferenceState<Config>::replenish_from( BatchedInferenceState& other )
 {
   CHECK_EQ( metadata_.batch_size, other.metadata_.batch_size ) << "States with different batch sizes";
-  CHECK_EQ( metadata_.dtype, other.metadata_.dtype ) << "States with different data types";
+  CHECK( metadata_.dtype == other.metadata_.dtype ) << "States with different data types";
   CHECK_EQ( metadata_.route_id, other.metadata_.route_id ) << "States with different route IDs";
   CHECK_EQ( metadata_.model_id, other.metadata_.model_id ) << "States with different model IDs";
   CHECK_EQ( metadata_.next_layer, other.metadata_.next_layer ) << "States with different next layers";
-  CHECK_EQ( metadata_.next_stage, other.metadata_.next_stage ) << "States with different next stages";
+  CHECK( metadata_.next_stage == other.metadata_.next_stage ) << "States with different next stages";
   CHECK_EQ( metadata_.has_activations, other.metadata_.has_activations ) << "States with different activation states";
   CHECK_EQ( metadata_.has_queries, other.metadata_.has_queries ) << "States with different query states";
   CHECK_EQ( metadata_.has_kvs, other.metadata_.has_kvs ) << "States with different key-value states";

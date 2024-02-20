@@ -9,9 +9,8 @@
 #include <optional>
 #include <thread>
 
-#include "compute/kernel_pipes.hh"
+#include "compute/kernel_batch.hh"
 #include "models/types.hh"
-// #include "compute/kernel.hh"
 #include "message/handler.hh"
 #include "message/message.hh"
 #include "models/llama2/base.hh"
@@ -47,8 +46,8 @@ private:
   };
 
 private:
-  using RouteMap = std::map<std::pair<uint32_t, BatchedInferenceState::Stage>, net::Address>;
-  using BatchedState = models::BatchedInferenceState<typename Model::ConfigType>;
+  using BatchedState = glinthawk::models::BatchedInferenceState<typename Model::ConfigType>;
+  using RouteMap = std::map<std::pair<uint32_t, typename BatchedState::Stage>, net::Address>;
 
   std::atomic_bool running_ { true };
 
@@ -117,7 +116,7 @@ private:
   void prompt_preparation_thread_func();
   void completion_commit_thread_func();
 
-  void find_next_worker( const RouteMap& route, const BatchedState& state )
+  net::Address find_next_worker( const RouteMap& route, const BatchedState& state )
   {
     auto it = route.find( { state.next_layer(), state.next_stage() } );
     CHECK( it != route.end() ) << "No worker found for layer " << state.next_layer() << ", stage "

@@ -12,6 +12,7 @@
 #include <unordered_map>
 
 #include "models/common/model.hh"
+#include "models/common/state.hh"
 #include "monitoring/measurement.hh"
 #include "prompt/prompt.hh"
 #include "util/eventfd.hh"
@@ -68,8 +69,8 @@ private:
   std::unique_ptr<Model> model_;
   std::unique_ptr<ContextManager<Model>> context_manager_;
 
-  const bool is_serving_first_layer_ { model_.settings().start_layer_num == 0 };
-  const bool is_serving_last_layer_ { model_.settings().end_layer_num == ModelConfig::n_layers - 1 };
+  const bool is_serving_first_layer_ { model_->settings().start_layer_num == 0 };
+  const bool is_serving_last_layer_ { model_->settings().end_layer_num == ModelConfig::n_layers - 1 };
 
   const uint64_t target_conc_size_;
   uint64_t released_;
@@ -137,6 +138,8 @@ private:
         auto context = context_manager_->get_context( state.prompt_id( i ) );
         all_contexts_assigned = all_contexts_assigned && !context->empty();
         contexts.push_back( std::move( context ) );
+      } else {
+        contexts.push_back( nullptr );
       }
     }
 
@@ -225,16 +228,16 @@ void BatchedComputeKernel<Model>::execution_thread_func()
 
   while ( running_ ) {
     {
-      std::unique_lock<std::mutex> lock( processing_mutex_ );
+      std::unique_lock lock( processing_mutex_ );
       processing_cv_.wait( lock, [this] { return !processing_.empty(); } );
 
-      input_state = move( processing_.front().first );
-      contexts = move( processing_.front().second );
+      input_state = std::move( processing_.front().first );
+      contexts = std::move( processing_.front().second );
       processing_.pop();
     }
 
     const auto start = std::chrono::steady_clock::now();
-    auto output_state = model_->forward( input_state, contexts );
+    auto output_state = model_->forward( std::move( input_state ), contexts );
     const auto duration
       = std::chrono::duration_cast<std::chrono::microseconds>( std::chrono::steady_clock::now() - start );
     __stats__.add_point<IntDistributions::KernelForwardTime>( duration.count() );
@@ -260,7 +263,7 @@ void BatchedComputeKernel<Model>::bookkeeping_thread_func()
   while ( running_ ) {
     // let's get an action from the incoming_
     {
-      std::lock_guard lock( incoming_mutex_ );
+      std::unique_lock lock( incoming_mutex_ );
       incoming_cv_.wait( lock, [this] { return !incoming_.empty(); } );
       state = std::move( incoming_.front() );
       incoming_.pop();
@@ -269,7 +272,7 @@ void BatchedComputeKernel<Model>::bookkeeping_thread_func()
     {
       // let's get the contexts for this state
       std::lock_guard lock( ctx_mgr_mutex_ );
-      [ all_contexts_assigned, contexts ] = assemble_contexts( state );
+      std::tie( all_contexts_assigned, contexts ) = assemble_contexts( state );
     }
 
     if ( all_contexts_assigned ) {
@@ -307,7 +310,7 @@ void BatchedComputeKernel<Model>::backlog_thread_func()
   while ( running_ ) {
     // let's get an action from the waiting_
     {
-      std::lock_guard lock { waiting_mutex_ };
+      std::unique_lock lock { waiting_mutex_ };
       waiting_cv_.wait( lock, [this] { return !waiting_.empty() && released_ >= waiting_.front().batch_size(); } );
       state = std::move( waiting_.front() );
       waiting_.pop();
@@ -318,7 +321,7 @@ void BatchedComputeKernel<Model>::backlog_thread_func()
     {
       // let's get the context for this state
       std::lock_guard lock { ctx_mgr_mutex_ };
-      [ all_contexts_assigned, contexts ] = assemble_contexts( state );
+      std::tie( all_contexts_assigned, contexts ) = assemble_contexts( state );
     }
 
     if ( all_contexts_assigned ) {
