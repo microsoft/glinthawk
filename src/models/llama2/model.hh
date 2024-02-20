@@ -32,6 +32,10 @@ public:
   using ConfigType = Config;
   using SettingsType = Settings<Config>;
 
+private:
+  static constexpr uint32_t TOKEN_BOS = 1; // Beginning-of-sequence token
+  static constexpr uint32_t TOKEN_EOS = 2; // End-of-sequence token
+
 protected:
   const Settings<Config> settings_;
   Operations ops_ { settings_ };

@@ -151,7 +151,7 @@ template<typename Config, typename DType, typename LlamaOperations, typename Con
 bool Llama2<Config, DType, LlamaOperations, Context>::is_finished( const InferenceState& state )
 {
   return ( state.next_layer() == 0 and state.next_stage() == InferenceState::Stage::PreAttention )
-         and ( state.token() == 2 or state.token_pos() >= Config::seq_len ); // EOS or out of length
+         and ( state.token() == TOKEN_EOS or state.token_pos() >= Config::seq_len ); // EOS or out of length
 }
 
 template<typename Config, typename DType, typename LlamaOperations, typename Context>
@@ -452,9 +452,9 @@ template<typename Config, typename DType, typename LlamaOperations, typename Con
 BatchedInferenceState<Config> Llama2<Config, DType, LlamaOperations, Context>::forward_postlude(
   BatchedState&& states,
   const int32_t most_recent_layer_num,
-  const bool classified )
+  const bool classification_done )
 {
-  if ( classified ) {
+  if ( classification_done ) {
     CHECK_EQ( most_recent_layer_num, Config::n_layers - 1 );
 
     std::vector<float> batch_temps;
@@ -476,6 +476,10 @@ BatchedInferenceState<Config> Llama2<Config, DType, LlamaOperations, Context>::f
     for ( size_t i = 0; i < states.batch_size(); i++ ) {
       states.set_token( i, this->state_.argmax_pos[i] );
       states.set_token_pos( i, states.token_pos( i ) + 1 );
+
+      if ( states.token( i ) == TOKEN_EOS or states.token_pos( i ) >= Config::seq_len ) {
+        states.set_finished( i, true );
+      }
     }
   } else {
     // all we need to send is activations; the memory is already allocated
@@ -695,6 +699,10 @@ std::vector<InferenceState> Llama2<Config, DType, LlamaOperations, Context>::att
 
   for ( size_t i = 0; i < states.size(); i++ ) {
     auto& state = states[i];
+
+    if ( !state.active() ) {
+      continue;
+    }
 
     DataBuffer activations { 2 * Config::dim * DataTypeSize( state.dtype() ) };
 
