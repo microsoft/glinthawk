@@ -10,9 +10,6 @@ target_link_libraries ( glinthawkcompute_cuda
 
 # CUDA_CONVERT_FLAGS ( glinthawkcompute_cuda )
 
-add_executable ( profile-offload ../../src/frontend/profile-offload.cu )
-target_link_libraries ( profile-offload glinthawkcompute_cuda )
-
 list ( APPEND GLINTHAWK_TARGETS profile-stage )
 
 set ( __PLATFORM cuda )

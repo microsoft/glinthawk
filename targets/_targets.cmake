@@ -1,4 +1,4 @@
-list ( APPEND GLINTHAWK_TARGETS  worker profile infer infer-batch )
+list ( APPEND GLINTHAWK_TARGETS worker infer-batch )
 list ( APPEND GLINTHAWK_DTYPES FLOAT16 FLOAT32 )
 
 foreach ( TARGET ${GLINTHAWK_TARGETS} )
@@ -12,7 +12,6 @@ foreach ( TARGET ${GLINTHAWK_TARGETS} )
 
     if ( "${__PLATFORM}" STREQUAL "cuda" )
       set_source_files_properties ( ../../src/frontend/${TARGET}.cc PROPERTIES LANGUAGE CUDA )
-      # CUDA_CONVERT_FLAGS ( ${TARGET_NAME} )
     endif()
 
     set ( TARGET_FULL_NAME ${TARGET}-${__PLATFORM}-${TYPE_SUFFIX} )

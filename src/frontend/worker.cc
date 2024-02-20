@@ -11,7 +11,7 @@
 #define OOF_IMPL
 #include "oof/oof.hh"
 
-#include "platform_macros.hh"
+#include "arch/platform_macros.hh"
 
 using namespace std;
 using namespace glinthawk;

@@ -700,10 +700,6 @@ std::vector<InferenceState> Llama2<Config, DType, LlamaOperations, Context>::att
   for ( size_t i = 0; i < states.size(); i++ ) {
     auto& state = states[i];
 
-    if ( !state.active() ) {
-      continue;
-    }
-
     DataBuffer activations { 2 * Config::dim * DataTypeSize( state.dtype() ) };
 
     ops_.copy( reinterpret_cast<DType*>( activations.data() ),
