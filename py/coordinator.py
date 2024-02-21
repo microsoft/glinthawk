@@ -189,16 +189,19 @@ class Coordinator:
                 ip, port = address.split(":")
                 worker.ip = socket.inet_aton(ip)
                 worker.port = int(port)
+
+                worker_key = (worker.ip, worker.port)
+
                 if worker.ip not in self.ip_port_to_index:
-                    self.ip_port_to_index[worker.ip] = len(self.ip_port_to_index)
+                    self.ip_port_to_index[worker_key] = len(self.ip_port_to_index)
                 self.logger.info(f"Worker {worker.id} is at {ip}:{port}, and sent {message.opcode}.")
 
                 # assigning layers to this worker
                 context_count = 0
                 if message.opcode == Message.OpCode.HeyCPU:
-                    if self.ip_port_to_index[worker.ip] < self.model.n_layers / self.model.layers_per_worker:
-                        worker.start_layer = self.ip_port_to_index[worker.ip] * self.model.layers_per_worker
-                        worker.end_layer = (self.ip_port_to_index[worker.ip] + 1) * self.model.layers_per_worker - 1
+                    if self.ip_port_to_index[worker_key] < self.model.n_layers / self.model.layers_per_worker:
+                        worker.start_layer = self.ip_port_to_index[worker_key] * self.model.layers_per_worker
+                        worker.end_layer = (self.ip_port_to_index[worker_key] + 1) * self.model.layers_per_worker - 1
                         worker.max_concurrency_size_pre = 0
                         worker.max_concurrency_size_att = self.concurrency_size_att
                         worker.max_concurrency_size_post = 0
@@ -213,9 +216,9 @@ class Coordinator:
                         worker.max_concurrency_size_cls = 0
                         context_count = 0
                 else:
-                    if self.ip_port_to_index[worker.ip] < self.model.n_layers / self.model.layers_per_worker:
-                        worker.start_layer = self.ip_port_to_index[worker.ip] * self.model.layers_per_worker
-                        worker.end_layer = (self.ip_port_to_index[worker.ip] + 1) * self.model.layers_per_worker - 1
+                    if self.ip_port_to_index[worker_key] < self.model.n_layers / self.model.layers_per_worker:
+                        worker.start_layer = self.ip_port_to_index[worker_key] * self.model.layers_per_worker
+                        worker.end_layer = (self.ip_port_to_index[worker_key] + 1) * self.model.layers_per_worker - 1
                         worker.max_concurrency_size_pre = self.concurrency_size_pre
                         worker.max_concurrency_size_att = 0
                         worker.max_concurrency_size_post = self.concurrency_size_post
@@ -255,14 +258,14 @@ class Coordinator:
 
                 ignore = False
                 if message.opcode == Message.OpCode.HeyCPU:
-                    if self.ip_port_to_index[worker.ip] < self.model.n_layers / self.model.layers_per_worker:
+                    if self.ip_port_to_index[worker_key] < self.model.n_layers / self.model.layers_per_worker:
                         if worker.start_layer not in self.layer_workers:
                             self.layer_workers[worker.start_layer] = [None, None]
                         self.layer_workers[worker.start_layer][1] = worker
                     else:
                         ignore = True
                 else:
-                    if self.ip_port_to_index[worker.ip] < self.model.n_layers / self.model.layers_per_worker:
+                    if self.ip_port_to_index[worker_key] < self.model.n_layers / self.model.layers_per_worker:
                         if worker.start_layer not in self.layer_workers:
                             self.layer_workers[worker.start_layer] = [None, None]
                         self.layer_workers[worker.start_layer][0] = worker
@@ -270,7 +273,7 @@ class Coordinator:
                         self.cls_gpu_worker = worker
 
                 if (
-                    len(self.layer_workers) == self.model.n_layers / self.model.layers_per_worker
+                    len(self.layer_workers) == self.model.n_layers // self.model.layers_per_worker
                     and all(
                         self.layer_workers[key][0] is not None and self.layer_workers[key][1] is not None
                         for key in self.layer_workers
