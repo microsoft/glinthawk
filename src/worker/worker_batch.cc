@@ -175,15 +175,16 @@ BatchedWorker<Model>::BatchedWorker( const Address& worker_address,
     [] { LOG( ERROR ) << "Worker stopped listening."; } );
 
   // Send "HEY" to coordinator
+  protobuf::Hey hey_proto;
+  hey_proto.set_ip( this->listen_address_.ip() );
+  hey_proto.set_port( this->listen_address_.port() );
 #if defined( TARGET_PLATFORM_AMD64 )
-  Message hey_message { Message::OpCode::HeyCPU, this->listen_address_.to_string() };
+  hey_proto.set_platform( protobuf::Hey::AMD64 );
 #elif defined( TARGET_PLATFORM_CUDA )
-  Message hey_message { Message::OpCode::HeyGPU, this->listen_address_.to_string() };
-#else
-#error "Unknown target platform"
+  hey_proto.set_platform( protobuf::Hey::CUDA );
 #endif
+  coordinator_.message_handler.push_message( { Message::OpCode::Hey, hey_proto.SerializeAsString() } );
 
-  coordinator_.message_handler.push_message( move( hey_message ) );
   setup_stats_handler();
 }
 
@@ -272,12 +273,9 @@ bool BatchedWorker<Model>::handle_coordinator_message( core::Message&& msg )
                            Address { route.ip(), static_cast<uint16_t>( route.port() ) } );
       }
 
-      RouteID route_id_dummy;
-      util::digest::sha256( proto.route_id(), route_id_dummy );
-      route_set_.emplace( route_id_dummy, new_route );
+      route_set_.emplace( proto.route_id(), new_route );
 
       LOG( INFO ) << "Route set; will be used for future prompts.";
-
       break;
     }
 
@@ -289,15 +287,12 @@ bool BatchedWorker<Model>::handle_coordinator_message( core::Message&& msg )
       const uint32_t prompt_count = proto.count();
       const uint32_t batch_size = proto.batch_size();
 
-      RouteID route_id_dummy;
-      util::digest::sha256( "dummy_path", route_id_dummy );
-
       if ( prompt_count == 0 or prompt_count > ( 1 << 16 ) ) {
         LOG( ERROR ) << "Invalid number of dummy prompts requested: " << prompt_count;
         break;
       }
 
-      auto it = route_set_.find( route_id_dummy );
+      auto it = route_set_.find( RouteID {} );
       if ( it == route_set_.end() ) {
         LOG( FATAL ) << "No dummy route set; cannot push dummy prompts.";
         break;
@@ -322,7 +317,7 @@ bool BatchedWorker<Model>::handle_coordinator_message( core::Message&& msg )
 
       for ( size_t i = 0; i < batch_count; i++ ) {
         BatchedInferenceState<typename Model::ConfigType> state {
-          batch_size, get_datatype<typename Model::ModelDataType>(), route_id_dummy, 0, false, false, false
+          batch_size, get_datatype<typename Model::ModelDataType>(), RouteID {}, 0, false, false, false
         };
 
         for ( size_t j = 0; j < batch_size; j++ ) {
@@ -442,7 +437,7 @@ bool BatchedWorker<Model>::handle_peer_message( core::Message&& msg )
       auto it = route_set_.find( state.route_id() );
 
       if ( it == route_set_.end() ) {
-        LOG( FATAL ) << "No route id " << state.route_id().base58digest().substr( 0, 8 ) << " in route set.";
+        LOG( FATAL ) << "No route with id=" << state.route_id() << " in route set.";
       }
 
       if ( state.next_layer() == 0 and state.next_stage() == BatchedState::Stage::PreAttention ) {

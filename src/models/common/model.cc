@@ -143,11 +143,11 @@ string InferenceState::to_string() const
 {
   ostringstream oss;
   oss << "InferenceState(" << "prompt_id=" << data_.prompt_id_.base58digest().substr( 0, 8 ) << ", "
-      << "route_id=" << data_.route_id_.base58digest().substr( 0, 8 ) << ", " << "token=" << data_.token_ << ", "
-      << "token_pos=" << data_.token_pos_ << ", " << "next_layer=" << data_.next_layer_ << ", "
-      << "next_stage=" << data_.next_stage_ << ", " << "prompt_len=" << data_.prompt_length_ << ", "
-      << "temperature=" << data_.temperature_ << ", " << "finished=" << data_.finished_ << ", "
-      << "dtype=" << data_.dtype_ << ", " << "activations.len=" << activations_ << ", " << "peers={";
+      << "route_id=" << data_.route_id_ << ", " << "token=" << data_.token_ << ", " << "token_pos=" << data_.token_pos_
+      << ", " << "next_layer=" << data_.next_layer_ << ", " << "next_stage=" << data_.next_stage_ << ", "
+      << "prompt_len=" << data_.prompt_length_ << ", " << "temperature=" << data_.temperature_ << ", "
+      << "finished=" << data_.finished_ << ", " << "dtype=" << data_.dtype_ << ", "
+      << "activations.len=" << activations_ << ", " << "peers={";
 
   for ( auto& [layer_stage, address] : layer_workers_ ) {
     oss << " (" << layer_stage.first << "-" << layer_stage.second << " -> " << address.to_string() << ")";
