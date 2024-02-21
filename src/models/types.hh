@@ -10,7 +10,7 @@
 namespace glinthawk {
 
 using PromptID = glinthawk::util::digest::SHA256Hash;
-using RouteID = glinthawk::util::digest::SHA256Hash;
+using RouteID = uint32_t;
 using ModelID = uint32_t;
 
 enum class DataType : uint8_t

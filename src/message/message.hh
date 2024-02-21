@@ -15,37 +15,37 @@ class Message
 public:
   enum class OpCode : uint8_t
   {
-    HeyCPU = 0x1,
-    HeyGPU,
+    Hey = 0x1,
     Ping,
     Bye,
+
+    __deprecated__WorkerStats,
 
     InitializeWorker,
     InferenceState,
     ProcessPrompts,
     SetRoute,
     PromptCompleted,
-    __deprecated__WorkerStats, // DEPRECATED
     PushDummyPrompts,
-
     BatchedInferenceState,
 
     __COUNT
   };
 
   static constexpr char const* OPCODE_NAMES[static_cast<int>( OpCode::__COUNT )] = {
-    "",
-    "HeyCPU",
-    "HeyGPU",
+    "", // OpCode 0x0 is not used
+
+    "Hey",
     "Ping",
     "Bye",
+
+    "__deprecated__WorkerStats",
 
     "InitializeWorker",
     "InferenceState",
     "ProcessPrompts",
     "SetRoute",
     "PromptCompleted",
-    "__deprecated__WorkerStats",
     "PushDummyPrompts",
     "BatchedInferenceState",
   };
@@ -54,7 +54,7 @@ public:
 
 private:
   uint32_t payload_length_ { 0 };
-  OpCode opcode_ { OpCode::HeyCPU };
+  OpCode opcode_ { OpCode::Hey };
   std::string payload_ {};
 
 public:

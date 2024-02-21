@@ -210,15 +210,16 @@ Worker<Model>::Worker( const Address& worker_address,
     [] { LOG( ERROR ) << "Worker stopped listening."; } );
 
   // Send "HEY" to coordinator
+  protobuf::Hey hey_proto;
+  hey_proto.set_ip( this->listen_address_.ip() );
+  hey_proto.set_port( this->listen_address_.port() );
 #if defined( TARGET_PLATFORM_AMD64 )
-  Message hey_message { Message::OpCode::HeyCPU, this->listen_address_.to_string() };
+  hey_proto.set_platform( protobuf::Hey::AMD64 );
 #elif defined( TARGET_PLATFORM_CUDA )
-  Message hey_message { Message::OpCode::HeyGPU, this->listen_address_.to_string() };
-#else
-#error "Unknown target platform"
+  hey_proto.set_platform( protobuf::Hey::CUDA );
 #endif
+  coordinator_.message_handler.push_message( { Message::OpCode::Hey, hey_proto.SerializeAsString() } );
 
-  coordinator_.message_handler.push_message( move( hey_message ) );
   setup_stats_handler();
 }
 
@@ -308,33 +309,28 @@ bool Worker<Model>::handle_coordinator_message( core::Message&& msg )
                            Address { route.ip(), static_cast<uint16_t>( route.port() ) } );
       }
 
-      RouteID route_id_dummy;
-      util::digest::sha256( proto.route_id(), route_id_dummy );
-      route_set_.emplace( route_id_dummy, new_route );
+      route_set_.emplace( proto.route_id(), new_route );
 
       LOG( INFO ) << "Route set; will be used for future prompts.";
-
       break;
     }
 
     case Message::OpCode::PushDummyPrompts: {
       // create some random inference states and feed them into the system
       const size_t prompt_count = stoull( msg.payload() );
-      RouteID route_id_dummy;
-      util::digest::sha256( "dummy_path", route_id_dummy );
 
       if ( prompt_count == 0 or prompt_count > ( 1 << 16 ) ) {
         LOG( ERROR ) << "Invalid number of dummy prompts requested: " << prompt_count;
         break;
       }
 
-      auto it = route_set_.find( route_id_dummy );
+      auto it = route_set_.find( RouteID {} );
       if ( it == route_set_.end() ) {
         LOG( FATAL ) << "No dummy route set; cannot push dummy prompts.";
         break;
       }
-      RouteMap dummy_route = it->second;
 
+      RouteMap dummy_route = it->second;
       vector<InferenceState> states {};
 
       // generating random temperatures
@@ -359,7 +355,7 @@ bool Worker<Model>::handle_coordinator_message( core::Message&& msg )
         // generate a random number between 0 and 1 for temprature
         InferenceState state { get_datatype<typename Model::ModelDataType>() };
         state.set_prompt_id( prompt_id );
-        state.set_route_id( route_id_dummy );
+        state.set_route_id( RouteID {} );
         state.set_token( 1 /* BOS */ );
         state.set_token_pos( 0 );
         state.set_next_layer( 0 );
@@ -495,9 +491,10 @@ bool Worker<Model>::handle_peer_message( core::Message&& msg )
 
       auto state = models::InferenceState( msg.payload() );
       auto it = route_set_.find( state.route_id() );
-      if ( it == route_set_.end() )
-        LOG( FATAL ) << "No route id " << state.route_id().base58digest().substr( 0, 8 )
-                     << " in route set for prompt: " << state;
+      if ( it == route_set_.end() ) {
+        LOG( FATAL ) << "No route with id=" << state.route_id() << " in route set.";
+      }
+
       state.set_layer_workers( it->second );
       DLOG( INFO ) << "Inference state: " << state.to_string();
 
