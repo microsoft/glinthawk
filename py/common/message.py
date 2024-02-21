@@ -3,25 +3,26 @@
 import enum
 import struct
 
-from typing import Union
+from typing import Union, Tuple
 
 
 class Message:
     HEADER_LENGTH = 5
 
     class OpCode(enum.Enum):
-        HeyCPU = 0x1
-        HeyGPU = enum.auto()
+        Hey = 0x1
         Ping = enum.auto()
         Bye = enum.auto()
+
+        WorkerStats = enum.auto()
 
         InitializeWorker = enum.auto()
         InferenceState = enum.auto()
         ProcessPrompts = enum.auto()
         SetRoute = enum.auto()
         PromptCompleted = enum.auto()
-        WorkerStats = enum.auto()
         PushDummyPrompts = enum.auto()
+        BatchedInferenceState = enum.auto()
 
     def __init__(self, opcode: Union[OpCode, int], payload: bytes):
         if isinstance(opcode, int):
@@ -37,12 +38,12 @@ class Message:
         pass
 
     @staticmethod
-    def parse_header(header: bytes) -> [int, int]:
+    def parse_header(header: bytes) -> Tuple[int, int]:
         if len(header) != Message.HEADER_LENGTH:
             raise ValueError("Invalid header length")
 
         payload_length, opcode = struct.unpack("!IB", header)
-        return [payload_length, opcode]
+        return (payload_length, opcode)
 
     def __repr__(self):
         return self.__str__()
