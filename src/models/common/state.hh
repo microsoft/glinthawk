@@ -3,6 +3,8 @@
 #include <algorithm>
 #include <glog/logging.h>
 #include <span>
+#include <sstream>
+#include <string>
 #include <string_view>
 
 #include "../llama2/variants.hh"
@@ -186,6 +188,8 @@ public:
   /// @note Modifies both the current state and the other state by moving activations from the other state to current.
   /// @return True if all inactive prompts were replaced, false otherwise.
   bool replenish_from( BatchedInferenceState& other );
+
+  std::string debug_string( const bool prompt_details ) const;
 };
 
 template<typename Config>
@@ -442,6 +446,39 @@ bool BatchedInferenceState<Config>::replenish_from( BatchedInferenceState& other
   }
 
   return true;
+}
+
+template<typename Config>
+std::string BatchedInferenceState<Config>::debug_string( const bool prompt_details ) const
+{
+  std::ostringstream oss;
+  oss << "BatchedInferenceState(" << "batch_size=" << metadata_.batch_size << ", " << "dtype=" << metadata_.dtype
+      << ", " << "route_id=" << metadata_.route_id << ", " << "model_id=" << metadata_.model_id << ", "
+      << "next_layer=" << metadata_.next_layer << ", " << "next_stage=" << metadata_.next_stage << ", "
+      << "has_activations=" << metadata_.has_activations << ", " << "activations.len=" << activations_.len() << ", "
+      << "has_queries=" << metadata_.has_queries << ", " << "queries.len=" << queries_.len() << ", "
+      << "has_kvs=" << metadata_.has_kvs << ", " << "kvs.len=" << kvs_.len() << ", " << "discarded_contexts=[ ";
+
+  for ( const auto& d : discarded_contexts_ ) {
+    oss << " " << d.prompt_id.base58digest().substr( 0, 8 );
+  }
+
+  oss << "], ";
+
+  if ( prompt_details ) {
+    oss << "prompts=[";
+
+    for ( const auto& p : prompts_ ) {
+      oss << " (" << p.prompt_id.base58digest().substr( 0, 8 ) << ", " << p.token << ", " << p.token_pos << ", "
+          << ( p.temperature / 255.0f ) << ", " << p.prompt_length << ", " << p.finished << ") ";
+    }
+
+    oss << "]";
+  } else {
+    oss << "prompts.len=" << prompts_.size();
+  }
+
+  return oss.str();
 }
 
 } // namespace glinthawk::models
