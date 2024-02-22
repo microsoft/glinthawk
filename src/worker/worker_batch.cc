@@ -16,6 +16,7 @@
 #include "glinthawk.pb.h"
 
 using namespace std;
+using namespace std::chrono;
 using namespace glinthawk;
 using namespace glinthawk::core;
 using namespace glinthawk::net;
@@ -240,6 +241,7 @@ bool BatchedWorker<Model>::handle_coordinator_message( core::Message&& msg )
       break;
     }
 
+    case Message::OpCode::InferenceState:
     case Message::OpCode::BatchedInferenceState: {
       // got an inference state from the coordinator
       auto state = models::BatchedInferenceState<typename Model::ConfigType>( msg.payload() );
@@ -301,23 +303,31 @@ bool BatchedWorker<Model>::handle_coordinator_message( core::Message&& msg )
       RouteMap dummy_route = it->second;
       vector<BatchedInferenceState<typename Model::ConfigType>> states {};
 
+      // prompt id is sha256( current_time and dummy_prompt_current_id_ )
+      auto generate_next_prompt_id = [this]() -> PromptID {
+        PromptID prompt_id;
+        char prompt_id_buf[sizeof( uint64_t ) * 2];
+        const uint64_t current_time = duration_cast<nanoseconds>( system_clock::now().time_since_epoch() ).count();
+
+        memcpy( prompt_id_buf, &current_time, sizeof( uint64_t ) );
+        memcpy( prompt_id_buf + sizeof( uint64_t ), &( this->dummy_prompt_current_id_ ), sizeof( uint64_t ) );
+
+        util::digest::sha256( { prompt_id_buf, sizeof( prompt_id_buf ) }, prompt_id );
+
+        this->dummy_prompt_current_id_++;
+        return prompt_id;
+      };
+
       // generating random temperatures
       random_device rd {};
       mt19937 temp_gen { rd() };
       uniform_real_distribution<float> temp_dist( 0.0f, 1.0f );
 
-      // get current time as uint64_t
-      uint64_t current_time
-        = chrono::duration_cast<chrono::nanoseconds>( chrono::system_clock::now().time_since_epoch() ).count();
-
-      char prompt_id_buf[sizeof( uint64_t ) * 2];
-      memcpy( prompt_id_buf, &current_time, sizeof( uint64_t ) );
-
       const uint32_t batch_count = ( prompt_count + ( batch_size - 1 ) ) / batch_size;
 
       for ( size_t i = 0; i < batch_count; i++ ) {
         BatchedInferenceState<typename Model::ConfigType> state {
-          batch_size, get_datatype<typename Model::ModelDataType>(), RouteID {}, 0, false, false, false
+          batch_size, get_datatype<typename Model::ModelDataType>(), RouteID {}, ModelID {}, false, false, false
         };
 
         for ( size_t j = 0; j < batch_size; j++ ) {
@@ -327,13 +337,7 @@ bool BatchedWorker<Model>::handle_coordinator_message( core::Message&& msg )
             break;
           }
 
-          // setting the id to sha256( current_time and dummy_prompt_current_id_ )
-          PromptID prompt_id;
-          memcpy( prompt_id_buf + sizeof( uint64_t ), &dummy_prompt_current_id_, sizeof( dummy_prompt_current_id_ ) );
-          util::digest::sha256( { prompt_id_buf, sizeof( prompt_id_buf ) }, prompt_id );
-          dummy_prompt_current_id_++;
-
-          state.set_prompt( i, prompt_id, 1 /* TOKEN_BOS */, 0, temp_dist( temp_gen ), 1 );
+          state.set_prompt( i, generate_next_prompt_id(), 1 /* TOKEN_BOS */, 0, 0.0 /*temp_dist( temp_gen )*/, 1 );
         }
 
         this->compute_kernel_->push( move( state ) );
@@ -434,9 +438,10 @@ bool BatchedWorker<Model>::handle_peer_message( core::Message&& msg )
       __stats__.increment<Counters::StatesReceived>();
 
       BatchedState state { msg.payload() };
-      auto it = route_set_.find( state.route_id() );
 
-      if ( it == route_set_.end() ) {
+      // LOG( INFO ) << state.debug_string( true );
+
+      if ( route_set_.find( state.route_id() ) == route_set_.end() ) {
         LOG( FATAL ) << "No route with id=" << state.route_id() << " in route set.";
       }
 
