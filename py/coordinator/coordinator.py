@@ -34,11 +34,13 @@ class Coordinator:
 
         self.first_worker = None
         self.classification_worker = None
+        self.separate_classification_worker = kwargs.get("separate_cls", False)
 
         self.model = Model(
             name=kwargs.get("model", "stories-110m"),
             n_layers=kwargs.get("n_layers", 12),
             layers_per_worker=kwargs.get("layers_per_worker", 6),
+            separate_cls=self.separate_classification_worker,
         )
 
         # Message queues
@@ -129,7 +131,6 @@ class Coordinator:
                 elif worker.model_slice_start[1] == Stage.Classification:
                     self.classification_worker = worker
 
-
                 self.logger.info(
                     f"Worker {worker.id} is at {proto.ip}:{worker.port} (platform={Platform.Name(worker.platform)})."
                 )
@@ -172,7 +173,11 @@ class Coordinator:
                     ),
                 )
 
-                if self.model.all_assigned() and self.first_worker and self.classification_worker:
+                if (
+                    self.model.all_assigned()
+                    and self.first_worker
+                    and (not self.separate_classification_worker or self.classification_worker)
+                ):
                     self.logger.info("All workers have been assigned layers; setting routes.")
                     routing_message = self.create_routing_message().SerializeToString()
 
@@ -218,7 +223,16 @@ class Coordinator:
                 continue
 
             self.logger.warning(f"Generating {count} dummy prompts.")
-            self.push_message(self.first_worker, Message.OpCode.PushDummyPrompts, count)
+
+            self.push_message(
+                self.first_worker,
+                Message.OpCode.PushDummyPrompts,
+                protobuf.PushDummyPrompts(
+                    count=count,
+                    batch_size=self.concurrency_size_pre,
+                ),
+            )
+
             self.generated_dummies += count
 
     async def main(self, listen_address, listen_port):

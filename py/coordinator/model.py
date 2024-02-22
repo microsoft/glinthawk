@@ -5,23 +5,25 @@ from protobuf import glinthawk_pb2 as protobuf
 from .base import Stage, Platform
 from .worker import Worker
 
+
 class Model:
-    def __init__(self, name, n_layers, layers_per_worker):
+    def __init__(self, name, n_layers, layers_per_worker, separate_cls):
         assert n_layers % layers_per_worker == 0, "Number of layers must be divisible by layers per worker"
 
         self.name = name
         self.n_layers = n_layers
         self.layers_per_worker = layers_per_worker
+        self.separate_cls = separate_cls
 
         self._assigned_workers = 0
 
     def all_assigned(self) -> bool:
-        return self._assigned_workers == self.n_layers // self.layers_per_worker + 1
+        return self._assigned_workers == self.n_layers // self.layers_per_worker + (1 if self.separate_cls else 0)
 
     def assign_slices(self, worker):
         num_layer_workers = self.n_layers // self.layers_per_worker
 
-        if self._assigned_workers == num_layer_workers:
+        if self.separate_cls and self._assigned_workers == num_layer_workers:
             # all layers have been assigned, we need to assign the last worker to the classification stage
             worker.model_slice_start = (self.n_layers - 1, Stage.Classification)
             worker.model_slice_end = (self.n_layers - 1, Stage.Classification)
