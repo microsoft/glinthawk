@@ -164,7 +164,7 @@ public:
     // (1) discard the contexts we have to discard
     for ( size_t i = 0; i < state.discarded_contexts(); i++ ) {
       auto& prompt_id = state.discarded_prompt_id( i );
-      release_context( prompt_id ); // XXX not implemented yet
+      release_context( prompt_id );
     }
 
     // (2) is this the last layer? if so, we can get rid of the discard list.
