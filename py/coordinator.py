@@ -22,6 +22,7 @@ logging.basicConfig(level=logging.NOTSET, format="%(message)s", datefmt="[%X]", 
 @click.option("--listen-address", required=True)
 @click.option("--listen-port", required=True)
 @click.option("--dummy-count", help="Number of dummy prompt batches", type=click.INT, default=0)
+@click.option("--separate-cls", "-S", help="Classification on a separate worker", is_flag=True, default=False)
 @click.option("--cpu_context_count", "-NCPU", type=click.INT, default=0)
 @click.option("--gpu_context_count", "-NGPU", type=click.INT, default=0)
 @click.option("--concurrency-size-pre", "-C1", type=click.INT, default=1)
@@ -29,6 +30,8 @@ logging.basicConfig(level=logging.NOTSET, format="%(message)s", datefmt="[%X]", 
 @click.option("--concurrency-size-post", "-C3", type=click.INT, default=1)
 @click.option("--concurrency-size-cls", "-C4", type=click.INT, default=1)
 def main(listen_address, listen_port, **kwargs):
+    logging.info(f"Start coordinator with {kwargs}.")
+
     coordinator = Coordinator(**kwargs)
     asyncio.run(coordinator.main(listen_address, listen_port))
 
