@@ -501,6 +501,7 @@ BatchedInferenceState<Config> Llama2<Config, DType, LlamaOperations, Context>::f
     }
   } else {
     // all we need to send is activations; the memory is already allocated
+    states.allocate_activations();
     states.deallocate_queries();
     states.deallocate_kvs();
 
