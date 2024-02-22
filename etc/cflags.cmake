@@ -14,8 +14,8 @@ else ()
 
   set ( CMAKE_CXX_FLAGS "" )
   set ( CMAKE_CXX_FLAGS_DEBUG "-g" )
-  set ( CMAKE_CXX_FLAGS_RELEASE "-O3" )
-  set ( CMAKE_CXX_FLAGS_RELWITHDEBINFO "-O3 -g" )
+  set ( CMAKE_CXX_FLAGS_RELEASE "-O3 -DNDEBUG" )
+  set ( CMAKE_CXX_FLAGS_RELWITHDEBINFO "-O3 -g -DNDEBUG" )
 
   list ( APPEND OPTIMIZATION_FLAGS -march=${GCC_TARGET_ARCH} -ffast-math -fsingle-precision-constant )
   list ( APPEND GCC_STRICT_FLAGS -pedantic -pedantic-errors -Werror -Wall -Wextra -Wshadow -Wpointer-arith -Wcast-qual -Wformat=2 -Weffc++ -Wold-style-cast )
