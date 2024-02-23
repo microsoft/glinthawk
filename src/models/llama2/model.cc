@@ -472,12 +472,12 @@ BatchedInferenceState<Config> Llama2<Config, DType, LlamaOperations, Context>::f
     states.set_next_layer( 0 );
     states.set_next_stage( InferenceState::Stage::PreAttention );
 
-    // XXX(sadjad): what do we do if the token is EOS?
     for ( size_t i = 0; i < states.batch_size(); i++ ) {
       states.set_token( i, this->state_.argmax_pos[i] );
       states.set_token_pos( i, states.token_pos( i ) + 1 );
 
       if ( states.token( i ) == TOKEN_EOS or states.token_pos( i ) >= Config::seq_len ) {
+        // Discarding the prompt entry is left to the caller, we just set the finished flag here
         states.set_finished( i );
       }
     }

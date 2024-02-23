@@ -458,7 +458,7 @@ bool BatchedWorker<Model>::handle_peer_message( core::Message&& msg )
             __stats__.add_point<IntDistributions::PromptLength>( state.token_pos( i ) );
             completion_manager_->terminate( state.prompt_id( i ) );
 
-            state.set_discarded( i );
+            state.discard( i );
           }
         }
       }
