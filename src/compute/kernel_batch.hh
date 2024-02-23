@@ -283,6 +283,7 @@ void BatchedComputeKernel<Model>::bookkeeping_thread_func()
 
       processing_cv_.notify_one();
     } else {
+      // we couldn't get all the contexts, let's push it to the waiting_
       {
         std::lock_guard lock( waiting_mutex_ );
         waiting_.emplace( std::move( state ) );
