@@ -406,6 +406,7 @@ bool BatchedInferenceState<Config>::replenish_from( BatchedInferenceState& other
   metadata_.discarded_contexts += other.metadata_.discarded_contexts;
   discarded_contexts_.insert(
     discarded_contexts_.end(), other.discarded_contexts_.begin(), other.discarded_contexts_.end() );
+
   other.clear_discards();
 
   size_t other_idx = 0;
@@ -417,7 +418,7 @@ bool BatchedInferenceState<Config>::replenish_from( BatchedInferenceState& other
     }
 
     // we need to replace this with an active prompt from the other state
-    while ( other.prompts_[other_idx].active ) {
+    while ( not other.prompts_[other_idx].active ) {
       other_idx++;
 
       if ( other_idx >= other.prompts_.size() ) {
@@ -429,15 +430,15 @@ bool BatchedInferenceState<Config>::replenish_from( BatchedInferenceState& other
     prompt = other.prompts_[other_idx];
 
     if ( metadata_.has_activations ) {
-      std::memcpy( activation_ptr( other_idx ), other.activation_ptr( other_idx ), activation_len() );
+      std::memcpy( activation_ptr( my_idx ), other.activation_ptr( other_idx ), activation_len() );
     }
 
     if ( metadata_.has_queries ) {
-      std::memcpy( q_ptr( other_idx ), other.q_ptr( other_idx ), q_len() );
+      std::memcpy( q_ptr( my_idx ), other.q_ptr( other_idx ), q_len() );
     }
 
     if ( metadata_.has_kvs ) {
-      std::memcpy( kv_ptr( other_idx ), other.kv_ptr( other_idx ), kv_len() );
+      std::memcpy( kv_ptr( my_idx ), other.kv_ptr( other_idx ), kv_len() );
     }
 
     other.prompts_[other_idx] = {};

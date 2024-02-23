@@ -22,6 +22,8 @@ class BatchInference
 private:
   using StateType = models::BatchedInferenceState<typename Model::ConfigType>;
 
+  const size_t batch_size_;
+
   Model model_;
   models::llama2::Vocabulary vocabulary_;
   StateType state_;
@@ -40,14 +42,15 @@ public:
                   const filesystem::path& tokenizer_path,
                   const size_t batch_size,
                   const float temp )
-    : model_( model_path, 0, std::numeric_limits<uint32_t>::max(), batch_size, batch_size )
+    : batch_size_( batch_size )
+    , model_( model_path, 0, std::numeric_limits<uint32_t>::max(), batch_size, batch_size )
     , vocabulary_( tokenizer_path )
     , state_( batch_size, DataType::_GLINTHAWK_DTYPE_NAME_, {}, {}, false, false, false )
   {
     state_.set_next_layer( 0 );
     state_.set_next_stage( decltype( state_ )::Stage::PreAttention );
 
-    for ( size_t i = 0; i < batch_size; ++i ) {
+    for ( size_t i = 0; i < batch_size_; ++i ) {
       PromptID id;
       util::digest::sha256( to_string( i ), id );
 

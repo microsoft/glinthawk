@@ -337,7 +337,7 @@ bool BatchedWorker<Model>::handle_coordinator_message( core::Message&& msg )
             break;
           }
 
-          state.set_prompt( i, generate_next_prompt_id(), 1 /* TOKEN_BOS */, 0, 0.0 /*temp_dist( temp_gen )*/, 1 );
+          state.set_prompt( idx, generate_next_prompt_id(), 1 /* TOKEN_BOS */, 0, temp_dist( temp_gen ), 1 );
         }
 
         this->compute_kernel_->push( move( state ) );
@@ -449,9 +449,9 @@ bool BatchedWorker<Model>::handle_peer_message( core::Message&& msg )
         /* first worker in the chain */
 
         for ( size_t i = 0; i < state.batch_size(); i++ ) {
-          if ( state.finished( i ) ) {
-            __stats__.increment<Counters::TokensGenerated>();
+          __stats__.increment<Counters::TokensGenerated>();
 
+          if ( state.finished( i ) ) {
             auto& completion = this->completion_manager_->get( state.prompt_id( i ) );
             completion.add_token( state.token( i ) );
             __stats__.increment<Counters::PromptsCompleted>();
