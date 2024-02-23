@@ -151,7 +151,8 @@ public:
   void set_prompt_length( const size_t i, uint32_t prompt_length ) { prompts_[i].prompt_length = prompt_length; }
   void set_temperature( const size_t i, float t ) { prompts_[i].temperature = static_cast<uint8_t>( t * 255.0f ); }
   void set_finished( const size_t i ) { prompts_[i].finished = true; }
-  void set_discarded( const size_t i );
+
+  void discard( const size_t i );
 
   // The memory is owned by the inference state; be careful with the lifetime of the returned spans.
   std::span<uint8_t> activations( const size_t i ) { return { activation_ptr( i ), activation_len() }; }
@@ -333,16 +334,18 @@ void BatchedInferenceState<Config>::set_prompt( const size_t i,
   prompts_[i].token_pos = token_pos;
   prompts_[i].temperature = static_cast<uint8_t>( temperature * 255.0f );
   prompts_[i].prompt_length = prompt_length;
+  prompts_[i].active = true;
 }
 
 template<typename Config>
-void BatchedInferenceState<Config>::set_discarded( const size_t i )
+void BatchedInferenceState<Config>::discard( const size_t i )
 {
   // XXX this function should only be called by the first worker in a chain
   CHECK( metadata_.next_stage == Stage::PreAttention ) << "Discarding prompts in a non-PreAttention stage";
   CHECK_EQ( metadata_.next_layer, 0 ) << "Discarding prompts in a non-0 layer";
 
   discarded_contexts_.push_back( { prompts_[i].prompt_id } );
+  metadata_.discarded_contexts++;
   prompts_[i] = {};
   prompts_[i].active = false;
 }
