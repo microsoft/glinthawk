@@ -15,18 +15,19 @@
 
 using namespace std;
 using namespace glinthawk;
+using namespace glinthawk::models;
 
 template<class Model>
 class BatchInference
 {
 private:
-  using StateType = models::BatchedInferenceState<typename Model::ConfigType>;
+  using StateType = BatchedInferenceState<typename Model::ConfigType>;
 
   const uint32_t batch_size_;
   const float temp_;
 
   Model model_;
-  models::llama2::Vocabulary vocabulary_;
+  llama2::Vocabulary vocabulary_;
   StateType state_;
   vector<typename Model::ContextPtr> contexts_ {};
 
@@ -71,7 +72,7 @@ public:
     , state_( batch_size, DataType::_GLINTHAWK_DTYPE_NAME_, {}, {}, false, false, false )
   {
     state_.set_next_layer( 0 );
-    state_.set_next_stage( decltype( state_ )::Stage::PreAttention );
+    state_.set_next_stage( InferenceStage::PreAttention );
 
     for ( size_t i = 0; i < batch_size_; ++i ) {
       state_.set_prompt( i, next_prompt_id(), 1 /* BOS */, 0, temp_, 1 );
@@ -96,7 +97,7 @@ public:
         state_ = ser_des( move( state_ ) );
         state_ = model_.post_attention_forward( move( state_ ) );
 
-        if ( state_.next_stage() == decltype( state_ )::Stage::Classification ) {
+        if ( state_.next_stage() == InferenceStage::Classification ) {
           state_ = ser_des( move( state_ ) );
           state_ = model_.classify_forward( move( state_ ) );
         }
@@ -168,7 +169,7 @@ int main( int argc, char* argv[] )
     const size_t batch_size = atoi( argv[4] );
     const float temp = atof( argv[5] );
 
-    using ModelType = models::llama2::_GLINTHAWK_ARCH_NS_::Stories_110M<_GLINTHAWK_DTYPE_>;
+    using ModelType = llama2::_GLINTHAWK_ARCH_NS_::Stories_110M<_GLINTHAWK_DTYPE_>;
     BatchInference<ModelType> inference { model_dir_path, tokenizer_path, batch_size, temp };
     inference.run();
 

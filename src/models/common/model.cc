@@ -2,8 +2,8 @@
 
 #include <iostream>
 #include <sstream>
+#include <chrono>
 
-#include "chrono"
 #include <glog/logging.h>
 
 using namespace std;
@@ -23,15 +23,15 @@ ostream& operator<<( ostream& os, const glinthawk::DataBuffer& v )
   return os;
 }
 
-ostream& operator<<( ostream& os, const glinthawk::models::InferenceState::Stage& v )
+ostream& operator<<( ostream& os, const glinthawk::models::InferenceStage& v )
 {
   using namespace glinthawk::models;
 
   switch ( v ) {
-    case InferenceState::Stage::PreAttention: os << "Pre"; break;
-    case InferenceState::Stage::Attention: os << "Att"; break;
-    case InferenceState::Stage::PostAttention: os << "Post"; break;
-    case InferenceState::Stage::Classification: os << "Cls"; break;
+    case InferenceStage::PreAttention: os << "Pre"; break;
+    case InferenceStage::Attention: os << "Att"; break;
+    case InferenceStage::PostAttention: os << "Post"; break;
+    case InferenceStage::Classification: os << "Cls"; break;
   }
   return os;
 }
@@ -101,25 +101,25 @@ net::Address InferenceState::next_worker() const
 void InferenceState::loop_till_next_worker( const uint32_t n_layers )
 {
   switch ( data_.next_stage_ ) {
-    case InferenceState::Stage::PreAttention: data_.next_stage_ = InferenceState::Stage::Attention; break;
-    case InferenceState::Stage::Attention: data_.next_stage_ = InferenceState::Stage::PostAttention; break;
-    case InferenceState::Stage::PostAttention:
+    case InferenceStage::PreAttention: data_.next_stage_ = InferenceStage::Attention; break;
+    case InferenceStage::Attention: data_.next_stage_ = InferenceStage::PostAttention; break;
+    case InferenceStage::PostAttention:
       if ( data_.next_layer_ == n_layers - 1 ) {
-        data_.next_stage_ = InferenceState::Stage::Classification;
+        data_.next_stage_ = InferenceStage::Classification;
       } else {
-        data_.next_stage_ = InferenceState::Stage::PreAttention;
+        data_.next_stage_ = InferenceStage::PreAttention;
         data_.next_layer_++;
       }
       break;
-    case InferenceState::Stage::Classification:
-      data_.next_stage_ = InferenceState::Stage::PreAttention;
+    case InferenceStage::Classification:
+      data_.next_stage_ = InferenceStage::PreAttention;
       data_.next_layer_ = 0;
       break;
     default: LOG( FATAL ) << "Invalid stage";
   }
 }
 
-void InferenceState::erase_from_workers( const uint32_t next_layer, const Stage next_stage )
+void InferenceState::erase_from_workers( const uint32_t next_layer, const InferenceStage next_stage )
 {
   layer_workers_.erase( { next_layer, next_stage } );
 }

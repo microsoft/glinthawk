@@ -21,8 +21,9 @@ using namespace glinthawk;
 using namespace glinthawk::core;
 using namespace glinthawk::net;
 
-using glinthawk::models::BatchedInferenceState;
+using glinthawk::models::InferenceStage;
 using glinthawk::models::InferenceState;
+using glinthawk::models::BatchedInferenceState;
 
 namespace {
 
@@ -257,18 +258,13 @@ bool BatchedWorker<Model>::handle_coordinator_message( core::Message&& msg )
       RouteMap new_route {};
       for ( int i = 0; i < proto.layer_to_address_size(); i++ ) {
         const auto& route = proto.layer_to_address( i );
-        InferenceState::Stage next_stage;
+        InferenceStage next_stage;
+
         switch ( route.stage() ) {
-          case protobuf::SetRoute::LayerToAddress::PreAttention:
-            next_stage = InferenceState::Stage::PreAttention;
-            break;
-          case protobuf::SetRoute::LayerToAddress::Attention: next_stage = InferenceState::Stage::Attention; break;
-          case protobuf::SetRoute::LayerToAddress::PostAttention:
-            next_stage = InferenceState::Stage::PostAttention;
-            break;
-          case protobuf::SetRoute::LayerToAddress::Classification:
-            next_stage = InferenceState::Stage::Classification;
-            break;
+          case protobuf::SetRoute::LayerToAddress::PreAttention: next_stage = InferenceStage::PreAttention; break;
+          case protobuf::SetRoute::LayerToAddress::Attention: next_stage = InferenceStage::Attention; break;
+          case protobuf::SetRoute::LayerToAddress::PostAttention: next_stage = InferenceStage::PostAttention; break;
+          case protobuf::SetRoute::LayerToAddress::Classification: next_stage = InferenceStage::Classification; break;
           default: throw std::runtime_error( "invalid stage" );
         }
         new_route.emplace( std::make_pair( route.layer_num(), next_stage ),
@@ -445,7 +441,7 @@ bool BatchedWorker<Model>::handle_peer_message( core::Message&& msg )
         LOG( FATAL ) << "No route with id=" << state.route_id() << " in route set.";
       }
 
-      if ( state.next_layer() == 0 and state.next_stage() == BatchedState::Stage::PreAttention ) {
+      if ( state.next_layer() == 0 and state.next_stage() == InferenceStage::PreAttention ) {
         /* first worker in the chain */
 
         for ( size_t i = 0; i < state.batch_size(); i++ ) {

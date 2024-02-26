@@ -47,7 +47,7 @@ private:
 
 private:
   using BatchedState = glinthawk::models::BatchedInferenceState<typename Model::ConfigType>;
-  using RouteMap = std::map<std::pair<uint32_t, typename BatchedState::Stage>, net::Address>;
+  using RouteMap = std::map<std::pair<uint32_t, typename models::InferenceStage>, net::Address>;
 
   std::atomic_bool running_ { true };
 

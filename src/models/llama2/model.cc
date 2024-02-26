@@ -168,7 +168,7 @@ void Llama2<Config, DType, LlamaOperations, Context>::dummy_forward( InferenceSt
 template<typename Config, typename DType, typename LlamaOperations, typename Context>
 bool Llama2<Config, DType, LlamaOperations, Context>::is_finished( const InferenceState& state )
 {
-  return ( state.next_layer() == 0 and state.next_stage() == InferenceState::Stage::PreAttention )
+  return ( state.next_layer() == 0 and state.next_stage() == InferenceStage::PreAttention )
          and ( state.token() == TOKEN_EOS or state.token_pos() >= Config::seq_len ); // EOS or out of length
 }
 
@@ -176,12 +176,12 @@ template<typename Config, typename DType, typename LlamaOperations, typename Con
 void Llama2<Config, DType, LlamaOperations, Context>::check_batch(
   const std::vector<InferenceState>& states,
   const std::vector<std::shared_ptr<Context>>& contexts,
-  const InferenceState::Stage stage ) const
+  const InferenceStage stage ) const
 {
   CHECK_GT( states.size(), 0 );
   CHECK_LE( states.size(), settings_.concurrency_limit );
 
-  if ( stage == InferenceState::Stage::PreAttention or stage == InferenceState::Stage::Attention ) {
+  if ( stage == InferenceStage::PreAttention or stage == InferenceStage::Attention ) {
     CHECK_EQ( states.size(), contexts.size() );
   }
 
@@ -192,7 +192,7 @@ void Llama2<Config, DType, LlamaOperations, Context>::check_batch(
 
   for ( auto& item : states ) {
     CHECK( item.next_stage() == stage );
-    if ( stage != InferenceState::Stage::Attention ) {
+    if ( stage != InferenceStage::Attention ) {
       CHECK_DTYPE<DType>( item.dtype() );
       CHECK_EQ( item.next_layer(), next_layer_batch );
     }
@@ -204,12 +204,12 @@ template<typename Config, typename DType, typename LlamaOperations, typename Con
 void Llama2<Config, DType, LlamaOperations, Context>::check_batch(
   const BatchedState& states,
   const std::vector<std::shared_ptr<Context>>& contexts,
-  const InferenceState::Stage stage ) const
+  const InferenceStage stage ) const
 {
   CHECK_GT( states.batch_size(), 0 );
   CHECK_LE( states.batch_size(), settings_.concurrency_limit );
 
-  if ( stage == InferenceState::Stage::PreAttention or stage == InferenceState::Stage::Attention ) {
+  if ( stage == InferenceStage::PreAttention or stage == InferenceStage::Attention ) {
     CHECK_EQ( states.batch_size(), contexts.size() );
   }
 
@@ -220,7 +220,7 @@ void Llama2<Config, DType, LlamaOperations, Context>::check_batch(
 
   CHECK( states.next_stage() == stage );
 
-  if ( stage != InferenceState::Stage::Attention ) {
+  if ( stage != InferenceStage::Attention ) {
     CHECK_DTYPE<DType>( states.dtype() );
     CHECK_EQ( states.next_layer(), next_layer_batch );
   }
@@ -363,7 +363,7 @@ void Llama2<Config, DType, LlamaOperations, Context>::forward_prelude(
   std::vector<InferenceState>& states,
   const std::vector<std::shared_ptr<Context>>& contexts )
 {
-  this->check_batch( states, contexts, InferenceState::Stage::PreAttention );
+  this->check_batch( states, contexts, InferenceStage::PreAttention );
 
   this->state_.curr_concurrency_size = states.size();
   const uint32_t next_layer_batch = states[0].next_layer();
@@ -393,7 +393,7 @@ template<typename Config, typename DType, typename LlamaOperations, typename Con
 void Llama2<Config, DType, LlamaOperations, Context>::forward_prelude( BatchedState& states,
                                                                        const ContextVector& contexts )
 {
-  this->check_batch( states, contexts, InferenceState::Stage::PreAttention );
+  this->check_batch( states, contexts, InferenceStage::PreAttention );
 
   this->state_.curr_concurrency_size = states.batch_size();
   const uint32_t next_layer_batch = states.next_layer();
@@ -438,7 +438,7 @@ std::vector<InferenceState> Llama2<Config, DType, LlamaOperations, Context>::for
     for ( size_t i = 0; i < states.size(); i++ ) {
       states[i].set_token( this->state_.argmax_pos[i] );
       states[i].set_token_pos( states[i].token_pos() + 1 );
-      states[i].set_next_stage( InferenceState::Stage::PreAttention );
+      states[i].set_next_stage( InferenceStage::PreAttention );
       states[i].set_next_layer( 0 );
       states[i].set_activations( {} );
       output_states.push_back( std::move( states[i] ) );
@@ -453,9 +453,9 @@ std::vector<InferenceState> Llama2<Config, DType, LlamaOperations, Context>::for
                  CopyType::DeviceToHost );
 
       if ( most_recent_layer_num == Config::n_layers - 1 ) {
-        states[i].set_next_stage( InferenceState::Stage::Classification );
+        states[i].set_next_stage( InferenceStage::Classification );
       } else {
-        states[i].set_next_stage( InferenceState::Stage::PreAttention );
+        states[i].set_next_stage( InferenceStage::PreAttention );
         states[i].set_next_layer( most_recent_layer_num + 1 );
       }
       states[i].set_activations( std::move( activations ) );
@@ -488,7 +488,7 @@ BatchedInferenceState<Config> Llama2<Config, DType, LlamaOperations, Context>::f
     states.deallocate_kvs();
 
     states.set_next_layer( 0 );
-    states.set_next_stage( InferenceState::Stage::PreAttention );
+    states.set_next_stage( InferenceStage::PreAttention );
 
     for ( size_t i = 0; i < states.batch_size(); i++ ) {
       states.set_token( i, this->state_.argmax_pos[i] );
@@ -511,9 +511,9 @@ BatchedInferenceState<Config> Llama2<Config, DType, LlamaOperations, Context>::f
                CopyType::DeviceToHost );
 
     if ( most_recent_layer_num == Config::n_layers - 1 ) {
-      states.set_next_stage( InferenceState::Stage::Classification );
+      states.set_next_stage( InferenceStage::Classification );
     } else {
-      states.set_next_stage( InferenceState::Stage::PreAttention );
+      states.set_next_stage( InferenceStage::PreAttention );
       states.set_next_layer( most_recent_layer_num + 1 );
     }
   }
@@ -607,7 +607,7 @@ std::vector<InferenceState> Llama2<Config, DType, LlamaOperations, Context>::pre
                  CopyType::DeviceToHost );
     }
 
-    states[i].set_next_stage( InferenceState::Stage::Attention );
+    states[i].set_next_stage( InferenceStage::Attention );
     states[i].set_activations( std::move( activations ) );
     output_states.push_back( std::move( states[i] ) );
   }
@@ -649,7 +649,7 @@ BatchedInferenceState<Config> Llama2<Config, DType, LlamaOperations, Context>::p
   ops_.copy(
     reinterpret_cast<DType*>( states.kvs().data() ), this->state_.kv, states.kvs().len(), CopyType::DeviceToHost );
 
-  states.set_next_stage( InferenceState::Stage::Attention );
+  states.set_next_stage( InferenceStage::Attention );
   return std::move( states );
 }
 
@@ -658,7 +658,7 @@ std::vector<InferenceState> Llama2<Config, DType, LlamaOperations, Context>::att
   std::vector<InferenceState>&& states,
   const ContextVector& contexts )
 {
-  this->check_batch( states, contexts, InferenceState::Stage::Attention );
+  this->check_batch( states, contexts, InferenceStage::Attention );
   this->state_.curr_concurrency_size = states.size();
 
   for ( size_t i = 0; i < states.size(); i++ ) {
@@ -744,7 +744,7 @@ std::vector<InferenceState> Llama2<Config, DType, LlamaOperations, Context>::att
       default: throw std::runtime_error( "invalid dtype" );
     }
 
-    state.set_next_stage( InferenceState::Stage::PostAttention );
+    state.set_next_stage( InferenceStage::PostAttention );
     state.set_activations( std::move( activations ) );
     output_states.push_back( std::move( state ) );
   }
@@ -757,7 +757,7 @@ BatchedInferenceState<Config> Llama2<Config, DType, LlamaOperations, Context>::a
   BatchedState&& states,
   const ContextVector& contexts )
 {
-  this->check_batch( states, contexts, InferenceState::Stage::Attention );
+  this->check_batch( states, contexts, InferenceStage::Attention );
   this->state_.curr_concurrency_size = states.batch_size();
 
   for ( size_t i = 0; i < states.batch_size(); i++ ) {
@@ -834,7 +834,7 @@ BatchedInferenceState<Config> Llama2<Config, DType, LlamaOperations, Context>::a
     default: throw std::runtime_error( "invalid dtype" );
   }
 
-  states.set_next_stage( InferenceState::Stage::PostAttention );
+  states.set_next_stage( InferenceStage::PostAttention );
   return std::move( states );
 }
 
@@ -842,7 +842,7 @@ template<typename Config, typename DType, typename LlamaOperations, typename Con
 std::vector<InferenceState> Llama2<Config, DType, LlamaOperations, Context>::post_attention_forward(
   std::vector<InferenceState>&& states )
 {
-  this->check_batch( states, {}, InferenceState::Stage::PostAttention );
+  this->check_batch( states, {}, InferenceStage::PostAttention );
   this->state_.curr_concurrency_size = states.size();
 
   for ( size_t i = 0; i < states.size(); i++ ) {
@@ -867,7 +867,7 @@ template<typename Config, typename DType, typename LlamaOperations, typename Con
 BatchedInferenceState<Config> Llama2<Config, DType, LlamaOperations, Context>::post_attention_forward(
   BatchedState&& states )
 {
-  this->check_batch( states, {}, InferenceState::Stage::PostAttention );
+  this->check_batch( states, {}, InferenceStage::PostAttention );
   this->state_.curr_concurrency_size = states.batch_size();
 
   ops_.copy( this->state_.x,
@@ -889,7 +889,7 @@ template<typename Config, typename DType, typename LlamaOperations, typename Con
 std::vector<InferenceState> Llama2<Config, DType, LlamaOperations, Context>::classify_forward(
   std::vector<InferenceState>&& states )
 {
-  this->check_batch( states, {}, InferenceState::Stage::Classification );
+  this->check_batch( states, {}, InferenceStage::Classification );
   this->state_.curr_concurrency_size = states.size();
 
   for ( size_t i = 0; i < states.size(); i++ ) {
@@ -908,7 +908,7 @@ std::vector<InferenceState> Llama2<Config, DType, LlamaOperations, Context>::cla
 template<typename Config, typename DType, typename LlamaOperations, typename Context>
 BatchedInferenceState<Config> Llama2<Config, DType, LlamaOperations, Context>::classify_forward( BatchedState&& states )
 {
-  this->check_batch( states, {}, InferenceState::Stage::Classification );
+  this->check_batch( states, {}, InferenceStage::Classification );
   this->state_.curr_concurrency_size = states.batch_size();
 
   // load the activations

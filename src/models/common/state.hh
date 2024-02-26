@@ -8,9 +8,17 @@
 #include <string_view>
 
 #include "../llama2/variants.hh"
-#include "model.hh"
+#include "../types.hh"
 
 namespace glinthawk::models {
+
+enum class InferenceStage : uint8_t
+{
+  PreAttention,
+  Attention,
+  PostAttention,
+  Classification
+};
 
 // NOTE(sadjad): right now, inference state is designed to be used by Llama and Llama-like models. We need to work out
 // the generality later.
@@ -18,9 +26,6 @@ template<typename Config>
 requires llama2::ModelConfig<Config>
 class BatchedInferenceState
 {
-public:
-  using Stage = InferenceState::Stage;
-
 private:
   struct __attribute__( ( packed ) ) Metadata
   {
@@ -29,7 +34,7 @@ private:
     RouteID route_id {};
     ModelID model_id {};
     uint32_t next_layer { 0 };
-    Stage next_stage { Stage::PreAttention };
+    InferenceStage next_stage { InferenceStage::PreAttention };
 
     bool has_activations { false };
     bool has_queries { false };
@@ -98,14 +103,14 @@ public:
   BatchedInferenceState& operator=( BatchedInferenceState&& other ) = default;
 
   // metadata setters
-  void set_dtype( DataType dtype ) { metadata_.dtype_ = dtype; }
-  void set_route_id( RouteID route_id ) { metadata_.route_id = route_id; }
-  void set_model_id( ModelID model_id ) { metadata_.model_id = model_id; }
-  void set_next_layer( uint32_t next_layer ) { metadata_.next_layer = next_layer; }
-  void set_next_stage( Stage next_stage ) { metadata_.next_stage = next_stage; }
-  void set_has_activations( bool has_activations ) { metadata_.has_activations = has_activations; }
-  void set_has_queries( bool has_queries ) { metadata_.has_queries = has_queries; }
-  void set_has_kvs( bool has_kvs ) { metadata_.has_kvs = has_kvs; }
+  void set_dtype( const DataType dtype ) { metadata_.dtype_ = dtype; }
+  void set_route_id( const RouteID route_id ) { metadata_.route_id = route_id; }
+  void set_model_id( const ModelID model_id ) { metadata_.model_id = model_id; }
+  void set_next_layer( const uint32_t next_layer ) { metadata_.next_layer = next_layer; }
+  void set_next_stage( const InferenceStage next_stage ) { metadata_.next_stage = next_stage; }
+  void set_has_activations( const bool has_activations ) { metadata_.has_activations = has_activations; }
+  void set_has_queries( const bool has_queries ) { metadata_.has_queries = has_queries; }
+  void set_has_kvs( const bool has_kvs ) { metadata_.has_kvs = has_kvs; }
 
   void clear_discards()
   {
@@ -119,7 +124,7 @@ public:
   RouteID route_id() const { return metadata_.route_id; }
   ModelID model_id() const { return metadata_.model_id; }
   uint32_t next_layer() const { return metadata_.next_layer; }
-  Stage next_stage() const { return metadata_.next_stage; }
+  InferenceStage next_stage() const { return metadata_.next_stage; }
   bool has_activations() const { return metadata_.has_activations; }
   bool has_queries() const { return metadata_.has_queries; }
   bool has_kvs() const { return metadata_.has_kvs; }
@@ -341,7 +346,7 @@ template<typename Config>
 void BatchedInferenceState<Config>::discard( const size_t i )
 {
   // XXX this function should only be called by the first worker in a chain
-  CHECK( metadata_.next_stage == Stage::PreAttention ) << "Discarding prompts in a non-PreAttention stage";
+  CHECK( metadata_.next_stage == InferenceStage::PreAttention ) << "Discarding prompts in a non-PreAttention stage";
   CHECK_EQ( metadata_.next_layer, 0 ) << "Discarding prompts in a non-0 layer";
 
   discarded_contexts_.push_back( { prompts_[i].prompt_id } );

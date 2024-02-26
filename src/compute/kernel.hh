@@ -156,7 +156,7 @@ public:
     // do a "fake" forward: remove self from propagation list and set next worker
     model_->dummy_forward( state );
 
-    if ( state.next_layer() == 0 and state.next_stage() == models::InferenceState::Stage::PreAttention ) {
+    if ( state.next_layer() == 0 and state.next_stage() == models::InferenceStage::PreAttention ) {
       // drop release message as it has fully propagated
       DLOG( INFO ) << "Dropping empty (release) inference state: " << state.to_string();
     } else {

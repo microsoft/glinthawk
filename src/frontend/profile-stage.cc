@@ -48,7 +48,7 @@ int main( int argc, char* argv[] )
 
     Profiler<Model_CUDA_FP16> profiler_cuda { log_root / "cuda_fp16_post.log",
                                               model_dir,
-                                              models::InferenceState::Stage::PostAttention,
+                                              models::InferenceStage::PostAttention,
                                               batch_size,
                                               token_pos,
                                               duration_s,
@@ -56,7 +56,7 @@ int main( int argc, char* argv[] )
 
     Profiler<Model_AMD64_FP32> profiler_amd64 { log_root / "amd64_fp32_att.log",
                                                 model_dir,
-                                                models::InferenceState::Stage::Attention,
+                                                models::InferenceStage::Attention,
                                                 batch_size,
                                                 token_pos,
                                                 duration_s,
