@@ -8,6 +8,8 @@
 #include <thread>
 #include <vector>
 
+#include "models/common/state.hh"
+
 namespace glinthawk {
 
 template<typename Model>
@@ -18,6 +20,7 @@ public:
   using ContextType = typename Model::ContextType;
   using ConfigType = typename Model::ConfigType;
   using ModelDataType = typename Model::ModelDataType;
+  using StateType = models::BatchedInferenceState<ConfigType>;
 
 private:
   static constexpr size_t REPEATS = 1'000;
@@ -25,11 +28,11 @@ private:
   Model model_; /* we just load one layer of the model */
 
   const Stage stage_;
-  const size_t batch_size_;
-  const size_t token_pos_;
+  const uint32_t batch_size_;
+  const uint64_t token_pos_;
   const std::chrono::seconds duration_;
   std::vector<std::shared_ptr<ContextType>> contexts_ { batch_size_ };
-  std::vector<std::vector<models::InferenceState>> all_states_ { REPEATS };
+  std::vector<StateType> all_states_ { REPEATS };
 
   std::thread thread_ {};
 
@@ -43,8 +46,8 @@ public:
   Profiler( const std::filesystem::path& log_path,
             const std::filesystem::path& model_root,
             const Stage stage,
-            const size_t batch_size,
-            const size_t token_pos,
+            const uint32_t batch_size,
+            const uint64_t token_pos,
             const size_t duration_s,
             const bool run_serialization )
     : model_( model_root, 1, 1, batch_size, batch_size, true )
@@ -76,25 +79,31 @@ public:
   void prepare_states( const bool first_time = false )
   {
     for ( size_t r = 0; r < REPEATS; r++ ) {
-      auto& states = all_states_[r];
-      states.resize( batch_size_ );
+      auto& state = all_states_[r];
+      state = StateType { batch_size_, ( sizeof( ModelDataType ) == 2 ? DataType::Float16 : DataType::Float32 ),
+                          RouteID {},  ModelID {},
+                          true,        true,
+                          true };
+
+      if ( first_time ) {
+        util::randomize_buffer( reinterpret_cast<ModelDataType*>( state.activations().data() ),
+                                state.activations().len() / sizeof( ModelDataType ),
+                                -10.0 / sqrtf( ConfigType::dim ),
+                                10.0 / sqrtf( ConfigType::dim ) );
+
+        util::randomize_buffer( reinterpret_cast<ModelDataType*>( state.queries().data() ),
+                                state.queries().len() / sizeof( ModelDataType ),
+                                -10.0 / sqrtf( ConfigType::kv_dim ),
+                                10.0 / sqrtf( ConfigType::kv_dim ) );
+
+        util::randomize_buffer( reinterpret_cast<ModelDataType*>( state.kvs().data() ),
+                                state.kvs().len() / sizeof( ModelDataType ),
+                                -10.0 / sqrtf( ConfigType::kv_dim ),
+                                10.0 / sqrtf( ConfigType::kv_dim ) );
+      }
 
       for ( size_t i = 0; i < batch_size_; i++ ) {
-        DataBuffer state_buffer { ( 2 * ConfigType::dim + 2 * ConfigType::kv_dim ) * sizeof( ModelDataType ) };
-
-        if ( first_time ) {
-          util::randomize_buffer( reinterpret_cast<ModelDataType*>( state_buffer.data() ),
-                                  state_buffer.len() / sizeof( ModelDataType ),
-                                  -10.0 / sqrtf( ConfigType::dim ),
-                                  10.0 / sqrtf( ConfigType::dim ) );
-        }
-
-        states[i] = { sizeof( ModelDataType ) == 2 ? DataType::Float16 : DataType::Float32 };
-        states[i].set_token_pos( token_pos_ );
-        states[i].set_activations( std::move( state_buffer ) );
-
-        states[i].set_next_layer( 1 );
-        states[i].set_next_stage( stage_ );
+        state.set_prompt( i, PromptID {}, 1, token_pos_, 0.5, 1 );
       }
     }
   }
@@ -103,11 +112,13 @@ public:
   {
     const auto end_time = std::chrono::steady_clock::now() + duration_;
 
-    DataBuffer state_buffer { ( 2 * ConfigType::dim + 2 * ConfigType::kv_dim ) * sizeof( ModelDataType ) };
-    models::InferenceState state { sizeof( ModelDataType ) == 2 ? DataType::Float16 : DataType::Float32 };
+    StateType state { batch_size_, ( sizeof( ModelDataType ) == 2 ? DataType::Float16 : DataType::Float32 ),
+                      RouteID {},  ModelID {},
+                      true,        true,
+                      true };
 
     for ( auto now = std::chrono::steady_clock::now(); now < end_time; now = std::chrono::steady_clock::now() ) {
-      const auto sleep_util = now + std::chrono::microseconds( 500 );
+      const auto sleep_util = now + std::chrono::microseconds( 1000 );
       const auto state_str = state.serialize();
       state = { state_str };
       std::this_thread::sleep_until( sleep_util );

@@ -22,7 +22,6 @@ class Llama2
 {
 public:
   using BatchedState = BatchedInferenceState<Config>;
-  using StateVector = std::vector<InferenceState>;
   using ContextPtr = std::shared_ptr<Context>;
   using ContextVector = std::vector<ContextPtr>;
   using Operations = LlamaOperations;
@@ -31,6 +30,25 @@ public:
   using ContextType = Context;
   using ConfigType = Config;
   using SettingsType = Settings<Config>;
+
+public:
+  Llama2( const std::filesystem::path& model_dir,
+          const uint32_t start_layer = 0,
+          const uint32_t end_layer = std::numeric_limits<uint32_t>::max(),
+          const uint64_t concurrency_limit = 1,
+          const uint64_t max_context_count = 1,
+          const bool randomize_parameters = false );
+
+  [[nodiscard]] BatchedState forward( BatchedState&& state, const ContextVector& ctxs );
+
+  // input token -> [(pre -> att -> post) x n_layers] -> classify -> output token
+  [[nodiscard]] BatchedState pre_attention_forward( BatchedState&& state, const ContextVector& ctxs );
+  [[nodiscard]] BatchedState attention_forward( BatchedState&& state, const ContextVector& ctxs );
+  [[nodiscard]] BatchedState post_attention_forward( BatchedState&& state );
+  [[nodiscard]] BatchedState classify_forward( BatchedState&& state );
+
+  Settings<Config> settings() const { return settings_; }
+  Operations& ops() { return ops_; }
 
 private:
   static constexpr uint32_t TOKEN_BOS = 1; // Beginning-of-sequence token
@@ -49,61 +67,21 @@ protected:
   RunState<Config, DType, Context> state_;
 
   // Checking if the inference states are safe to pass to the model
-  void check_batch( const StateVector& inference_states,
-                    const ContextVector& contexts,
-                    const InferenceStage stage ) const;
-
   void check_batch( const BatchedState& inference_states,
                     const ContextVector& contexts,
                     const InferenceStage stage ) const;
 
-  void load_embedding( const StateVector& inference_state );
   void load_embedding( const BatchedState& inference_state );
 
-  void forward_prelude( StateVector& inference_state, const ContextVector& contexts );
   void forward_prelude( BatchedState& inference_state, const ContextVector& contexts );
+  [[nodiscard]] BatchedState forward_postlude( BatchedState&& inference_state,
+                                               const int32_t most_recent_layer_num,
+                                               const bool classified );
 
   void pre_attention_ops( const int32_t layer_num );
   void attention_ops();
   void post_attention_ops( const int32_t layer_num );
   void classify_ops();
-
-  [[nodiscard]] StateVector forward_postlude( StateVector&& inference_state,
-                                              const int32_t most_recent_layer_num,
-                                              const bool classified );
-
-  [[nodiscard]] BatchedState forward_postlude( BatchedState&& inference_state,
-                                               const int32_t most_recent_layer_num,
-                                               const bool classified );
-
-public:
-  Llama2( const std::filesystem::path& model_dir,
-          const uint32_t start_layer = 0,
-          const uint32_t end_layer = std::numeric_limits<uint32_t>::max(),
-          const uint64_t pre_att_concurrency_limit = 1,
-          const uint64_t att_concurrency_limit = 1,
-          const uint64_t post_att_concurrency_limit = 1,
-          const uint64_t cls_concurrency_limit = 1,
-          const uint64_t max_context_count = 1,
-          const bool randomize_parameters = false );
-
-  [[nodiscard]] StateVector forward( StateVector&& states, const ContextVector& ctxs );
-  [[nodiscard]] StateVector pre_attention_forward( StateVector&& states, const ContextVector& ctxs );
-  [[nodiscard]] StateVector attention_forward( StateVector&& states, const ContextVector& ctxs );
-  [[nodiscard]] StateVector post_attention_forward( StateVector&& states );
-  [[nodiscard]] StateVector classify_forward( StateVector&& states );
-
-  [[nodiscard]] BatchedState forward( BatchedState&& state, const ContextVector& ctxs );
-  [[nodiscard]] BatchedState pre_attention_forward( BatchedState&& state, const ContextVector& ctxs );
-  [[nodiscard]] BatchedState attention_forward( BatchedState&& state, const ContextVector& ctxs );
-  [[nodiscard]] BatchedState post_attention_forward( BatchedState&& state );
-  [[nodiscard]] BatchedState classify_forward( BatchedState&& state );
-
-  void dummy_forward( InferenceState& inference_state );
-  bool is_finished( const InferenceState& inference_state );
-
-  Settings<Config> settings() const { return settings_; }
-  Operations& ops() { return ops_; }
 };
 
 #define DECLARE_MODEL( PLATFORM, MODEL_NAME )                                                                          \

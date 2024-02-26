@@ -13,7 +13,7 @@
 #include <vector>
 
 #include "context.hh"
-#include "models/common/model.hh"
+#include "models/types.hh"
 #include "models/llama2/ops/concept.hh"
 #include "variants.hh"
 

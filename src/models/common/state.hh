@@ -12,14 +12,6 @@
 
 namespace glinthawk::models {
 
-enum class InferenceStage : uint8_t
-{
-  PreAttention,
-  Attention,
-  PostAttention,
-  Classification
-};
-
 // NOTE(sadjad): right now, inference state is designed to be used by Llama and Llama-like models. We need to work out
 // the generality later.
 template<typename Config>

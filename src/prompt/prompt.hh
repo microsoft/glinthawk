@@ -8,7 +8,7 @@
 #include <unordered_map>
 #include <vector>
 
-#include "models/common/model.hh"
+#include "models/types.hh"
 #include "storage/blobstore.hh"
 
 namespace glinthawk::prompt {
