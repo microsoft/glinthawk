@@ -38,7 +38,7 @@ int main( int argc, char* argv[] )
 
   try {
     const filesystem::path model_dir { argv[1] };
-    const uint64_t batch_size = atoi( argv[2] );
+    const uint32_t batch_size = atoi( argv[2] );
     const uint64_t token_pos = atoi( argv[3] );
     const uint64_t duration_s = atoi( argv[4] );
     const filesystem::path log_root { argv[5] };

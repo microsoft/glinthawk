@@ -4,9 +4,8 @@
 
 #include <glog/logging.h>
 
-#include "worker/worker_batch.hh"
-
 #include "models/llama2/model.hh"
+#include "worker/worker.hh"
 
 #define OOF_IMPL
 #include "oof/oof.hh"

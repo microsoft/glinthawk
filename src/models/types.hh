@@ -19,6 +19,16 @@ enum class DataType : uint8_t
   Float32 = 1
 };
 
+namespace models {
+enum class InferenceStage : uint8_t
+{
+  PreAttention,
+  Attention,
+  PostAttention,
+  Classification
+};
+} // namespace glinthawk::models
+
 size_t DataTypeSize( const DataType dtype );
 
 class DataBufferPool;
@@ -118,3 +128,7 @@ enum class CopyType
 };
 
 } // namespace glinthawk
+
+std::ostream& operator<<( std::ostream& os, const glinthawk::DataType& v );
+std::ostream& operator<<( std::ostream& os, const glinthawk::DataBuffer& v );
+std::ostream& operator<<( std::ostream& os, const glinthawk::models::InferenceStage& v );

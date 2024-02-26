@@ -9,9 +9,8 @@
 #include <optional>
 #include <thread>
 
-#include "compute/kernel_pipes.hh"
+#include "compute/kernel.hh"
 #include "models/types.hh"
-// #include "compute/kernel.hh"
 #include "message/handler.hh"
 #include "message/message.hh"
 #include "models/llama2/base.hh"
@@ -29,14 +28,14 @@
 namespace glinthawk::core {
 
 template<typename Model>
-class Worker
+class BatchedWorker
 {
 private:
   class Peer
   {
   public:
     net::Address address;
-    std::vector<models::InferenceState> outgoing_states {};
+    std::vector<models::BatchedInferenceState<typename Model::ConfigType>> outgoing_states {};
     core::MessageHandler<net::TCPSession> message_handler;
 
     Peer( const net::Address& addr, net::TCPSocket&& socket )
@@ -47,7 +46,8 @@ private:
   };
 
 private:
-  using RouteMap = std::map<std::pair<uint32_t, models::InferenceStage>, net::Address>;
+  using BatchedState = glinthawk::models::BatchedInferenceState<typename Model::ConfigType>;
+  using RouteMap = std::map<std::pair<uint32_t, typename models::InferenceStage>, net::Address>;
 
   std::atomic_bool running_ { true };
 
@@ -63,7 +63,7 @@ private:
 
   std::map<net::Address, Peer> peers_ {};
   std::filesystem::path model_root_;
-  std::unique_ptr<compute::ComputeKernelPiped<Model>> compute_kernel_ { nullptr };
+  std::unique_ptr<compute::BatchedComputeKernel<Model>> compute_kernel_ { nullptr };
 
   std::shared_ptr<glinthawk::storage::BlobStore> blobstore_ { nullptr };
   std::unique_ptr<glinthawk::prompt::PromptManager> prompt_manager_ { nullptr };
@@ -116,17 +116,25 @@ private:
   void prompt_preparation_thread_func();
   void completion_commit_thread_func();
 
+  net::Address find_next_worker( const RouteMap& route, const BatchedState& state )
+  {
+    auto it = route.find( { state.next_layer(), state.next_stage() } );
+    CHECK( it != route.end() ) << "No worker found for layer " << state.next_layer() << ", stage "
+                               << state.next_stage();
+    return it->second;
+  }
+
 public:
   /// \brief Construct a new Worker object
   ///
   /// \param worker_address The address of the worker
   /// \param coordinator_address The address of the coordinator
   /// \param model_root The root directory of the model
-  Worker( const net::Address& worker_address,
-          const net::Address& coordinator_address,
-          const std::filesystem::path& model_root );
+  BatchedWorker( const net::Address& worker_address,
+                 const net::Address& coordinator_address,
+                 const std::filesystem::path& model_root );
 
-  ~Worker();
+  ~BatchedWorker();
 
   void run();
 };

@@ -22,7 +22,7 @@ public:
     __deprecated__WorkerStats,
 
     InitializeWorker,
-    InferenceState,
+    __deprecated__InferenceState,
     ProcessPrompts,
     SetRoute,
     PromptCompleted,
@@ -42,7 +42,7 @@ public:
     "__deprecated__WorkerStats",
 
     "InitializeWorker",
-    "InferenceState",
+    "__deprecated__InferenceState",
     "ProcessPrompts",
     "SetRoute",
     "PromptCompleted",

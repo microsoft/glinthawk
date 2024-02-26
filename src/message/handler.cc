@@ -1,6 +1,6 @@
 #include "handler.hh"
 
-#include "models/common/model.hh"
+#include "models/types.hh"
 #include "net/http/http_request.hh"
 #include "net/http/http_response.hh"
 #include "net/session.hh"
@@ -135,7 +135,7 @@ class Message;
 
 class Measurement;
 
-template class MessageHandler<TCPSession, models::InferenceState, models::InferenceState>;
+// template class MessageHandler<TCPSession, models::BatchedInferenceState, models::BatchedInferenceState>;
 template class MessageHandler<TCPSession, net::HTTPRequest, net::HTTPResponse>;
 template class MessageHandler<TCPSession, core::Message, core::Message>;
 template class MessageHandler<UDSSession, Measurement, util::Void>;

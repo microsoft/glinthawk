@@ -13,6 +13,16 @@ constexpr size_t MIN_BUFFER_SIZE_POOLED = 8 * 1024; // 8 KiB
 
 }
 
+size_t DataTypeSize( const DataType dtype )
+{
+  switch ( dtype ) {
+    case DataType::Float16: return 2;
+    case DataType::Float32: return 4;
+  }
+
+  throw std::runtime_error( "Unknown DataType" );
+}
+
 DataBufferPool DataBuffer::pool_ {};
 
 void DataBufferDeleter::operator()( uint8_t* ptr ) const
@@ -92,3 +102,30 @@ void DataBufferPool::print_stats() const
 }
 
 } // namespace glinthawk
+
+ostream& operator<<( ostream& os, const glinthawk::DataType& v )
+{
+  switch ( v ) {
+    case glinthawk::DataType::Float16: os << "FP16"; break;
+    case glinthawk::DataType::Float32: os << "FP32"; break;
+  }
+  return os;
+}
+
+ostream& operator<<( ostream& os, const glinthawk::DataBuffer& v )
+{
+  os << "DataBuffer{}.len=" << v.len() << " bytes";
+  return os;
+}
+
+std::ostream& operator<<( std::ostream& os, const glinthawk::models::InferenceStage& v )
+{
+  switch ( v ) {
+    case glinthawk::models::InferenceStage::PreAttention: os << "PreAttention"; break;
+    case glinthawk::models::InferenceStage::Attention: os << "Attention"; break;
+    case glinthawk::models::InferenceStage::PostAttention: os << "PostAttention"; break;
+    case glinthawk::models::InferenceStage::Classification: os << "Classification"; break;
+  }
+
+  return os;
+}
