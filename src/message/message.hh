@@ -19,10 +19,9 @@ public:
     Ping,
     Bye,
 
-    __deprecated__WorkerStats,
-
+    WorkerStats [[deprecated]],
     InitializeWorker,
-    __deprecated__InferenceState,
+    InferenceState [[deprecated]],
     ProcessPrompts,
     SetRoute,
     PromptCompleted,
@@ -39,10 +38,9 @@ public:
     "Ping",
     "Bye",
 
-    "__deprecated__WorkerStats",
-
+    "WorkerStats",
     "InitializeWorker",
-    "__deprecated__InferenceState",
+    "InferenceState",
     "ProcessPrompts",
     "SetRoute",
     "PromptCompleted",
