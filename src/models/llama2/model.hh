@@ -51,11 +51,11 @@ protected:
   // Checking if the inference states are safe to pass to the model
   void check_batch( const StateVector& inference_states,
                     const ContextVector& contexts,
-                    const InferenceState::Stage stage ) const;
+                    const InferenceStage stage ) const;
 
   void check_batch( const BatchedState& inference_states,
                     const ContextVector& contexts,
-                    const InferenceState::Stage stage ) const;
+                    const InferenceStage stage ) const;
 
   void load_embedding( const StateVector& inference_state );
   void load_embedding( const BatchedState& inference_state );

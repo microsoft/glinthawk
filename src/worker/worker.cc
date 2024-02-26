@@ -19,6 +19,7 @@ using namespace glinthawk;
 using namespace glinthawk::core;
 using namespace glinthawk::net;
 
+using glinthawk::models::InferenceStage;
 using glinthawk::models::InferenceState;
 
 namespace {
@@ -80,25 +81,25 @@ void Worker<Model>::setup_peer( std::map<net::Address, Peer>::iterator peer_it )
         DLOG( INFO ) << "Sending state to " << peer_it->first.to_string() << ": " << state.to_string();
 
         const auto current_time = std::chrono::steady_clock::now().time_since_epoch().count();
-        if ( state.next_stage() == InferenceState::Stage::PreAttention and not state.finished() ) {
+        if ( state.next_stage() == InferenceStage::PreAttention and not state.finished() ) {
           __stats__.add_point<IntDistributions::PreWorker2SerializeTime>( current_time - state.timestamp() );
           if ( state.batch_last() ) {
             __stats__.add_point<IntDistributions::PreWorker2SerializeTimeBatch>( current_time
                                                                                  - state.batch_timestamp() );
           }
-        } else if ( state.next_stage() == InferenceState::Stage::Attention and not state.finished() ) {
+        } else if ( state.next_stage() == InferenceStage::Attention and not state.finished() ) {
           __stats__.add_point<IntDistributions::AttWorker2SerializeTime>( current_time - state.timestamp() );
           if ( state.batch_last() ) {
             __stats__.add_point<IntDistributions::AttWorker2SerializeTimeBatch>( current_time
                                                                                  - state.batch_timestamp() );
           }
-        } else if ( state.next_stage() == InferenceState::Stage::PostAttention and not state.finished() ) {
+        } else if ( state.next_stage() == InferenceStage::PostAttention and not state.finished() ) {
           __stats__.add_point<IntDistributions::PostWorker2SerializeTime>( current_time - state.timestamp() );
           if ( state.batch_last() ) {
             __stats__.add_point<IntDistributions::PostWorker2SerializeTimeBatch>( current_time
                                                                                   - state.batch_timestamp() );
           }
-        } else if ( state.next_stage() == InferenceState::Stage::Classification and not state.finished() ) {
+        } else if ( state.next_stage() == InferenceStage::Classification and not state.finished() ) {
           __stats__.add_point<IntDistributions::ClsWorker2SerializeTime>( current_time - state.timestamp() );
           if ( state.batch_last() ) {
             __stats__.add_point<IntDistributions::ClsWorker2SerializeTimeBatch>( current_time
@@ -291,17 +292,17 @@ bool Worker<Model>::handle_coordinator_message( core::Message&& msg )
       RouteMap new_route {};
       for ( int i = 0; i < proto.layer_to_address_size(); i++ ) {
         const auto& route = proto.layer_to_address( i );
-        InferenceState::Stage next_stage;
+        InferenceStage next_stage;
         switch ( route.stage() ) {
           case protobuf::SetRoute::LayerToAddress::PreAttention:
-            next_stage = InferenceState::Stage::PreAttention;
+            next_stage = InferenceStage::PreAttention;
             break;
-          case protobuf::SetRoute::LayerToAddress::Attention: next_stage = InferenceState::Stage::Attention; break;
+          case protobuf::SetRoute::LayerToAddress::Attention: next_stage = InferenceStage::Attention; break;
           case protobuf::SetRoute::LayerToAddress::PostAttention:
-            next_stage = InferenceState::Stage::PostAttention;
+            next_stage = InferenceStage::PostAttention;
             break;
           case protobuf::SetRoute::LayerToAddress::Classification:
-            next_stage = InferenceState::Stage::Classification;
+            next_stage = InferenceStage::Classification;
             break;
           default: throw std::runtime_error( "invalid stage" );
         }
@@ -359,7 +360,7 @@ bool Worker<Model>::handle_coordinator_message( core::Message&& msg )
         state.set_token( 1 /* BOS */ );
         state.set_token_pos( 0 );
         state.set_next_layer( 0 );
-        state.set_next_stage( InferenceState::Stage::PreAttention );
+        state.set_next_stage( InferenceStage::PreAttention );
         state.set_prompt_length( 1 );
         state.set_temperature( temp_dist( temp_gen ) );
         state.set_loop_start_timestamp( std::chrono::steady_clock::now().time_since_epoch().count() );
@@ -435,22 +436,22 @@ void Worker<Model>::handle_compute_kernel_event()
     __stats__.increment<Counters::StatesProcessed>();
 
     const auto current_time = std::chrono::steady_clock::now().time_since_epoch().count();
-    if ( state.next_stage() == InferenceState::Stage::PreAttention and not state.finished() ) {
+    if ( state.next_stage() == InferenceStage::PreAttention and not state.finished() ) {
       __stats__.add_point<IntDistributions::PreInference2WorkerTime>( current_time - state.timestamp() );
       if ( state.batch_last() ) {
         __stats__.add_point<IntDistributions::PreInference2WorkerTimeBatch>( current_time - state.batch_timestamp() );
       }
-    } else if ( state.next_stage() == InferenceState::Stage::Attention and not state.finished() ) {
+    } else if ( state.next_stage() == InferenceStage::Attention and not state.finished() ) {
       __stats__.add_point<IntDistributions::AttInference2WorkerTime>( current_time - state.timestamp() );
       if ( state.batch_last() ) {
         __stats__.add_point<IntDistributions::AttInference2WorkerTimeBatch>( current_time - state.batch_timestamp() );
       }
-    } else if ( state.next_stage() == InferenceState::Stage::PostAttention and not state.finished() ) {
+    } else if ( state.next_stage() == InferenceStage::PostAttention and not state.finished() ) {
       __stats__.add_point<IntDistributions::PostInference2WorkerTime>( current_time - state.timestamp() );
       if ( state.batch_last() ) {
         __stats__.add_point<IntDistributions::PostInference2WorkerTimeBatch>( current_time - state.batch_timestamp() );
       }
-    } else if ( state.next_stage() == InferenceState::Stage::Classification and not state.finished() ) {
+    } else if ( state.next_stage() == InferenceStage::Classification and not state.finished() ) {
       __stats__.add_point<IntDistributions::ClsInference2WorkerTime>( current_time - state.timestamp() );
       if ( state.batch_last() ) {
         __stats__.add_point<IntDistributions::ClsInference2WorkerTimeBatch>( current_time - state.batch_timestamp() );
@@ -499,13 +500,13 @@ bool Worker<Model>::handle_peer_message( core::Message&& msg )
       DLOG( INFO ) << "Inference state: " << state.to_string();
 
       const auto current_time = std::chrono::steady_clock::now().time_since_epoch().count();
-      if ( state.next_stage() == InferenceState::Stage::Attention and not state.finished() ) {
+      if ( state.next_stage() == InferenceStage::Attention and not state.finished() ) {
         __stats__.add_point<IntDistributions::PreSerialize2AttWorkerTime>( current_time - state.timestamp() );
         if ( state.batch_last() ) {
           __stats__.add_point<IntDistributions::PreSerialize2AttWorkerTimeBatch>( current_time
                                                                                   - state.batch_timestamp() );
         }
-      } else if ( state.next_stage() == InferenceState::Stage::PostAttention and not state.finished() ) {
+      } else if ( state.next_stage() == InferenceStage::PostAttention and not state.finished() ) {
         __stats__.add_point<IntDistributions::AttSerialize2PostWorkerTime>( current_time - state.timestamp() );
         if ( state.batch_last() ) {
           __stats__.add_point<IntDistributions::AttSerialize2PostWorkerTimeBatch>( current_time
@@ -516,7 +517,7 @@ bool Worker<Model>::handle_peer_message( core::Message&& msg )
 
       this->compute_kernel_->check_finished( state );
 
-      if ( state.next_layer() == 0 and state.next_stage() == models::InferenceState::Stage::PreAttention ) {
+      if ( state.next_layer() == 0 and state.next_stage() == models::InferenceStage::PreAttention ) {
 
         // Only log prompt latency after context has been fully allocated
         const auto current_time_prompt = std::chrono::steady_clock::now().time_since_epoch().count();
@@ -561,13 +562,13 @@ bool Worker<Model>::handle_peer_message( core::Message&& msg )
         this->compute_kernel_->push_finished( move( state ) );
       } else {
         if ( msg_counter_ != 0 ) {
-          if ( state.next_stage() == InferenceState::Stage::PreAttention ) {
+          if ( state.next_stage() == InferenceStage::PreAttention ) {
             __stats__.add_point<IntDistributions::PreSerialize2AttWorkerVarTime>( current_time - past_msg_time_ );
-          } else if ( state.next_stage() == InferenceState::Stage::Attention ) {
+          } else if ( state.next_stage() == InferenceStage::Attention ) {
             __stats__.add_point<IntDistributions::AttSerialize2PostWorkerVarTime>( current_time - past_msg_time_ );
-          } else if ( state.next_stage() == InferenceState::Stage::PostAttention ) {
+          } else if ( state.next_stage() == InferenceStage::PostAttention ) {
             __stats__.add_point<IntDistributions::PostSerialize2ClsWorkerVarTime>( current_time - past_msg_time_ );
-          } else if ( state.next_stage() == InferenceState::Stage::Classification ) {
+          } else if ( state.next_stage() == InferenceStage::Classification ) {
             __stats__.add_point<IntDistributions::ClsSerialize2PreWorkerVarTime>( current_time - past_msg_time_ );
           }
         }
@@ -627,7 +628,7 @@ void Worker<Model>::prompt_preparation_thread_func()
       state.set_token( prompt.token( 0 ) );
       state.set_token_pos( 0 );
       state.set_next_layer( 0 );
-      state.set_next_stage( InferenceState::Stage::PreAttention );
+      state.set_next_stage( InferenceStage::PreAttention );
       state.set_prompt_length( prompt.token_count() );
       state.set_temperature( 0.0f );
       state.set_loop_start_timestamp( std::chrono::steady_clock::now().time_since_epoch().count() );

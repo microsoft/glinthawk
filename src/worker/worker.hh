@@ -11,7 +11,7 @@
 
 #include "compute/kernel_pipes.hh"
 #include "models/types.hh"
-//#include "compute/kernel.hh"
+// #include "compute/kernel.hh"
 #include "message/handler.hh"
 #include "message/message.hh"
 #include "models/llama2/base.hh"
@@ -47,7 +47,7 @@ private:
   };
 
 private:
-  using RouteMap = std::map<std::pair<uint32_t, models::InferenceState::Stage>, net::Address>;
+  using RouteMap = std::map<std::pair<uint32_t, models::InferenceStage>, net::Address>;
 
   std::atomic_bool running_ { true };
 
@@ -58,7 +58,7 @@ private:
   net::Address coordinator_address_;
   Peer coordinator_;
 
-  uint64_t msg_counter_ {0};
+  uint64_t msg_counter_ { 0 };
   uint64_t past_msg_time_ {};
 
   std::map<net::Address, Peer> peers_ {};

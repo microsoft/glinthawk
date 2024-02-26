@@ -14,7 +14,7 @@ template<typename Model>
 class Profiler
 {
 public:
-  using Stage = models::InferenceState::Stage;
+  using Stage = models::InferenceStage;
   using ContextType = typename Model::ContextType;
   using ConfigType = typename Model::ConfigType;
   using ModelDataType = typename Model::ModelDataType;
