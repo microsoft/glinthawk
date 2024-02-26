@@ -241,7 +241,6 @@ bool BatchedWorker<Model>::handle_coordinator_message( core::Message&& msg )
       break;
     }
 
-    case Message::OpCode::__deprecated__InferenceState:
     case Message::OpCode::BatchedInferenceState: {
       // got an inference state from the coordinator
       auto state = models::BatchedInferenceState<typename Model::ConfigType>( msg.payload() );
