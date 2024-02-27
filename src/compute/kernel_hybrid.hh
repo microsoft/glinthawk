@@ -65,16 +65,14 @@ private:
   requires std::same_as<M, ModelA> || std::same_as<M, ModelB>
   struct ModelData
   {
-    struct Queues
+    struct ProcessingQueues
     {
       using ContextType = std::shared_ptr<typename M::ContextType>;
       using StateContextPair = std::pair<StateType, std::vector<ContextType>>;
 
-      std::array<std::queue<StateContextPair>>, ConfigType::n_layers> pre {};
-      std::array<std::queue<StateType>, ConfigType::n_layers> post_from_self {};
-      std::array<std::queue<StateType>, ConfigType::n_layers> post_from_other {};
-
+      std::array<std::queue<StateContextPair>, ConfigType::n_layers> pre {};
       std::queue<StateContextPair> att {};
+      std::array<std::queue<StateType>, ConfigType::n_layers> post {};
       std::queue<StateType> classify {};
     };
 
@@ -85,12 +83,12 @@ private:
 
     std::mutex mutex {};
     std::condition_variable cv {};
-    Queues queues {};
+    ProcessingQueues queues {};
 
     ModelData( std::unique_ptr<M>&& in_model, const Concurrency& in_concurrency );
   };
 
-  // ... -> [pre(a|b) -> att(a|b) -> post(a|b)] -> ... -> classify
+  // ... -> [pre(a|b) -> att(a|b) -> post(a|b)] * n_layers -> classify(a|b)
   ModelData<ModelA> a_;
   ModelData<ModelB> b_;
 
@@ -99,6 +97,8 @@ private:
 
   // <queues>
   std::queue<StateType> incoming_ {};
+  std::queue<StateType> pre_to_att_ {};
+  std::queue<StateType> att_to_post_ {};
   std::queue<StateType> outgoing_ {};
   // </queues>
 
@@ -132,7 +132,11 @@ HybridComputeKernel<ModelA, ModelB>::HybridComputeKernel( std::unique_ptr<ModelA
   : a_( std::move( model_a ), concurrency_a )
   , b_( std::move( model_b ), concurrency_b )
 {
-  // XXX check concurrency settings to be permissible
+  // check the concurrency settings to be permissible
+  CHECK_EQ( concurrency_a.pre + concurrency_b.pre, concurrency_a.att + concurrency_b.att );
+  CHECK_EQ( concurrency_a.att + concurrency_b.att, concurrency_a.post + concurrency_b.post );
+  CHECK_EQ( concurrency_a.post + concurrency_b.post, concurrency_a.classify + concurrency_b.classify );
+
   threads_.emplace_back( &HybridComputeKernel::backlog_thread_func, this );
   threads_.emplace_back( &HybridComputeKernel::bookkeeping_thread_func, this );
   threads_.emplace_back( &HybridComputeKernel::execution_thread_func<ModelA>, this, std::ref( a_ ) );
