@@ -103,12 +103,7 @@ public:
   void set_has_activations( const bool has_activations ) { metadata_.has_activations = has_activations; }
   void set_has_queries( const bool has_queries ) { metadata_.has_queries = has_queries; }
   void set_has_kvs( const bool has_kvs ) { metadata_.has_kvs = has_kvs; }
-
-  void clear_discards()
-  {
-    discarded_contexts_.clear();
-    metadata_.discarded_contexts = 0;
-  }
+  void clear_discards();
 
   // metadata getters
   uint32_t batch_size() const { return metadata_.batch_size; }
@@ -176,16 +171,25 @@ public:
   void deallocate_queries();
   void deallocate_kvs();
 
-  size_t free_slots() const
-  {
-    return std::count_if( prompts_.begin(), prompts_.end(), []( const auto& p ) { return !p.active; } );
-  }
+  size_t free_slots() const;
 
   /// @brief Replace the inactive prompts in the current state with the active prompts from the other state.
   /// @param other The state to replenish from.
   /// @note Modifies both the current state and the other state by moving activations from the other state to current.
   /// @return True if all inactive prompts were replaced, false otherwise.
   bool replenish_from( BatchedInferenceState& other );
+
+  /// @brief Split the current state into two states of size n and batch_size - n.
+  /// @param n The size of the first state.
+  /// @return A pair of states.
+  std::pair<BatchedInferenceState, BatchedInferenceState> split( const size_t n );
+
+  /// @brief Merge the current state with another state. The difference between this and replenish_from is that this
+  /// function merges the states, while replenish_from only replaces inactive prompts. The second state after merging
+  /// will always be empty.
+  /// @param other
+  /// @return The merged state.
+  void merge( BatchedInferenceState&& other );
 
   std::string debug_string( const bool prompt_details ) const;
 };
@@ -447,6 +451,108 @@ bool BatchedInferenceState<Config>::replenish_from( BatchedInferenceState& other
   }
 
   return true;
+}
+
+template<typename Config>
+void BatchedInferenceState<Config>::clear_discards()
+{
+  discarded_contexts_.clear();
+  metadata_.discarded_contexts = 0;
+}
+
+template<typename Config>
+size_t BatchedInferenceState<Config>::free_slots() const
+{
+  return std::count_if( prompts_.begin(), prompts_.end(), []( const auto& p ) { return not p.active; } );
+}
+
+template<typename Config>
+std::pair<BatchedInferenceState<Config>, BatchedInferenceState<Config>> BatchedInferenceState<Config>::split(
+  const size_t n )
+{
+  CHECK_LT( n, metadata_.batch_size ) << "n must be less than the batch size";
+
+  const size_t size_a = n;
+  const size_t size_b = metadata_.batch_size - n;
+
+  BatchedInferenceState<Config> state_a( n,
+                                         metadata_.dtype,
+                                         metadata_.route_id,
+                                         metadata_.model_id,
+                                         metadata_.has_activations,
+                                         metadata_.has_queries,
+                                         metadata_.has_kvs );
+
+  BatchedInferenceState<Config> state_b( metadata_.batch_size - n,
+                                         metadata_.dtype,
+                                         metadata_.route_id,
+                                         metadata_.model_id,
+                                         metadata_.has_activations,
+                                         metadata_.has_queries,
+                                         metadata_.has_kvs );
+
+  if ( metadata_.has_activations ) {
+    std::memcpy( state_a.activations_.data(), activations_.data(), size_a * activation_len() );
+    std::memcpy(
+      state_b.activations_.data(), activations_.data() + size_a * activation_len(), size_b * activation_len() );
+  }
+
+  if ( metadata_.has_queries ) {
+    std::memcpy( state_a.queries_.data(), queries_.data(), size_a * q_len() );
+    std::memcpy( state_b.queries_.data(), queries_.data() + size_a * q_len(), size_b * q_len() );
+  }
+
+  if ( metadata_.has_kvs ) {
+    std::memcpy( state_a.kvs_.data(), kvs_.data(), size_a * kv_len() );
+    std::memcpy( state_b.kvs_.data(), kvs_.data() + size_a * kv_len(), size_b * kv_len() );
+  }
+
+  return { state_a, state_b };
+}
+
+template<typename Config>
+void BatchedInferenceState<Config>::merge( BatchedInferenceState&& other )
+{
+  CHECK_EQ( metadata_.dtype, other.metadata_.dtype ) << "States with different data types";
+  CHECK_EQ( metadata_.route_id, other.metadata_.route_id ) << "States with different route IDs";
+  CHECK_EQ( metadata_.model_id, other.metadata_.model_id ) << "States with different model IDs";
+  CHECK_EQ( metadata_.next_layer, other.metadata_.next_layer ) << "States with different next layers";
+  CHECK( metadata_.next_stage == other.metadata_.next_stage ) << "States with different next stages";
+  CHECK_EQ( metadata_.has_activations, other.metadata_.has_activations ) << "States with different activation states";
+  CHECK_EQ( metadata_.has_queries, other.metadata_.has_queries ) << "States with different query states";
+  CHECK_EQ( metadata_.has_kvs, other.metadata_.has_kvs ) << "States with different key-value states";
+
+  BatchedInferenceState new_state( metadata_.batch_size + other.metadata_.batch_size,
+                                   metadata_.dtype,
+                                   metadata_.route_id,
+                                   metadata_.model_id,
+                                   metadata_.has_activations,
+                                   metadata_.has_queries,
+                                   metadata_.has_kvs );
+
+  if ( metadata_.has_activations ) {
+    std::memcpy( new_state.activations_.data(), activations_.data(), metadata_.batch_size * activation_len() );
+    std::memcpy( new_state.activations_.data() + metadata_.batch_size * activation_len(),
+                 other.activations_.data(),
+                 other.metadata_.batch_size * activation_len() );
+  }
+
+  if ( metadata_.has_queries ) {
+    std::memcpy( new_state.queries_.data(), queries_.data(), metadata_.batch_size * q_len() );
+    std::memcpy( new_state.queries_.data() + metadata_.batch_size * q_len(),
+                 other.queries_.data(),
+                 other.metadata_.batch_size * q_len() );
+  }
+
+  if ( metadata_.has_kvs ) {
+    std::memcpy( new_state.kvs_.data(), kvs_.data(), metadata_.batch_size * kv_len() );
+    std::memcpy( new_state.kvs_.data() + metadata_.batch_size * kv_len(),
+                 other.kvs_.data(),
+                 other.metadata_.batch_size * kv_len() );
+  }
+
+  *this = std::move( new_state );
+  other = {};
 }
 
 template<typename Config>
