@@ -20,13 +20,16 @@ enum class DataType : uint8_t
 };
 
 namespace models {
+
 enum class InferenceStage : uint8_t
 {
   PreAttention,
   Attention,
   PostAttention,
-  Classification
+  Classification,
+  __COUNT__,
 };
+
 } // namespace glinthawk::models
 
 size_t DataTypeSize( const DataType dtype );
