@@ -42,7 +42,7 @@ public:
   [[nodiscard]] BatchedState forward( BatchedState&& state, const ContextVector& ctxs );
 
   // input token -> [(pre -> att -> post) x n_layers] -> classify -> output token
-  [[nodiscard]] BatchedState pre_attention_forward( BatchedState&& state, const ContextVector& ctxs );
+  [[nodiscard]] BatchedState pre_attention_forward( BatchedState&& state );
   [[nodiscard]] BatchedState attention_forward( BatchedState&& state, const ContextVector& ctxs );
   [[nodiscard]] BatchedState post_attention_forward( BatchedState&& state );
   [[nodiscard]] BatchedState classify_forward( BatchedState&& state );
@@ -78,7 +78,7 @@ protected:
                                                const int32_t most_recent_layer_num,
                                                const bool classified );
 
-  void pre_attention_ops( const int32_t layer_num );
+  void pre_attention_ops( const int32_t layer_num, const bool update_kv_cache = false );
   void attention_ops();
   void post_attention_ops( const int32_t layer_num );
   void classify_ops();
