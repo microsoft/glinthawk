@@ -65,10 +65,10 @@ public:
     MemoryInitializationHost,
     MemoryInitializationDevice,
 
-    COUNT,
+    __COUNT__,
   };
 
-  constexpr static size_t num_categories = static_cast<size_t>( Category::COUNT );
+  constexpr static size_t num_categories = static_cast<size_t>( Category::__COUNT__ );
 
   constexpr static std::array<const char*, num_categories> _category_names { {
     // LEGACY CATEGORIES BEGIN: DO NOT TOUCH
