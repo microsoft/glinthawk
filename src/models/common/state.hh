@@ -21,6 +21,8 @@ class BatchedInferenceState
 private:
   struct __attribute__( ( packed ) ) Metadata
   {
+    uint64_t id {}; // only used internally
+
     uint32_t batch_size {};
     DataType dtype { DataType::Float32 };
     RouteID route_id {};
@@ -95,6 +97,7 @@ public:
   BatchedInferenceState& operator=( BatchedInferenceState&& other ) = default;
 
   // metadata setters
+  void set_id( const uint64_t id ) { metadata_.id = id; }
   void set_dtype( const DataType dtype ) { metadata_.dtype_ = dtype; }
   void set_route_id( const RouteID route_id ) { metadata_.route_id = route_id; }
   void set_model_id( const ModelID model_id ) { metadata_.model_id = model_id; }
@@ -106,6 +109,7 @@ public:
   void clear_discards();
 
   // metadata getters
+  uint64_t id() const { return metadata_.id; }
   uint32_t batch_size() const { return metadata_.batch_size; }
   DataType dtype() const { return metadata_.dtype; }
   RouteID route_id() const { return metadata_.route_id; }
@@ -475,7 +479,7 @@ std::pair<BatchedInferenceState<Config>, BatchedInferenceState<Config>> BatchedI
   const size_t size_a = n;
   const size_t size_b = metadata_.batch_size - n;
 
-  BatchedInferenceState<Config> state_a( n,
+  BatchedInferenceState<Config> state_a( size_a,
                                          metadata_.dtype,
                                          metadata_.route_id,
                                          metadata_.model_id,
@@ -483,13 +487,23 @@ std::pair<BatchedInferenceState<Config>, BatchedInferenceState<Config>> BatchedI
                                          metadata_.has_queries,
                                          metadata_.has_kvs );
 
-  BatchedInferenceState<Config> state_b( metadata_.batch_size - n,
+  BatchedInferenceState<Config> state_b( size_b,
                                          metadata_.dtype,
                                          metadata_.route_id,
                                          metadata_.model_id,
                                          metadata_.has_activations,
                                          metadata_.has_queries,
                                          metadata_.has_kvs );
+
+  // XXX how about the discarded contexts?
+
+  for ( size_t i = 0; i < size_a; i++ ) {
+    state_a.prompts_[i] = prompts_[i];
+  }
+
+  for ( size_t i = 0; i < size_b; i++ ) {
+    state_b.prompts_[i] = prompts_[i + size_a];
+  }
 
   if ( metadata_.has_activations ) {
     std::memcpy( state_a.activations_.data(), activations_.data(), size_a * activation_len() );
@@ -529,6 +543,13 @@ void BatchedInferenceState<Config>::merge( BatchedInferenceState&& other )
                                    metadata_.has_activations,
                                    metadata_.has_queries,
                                    metadata_.has_kvs );
+
+  // XXX how about the discarded contexts?
+
+  // copying prompt data
+  for ( size_t i = 0; i < other.metadata_.batch_size; i++ ) {
+    prompts_[i + metadata_.batch_size] = other.prompts_[i];
+  }
 
   if ( metadata_.has_activations ) {
     std::memcpy( new_state.activations_.data(), activations_.data(), metadata_.batch_size * activation_len() );
