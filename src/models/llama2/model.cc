@@ -146,7 +146,7 @@ void Llama2<Config, DType, LlamaOperations, Context>::check_batch(
   CHECK_GT( states.batch_size(), 0 );
   CHECK_LE( states.batch_size(), settings_.concurrency_limit );
 
-  if ( stage == InferenceStage::PreAttention or stage == InferenceStage::Attention ) {
+  if ( stage == InferenceStage::Attention ) {
     CHECK_EQ( states.batch_size(), contexts.size() );
   }
 
@@ -176,7 +176,8 @@ void Llama2<Config, DType, LlamaOperations, Context>::load_embedding( const Batc
 }
 
 template<typename Config, typename DType, typename LlamaOperations, typename Context>
-void Llama2<Config, DType, LlamaOperations, Context>::pre_attention_ops( const int32_t layer_num )
+void Llama2<Config, DType, LlamaOperations, Context>::pre_attention_ops( const int32_t layer_num,
+                                                                         const bool update_kv_cache )
 {
   const auto& layer_weights = this->layer_weights_[layer_num];
 
@@ -193,8 +194,11 @@ void Llama2<Config, DType, LlamaOperations, Context>::pre_attention_ops( const i
   ops_.template matmul<Config::dim, Config::kv_dim * 2>(
     this->state_.kv, this->state_.xb, layer_weights.wkv, this->state_.curr_concurrency_size );
 
-  // save key, value at each time step (pos) to our kv cache, if the context resides on memory
-  ops_.copy_kv_cache( this->state_.batch_token_contexts, this->state_.kv, this->state_.curr_concurrency_size );
+  if ( update_kv_cache ) {
+    // save key, value at each time step (pos) to our kv cache.
+    // only necessary for the end-to-end forward() function.
+    ops_.copy_kv_cache( this->state_.batch_token_contexts, this->state_.kv, this->state_.curr_concurrency_size );
+  }
 }
 
 template<typename Config, typename DType, typename LlamaOperations, typename Context>
@@ -378,7 +382,7 @@ BatchedInferenceState<Config> Llama2<Config, DType, LlamaOperations, Context>::f
       this->state_.batch_token_contexts[i] = contexts[i]->layer( layer_num ).token( states.token_pos( i ) );
     }
 
-    pre_attention_ops( layer_num );
+    pre_attention_ops( layer_num, true );
     attention_ops();
     post_attention_ops( layer_num );
   }
@@ -393,10 +397,9 @@ BatchedInferenceState<Config> Llama2<Config, DType, LlamaOperations, Context>::f
 
 template<typename Config, typename DType, typename LlamaOperations, typename Context>
 BatchedInferenceState<Config> Llama2<Config, DType, LlamaOperations, Context>::pre_attention_forward(
-  BatchedState&& states,
-  const ContextVector& contexts )
+  BatchedState&& states )
 {
-  forward_prelude( states, contexts );
+  forward_prelude( states, {} );
   pre_attention_ops( states.next_layer() );
 
   if ( not states.has_activations() ) {

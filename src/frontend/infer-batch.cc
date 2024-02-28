@@ -89,7 +89,7 @@ public:
     for ( size_t pos = 0; pos < Model::ConfigType::seq_len; pos++ ) {
       for ( size_t layer = 0; layer < Model::ConfigType::n_layers; layer++ ) {
         state_ = ser_des( move( state_ ) );
-        state_ = model_.pre_attention_forward( move( state_ ), contexts_ );
+        state_ = model_.pre_attention_forward( move( state_ ) );
 
         state_ = ser_des( move( state_ ) );
         state_ = model_.attention_forward( move( state_ ), contexts_ );
