@@ -4,27 +4,42 @@
 #include <atomic>
 #include <concepts>
 #include <condition_variable>
+#include <deque>
+#include <functional>
 #include <limits>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <queue>
 #include <thread>
+#include <tuple>
 #include <vector>
 
 #include "models/common/state.hh"
 #include "models/types.hh"
 #include "monitoring/measurement.hh"
 #include "util/eventfd.hh"
+#include "util/util.hh"
 
 namespace glinthawk::compute {
+
+namespace {
 
 template<typename Model>
 class PreallocatingContextManager
 {
 public:
+  using StateType = BatchedInferenceState<typename Model::ConfigType>;
+  using ContextPtr = std::shared_ptr<typename Model::ContextType>;
+
   PreallocatingContextManager( const typename Model::SettingsType& settings );
 
-  std::shared_ptr<typename Model::ContextType> get_context( const PromptID& prompt_id );
+  ContextPtr get_context( const PromptID& prompt_id );
+
+  /// @brief Returns the contexts for all the prompts in the given state. Returns an empty optional if context cannot
+  /// be allocated for any of the prompts.
+  std::optional<std::vector<ContextPtr>> get_contexts( const StateType& state );
+
   bool release_context( const PromptID& prompt_id );
 
   size_t free() const;
@@ -33,16 +48,31 @@ public:
   size_t total() const;
 };
 
+} // anonymous namespace
+
 template<typename ModelA, typename ModelB>
-requires std::same_as<typename ModelB::ConfigType, typename ModelA::ConfigType>
+requires std::same_as<typename ModelA::ConfigType, typename ModelB::ConfigType>
 class HybridComputeKernel
 {
 public:
   using ConfigType = typename ModelA::ConfigType;
+  using ContextPtrA = std::shared_ptr<typename ModelA::ContextType>;
+  using ContextPtrB = std::shared_ptr<typename ModelB::ContextType>;
 
-  struct Concurrency
+  class Concurrency
   {
-    uint64_t pre {}, att {}, post {}, classify {};
+  private:
+    std::array<size_t, util::to_underlying( models::InferenceStage::__COUNT__ )> v_;
+
+  public:
+    Concurrency( const size_t pre, const size_t att, const size_t post, const size_t classify )
+      : v_ { pre, att, post, classify }
+    {
+      CHECK_GT( pre + att + post + classify, 0 ) << "At least one stage must be enabled";
+    }
+
+    void set( const models::InferenceStage stage, const size_t value ) { v_[util::to_underlying( stage )] = value; }
+    size_t get( const models::InferenceStage stage ) const { return v_[util::to_underlying( stage )]; }
   };
 
 public:
@@ -56,55 +86,81 @@ public:
   void push( glinthawk::models::BatchedInferenceState<ConfigType>&& state );
   bool pop( glinthawk::models::BatchedInferenceState<ConfigType>& state );
 
-  EventFD& event_fd();
+  EventFD& event_fd() { return event_fd_; }
 
 private:
   using StateType = glinthawk::models::BatchedInferenceState<ConfigType>;
+
+  struct StateCompOp
+  {
+    bool operator()( const StateType& lhs, const StateType& rhs ) const
+    {
+      return util::to_underlying( lhs.next_stage() ) == util::to_underlying( rhs.next_stage() )
+               ? ( lhs.next_layer() < rhs.next_layer() )
+               : ( util::to_underlying( lhs.next_stage() ) < util::to_underlying( rhs.next_stage() ) );
+    }
+  };
+
+  using StatePriorityQueue = std::priority_queue<StateType, std::deque<StateType>, StateCompOp>;
 
   template<typename M>
   requires std::same_as<M, ModelA> || std::same_as<M, ModelB>
   struct ModelData
   {
-    struct ProcessingQueues
-    {
-      using ContextType = std::shared_ptr<typename M::ContextType>;
-      using StateContextPair = std::pair<StateType, std::vector<ContextType>>;
-
-      std::array<std::queue<StateContextPair>, ConfigType::n_layers> pre {};
-      std::queue<StateContextPair> att {};
-      std::array<std::queue<StateType>, ConfigType::n_layers> post {};
-      std::queue<StateType> classify {};
-    };
+    ModelData( std::unique_ptr<M>&& in_model, const Concurrency& in_concurrency );
 
     std::unique_ptr<M> model;
     PreallocatingContextManager<M> context_manager;
     const Concurrency concurrency;
     const typename M::SettingsType settings;
 
+    StatePriorityQueue processing {};
     std::mutex mutex {};
     std::condition_variable cv {};
-    ProcessingQueues queues {};
-
-    ModelData( std::unique_ptr<M>&& in_model, const Concurrency& in_concurrency );
   };
 
   // ... -> [pre(a|b) -> att(a|b) -> post(a|b)] * n_layers -> classify(a|b)
   ModelData<ModelA> a_;
   ModelData<ModelB> b_;
 
+  // a state with some empty slots
+  std::optional<BatchedState> incomplete_state_ {};
+
   EventFD event_fd_ {};
   std::atomic<bool> running_ { true };
 
+  // keeping track of splitted states and merge them back when needed
+  size_t current_local_state_id_ { 0 };
+  std::map<size_t, std::pair<std::optional<StateType>, std::optional<StateType>>> splitted_state_map_ {};
+  std::mutex splitted_state_mutex_ {};
+
+  // <context management>
+  // keeping track of the populated contexts for the states
+  std::map<size_t, std::pair<std::vector<ContextPtrA>, std::vector<ContextPtrB>>> context_map_ {};
+  std::mutex context_mutex_ {};
+
+  void release_discarded_contexts( const StateType& state );
+  // </context management>
+
   // <queues>
-  std::queue<StateType> incoming_ {};
-  std::queue<StateType> pre_to_att_ {};
-  std::queue<StateType> att_to_post_ {};
-  std::queue<StateType> outgoing_ {};
+  // global queues:
+  struct GlobalQueue
+  {
+    StatePriorityQueue queue;
+    std::mutex mutex;
+    std::condition_variable cv;
+  };
+
+  // incoming -> (waiting|{a,b}.processing) -> outgoing
+  GlobalQueue incoming_;
+  GlobalQueue waiting_;
+  GlobalQueue outgoing_;
   // </queues>
 
   // <threads>
-  template<typename M1, typename M2>
-  void execution_thread_func( ModelData<M1>& model_data, ModelData<M2>& other_model_data );
+  template<typename M>
+  requires std::same_as<M, ModelA> || std::same_as<M, ModelB>
+  void execution_thread_func( ModelData<M>& model_data );
 
   void bookkeeping_thread_func();
   void backlog_thread_func();
@@ -133,9 +189,9 @@ HybridComputeKernel<ModelA, ModelB>::HybridComputeKernel( std::unique_ptr<ModelA
   , b_( std::move( model_b ), concurrency_b )
 {
   // check the concurrency settings to be permissible
-  CHECK_EQ( concurrency_a.pre + concurrency_b.pre, concurrency_a.att + concurrency_b.att );
-  CHECK_EQ( concurrency_a.att + concurrency_b.att, concurrency_a.post + concurrency_b.post );
-  CHECK_EQ( concurrency_a.post + concurrency_b.post, concurrency_a.classify + concurrency_b.classify );
+  CHECK_EQ( a_.concurrency.pre + b_.concurrency.pre, a_.concurrency.att + b_.concurrency.att );
+  CHECK_EQ( a_.concurrency.att + b_.concurrency.att, a_.concurrency.post + b_.concurrency.post );
+  CHECK_EQ( a_.concurrency.post + b_.concurrency.post, a_.concurrency.classify + b_.concurrency.classify );
 
   threads_.emplace_back( &HybridComputeKernel::backlog_thread_func, this );
   threads_.emplace_back( &HybridComputeKernel::bookkeeping_thread_func, this );
@@ -153,63 +209,276 @@ HybridComputeKernel<ModelA, ModelB>::~HybridComputeKernel()
 }
 
 template<typename ModelA, typename ModelB>
-template<typename M1, typename M2>
-void HybridComputeKernel<ModelA, ModelB>::execution_thread_func( ModelData<M1>& model_data,
-                                                                 ModelData<M2>& other_model_data )
+void HybridComputeKernel<ModelA, ModelB>::push( models::BatchedInferenceState<ConfigType>&& state )
+{
+  auto push_to_incoming = [this]( StateType&& state ) {
+    state.set_id( current_local_state_id_++ );
+
+    {
+      std::lock_guard lock { incoming_.mutex };
+      incoming_.queue.push( std::move( state ) );
+    }
+
+    incoming_.cv.notify_one();
+  };
+
+  // (1) discard the contexts we have to discard
+  if ( state.discarded_contexts() ) {
+    release_discarded_contexts( state );
+  }
+
+  // (2) is this the last layer? if so, we can get rid of the discard list.
+  if ( model_a_.settings().end_layer_num == Config::n_layers - 1 ) {
+    state.clear_discards();
+  }
+
+  // XXX maybe we should do all this outside of the kernel
+  // (3) do we have an incomplete state to merge this with?
+  if ( incomplete_state_.has_value() ) {
+    auto& new_state = incomplete_state_.value();
+    new_state.replenish_from( state );
+
+    if ( new_state.free_slots() == 0 ) {
+      push_to_incoming( std::move( new_state ) );
+      incomplete_state_.reset();
+    } else {
+      // if there's a free slot, it means that the input state must be now empty and we can discard it
+      CHECK_EQ( state.free_slots(), state.batch_size() );
+      return;
+    }
+  }
+
+  // (4) there's something left in the input state; let's see if we can push it to the incoming queue
+  if ( state.free_slots() == 0 ) {
+    push_to_incoming( std::move( state ) );
+  } else if ( state.free_slots() < state.batch_size() ) {
+    incomplete_state_ = std::move( state );
+  }
+}
+
+template<typename ModelA, typename ModelB>
+bool HybridComputeKernel<ModelA, ModelB>::pop( models::BatchedInferenceState<ConfigType>& state )
+{
+  std::lock_guard lock { outgoing_.mutex };
+
+  if ( outgoing_.queue.empty() ) {
+    return false;
+  }
+
+  state = std::move( outgoing_.queue.top() );
+  outgoing_.pop();
+  return true;
+}
+
+template<typename ModelA, typename ModelB>
+void HybridComputeKernel<ModelA, ModelB>::release_discarded_contexts( const StateType& state )
+{
+  for ( size_t i = 0; i < state.discarded_contexts(); i++ ) {
+    auto& prompt_id = state.discarded_prompt_id( i );
+    a_.context_manager.release_context( prompt_id );
+    b_.context_manager.release_context( prompt_id );
+  }
+}
+
+template<typename ModelA, typename ModelB>
+template<typename M>
+void HybridComputeKernel<ModelA, ModelB>::execution_thread_func( ModelData<M>& model_data )
 {
   while ( running_ ) {
-    // let's see what we have in the queues, with the following priority:
-    // (1) classification
-    // (2) attention
-    // (3) postattention-from-(self+other) for the layers in reverse order
-    // (4) preattention for the layers in reverse order
-    uint32_t next_layer = 0;
-    InferenceStage next_stage;
+    StateType input_state {};
+    StateType output_state {};
+    std::reference_wrapper<std::vector<std::shared_ptr<typename M::ContextType>>> contexts;
 
-    std::unique_lock<std::mutex> lock { model_data.mutex };
-    cv.wait( lock, [this, &next_layer, &next_stage] {
-      // (1)
-      if ( model_data.concurrency.classify && !model_data.queues.classify.empty() ) {
-        next_stage = InferenceStage::Classification;
-        next_layer = std::numeric_limits<uint32_t>::max();
-        return true;
+    {
+      std::unique_lock<std::mutex> lock { model_data.mutex };
+      cv.wait( lock, [this] { return !model_data.processing.empty(); } );
+      input_state = std::move( model_data.processing.top() );
+      model_data.processing.pop();
+    }
+
+    const auto next_stage = input_state.next_stage();
+    const auto next_layer = input_state.next_layer();
+    const auto is_last_step
+      = ( next_stage == InferenceStage::Classification )
+        or ( next_stage == InferenceStage::PostAttention and next_layer == model_data.settings().end_layer_num );
+
+    // we only need the contexts for the attention stage
+    if ( next_stage == InferenceStage::Attention ) {
+      std::lock_guard lock { context_mutex_ };
+      auto& context_pair = context_map_[input_state.id()];
+      if constexpr ( std::same_as<M, ModelA> ) {
+        contexts = std::ref( context_pair.first );
+      } else {
+        contexts = std::ref( context_pair.second );
       }
-
-      // (2)
-      if ( model_data.concurrency.att && !model_data.queues.att.empty() ) {
-        next_stage = InferenceStage::Attention;
-        next_layer = std::numeric_limits<uint32_t>::max();
-        return true;
-      }
-
-      // (3) || (4)
-      for ( size_t layer_idx = model_data.settings().end_layer_num; layer_idx >= model_data.settings().start_layer_num;
-            layer_idx-- ) {
-        if ( model_data.concurrency.post && !model_data.queues.post_from_self[layer_idx].empty()
-             && !model_data.queues.post_from_other[layer_idx].empty() ) {
-          next_stage = InferenceStage::PostAttention;
-          next_layer = layer_idx;
-          return true;
-        }
-
-        if ( model_data.concurrency.pre && !model_data.queues.pre.empty() ) {
-          next_stage = InferenceStage::PreAttention;
-          next_layer = std::numeric_limits<uint32_t>::max();
-          return true;
-        }
-      }
-    } );
-
-    StateType input_state;
-    std::vector<typename M1::ContextType> contexts;
+    }
 
     switch ( next_stage ) {
       case InferenceStage::PreAttention:
+        output_state = model_data.model->pre_attention_forward( std::move( input_state ) );
+        break;
+
       case InferenceStage::Attention:
+        output_state = model_data.model->attention_forward( std::move( input_state ), contexts.get() );
+        break;
+
       case InferenceStage::PostAttention:
+        output_state = model_data.model->post_attention_forward( std::move( input_state ) );
+        break;
+
       case InferenceStage::Classification:
+        output_state = model_data.model->classify_forward( std::move( input_state ) );
+        break;
+    }
+
+    std::optional<StateType> merged_state;
+    {
+      std::lock_guard lock { splitted_state_mutex_ };
+      auto& state_pair = splitted_state_map_[output_state.id()];
+
+      if constexpr ( std::same_as<M, ModelA> ) {
+        state_pair.first.emplace( std::move( output_state ) );
+      } else {
+        state_pair.second.emplace( std::move( output_state ) );
+      }
+
+      if ( state_pair.first.has_value() and state_pair.second.has_value() ) {
+        // merge the states
+        merged_state.emplace( state_pair.first->merge( std::move( *state_pair.second ) ) );
+        state_pair.erase( output_state.id() );
+      }
+    }
+
+    if ( merged_state.has_value() ) {
+      // was this the last layer and stage served by this kernel?
+      if ( is_last_step ) {
+        // yes; we need to send it to the outgoing queue
+        {
+          std::lock_guard lock { outgoing_.mutex };
+          global_outgoing_.push( std::move( *merged_state ) );
+        }
+
+        outgoing_.cv.notify_one();
+      } else {
+        // no; we need to keep processing it
+        {
+          std::lock_guard lock { incoming_.mutex };
+          global_processing_.push( std::move( *merged_state ) );
+        }
+
+        incoming_.cv.notify_one();
+      }
     }
   }
+}
+
+template<typename ModelA, typename ModelB>
+void HybridComputeKernel<ModelA, ModelB>::bookkeeping_thread_func()
+{
+  while ( running_ ) {
+    StateType state;
+
+    {
+      std::unique_lock lock { incoming_.mutex };
+      incoming_.cv.wait( lock, [this] { return !incoming_.queue.empty(); } );
+      state = std::move( incoming_.queue.front() );
+      incoming_.queue.pop();
+    }
+
+    // TODO(sadjad): check if this state is even valid for this kernel
+
+    // TODO(sadjad): discard the finished prompts (state.discarded_contexts_)
+
+    // can we, or have we already, allocated the contexts for this state?
+
+    if ( context_map_.find( state.id() ) ) {
+      if ( a_.context_manager.free() < a_.concurrency.get( InferenceStage::Attention )
+           or b_.context_manager.free() < b_.concurrency.get( InferenceStage::Attention ) ) {
+        // we don't have enough space for these contexts, this is going to the waiting queue
+        std::unique_lock lock { waiting_.mutex };
+        waiting_.queue.push( std::move( state ) );
+        continue;
+      }
+
+      std::vector<ContextPtrA> contexts_a;
+      std::vector<ContextPtrB> contexts_b;
+
+      contexts_a.reserve( a_.concurrency.get( InferenceStage::Attention ) );
+      contexts_b.reserve( b_.concurrency.get( InferenceStage::Attention ) );
+
+      for ( size_t i = 0; i < state.batch_size(); i++ ) {
+        if ( i < a_.concurrency.get( InferenceStage::Attention ) ) {
+          auto ctx = a_.context_manager.get_context( state.prompt_id( i ) );
+          if ( not ctx ) {
+            LOG( FATAL ) << "Cannot allocate context.";
+            break;
+          }
+          contexts_a.push_back( std::move( ctx ) );
+        } else if ( i < b_.concurrency.get( InferenceStage::Attention ) ) {
+          auto ctx = b_.context_manager.get_context( state.prompt_id( i ) );
+          if ( not ctx ) {
+            LOG( FATAL ) << "Cannot allocate context.";
+            break;
+          }
+          contexts_b.push_back( std::move( ctx ) );
+        } else {
+          LOG( FATAL ) << "Invalid state: " << state.debug_string( false );
+        }
+      }
+
+      {
+        std::lock_guard lock { context_mutex_ };
+        context_map_[state.id()] = std::make_pair( std::move( contexts_a ), std::move( contexts_b ) );
+      }
+    }
+
+    const auto next_stage = state.next_stage();
+    const auto next_layer = state.next_layer();
+
+    // do we need to split this state?
+    if ( a_.concurrency.get( next_stage ) > 0 && b_.concurrency.get( next_stage ) > 0 ) {
+      // TODO(sadjad): check the batch size against concurrency settings
+
+      // XXX(sadjad): allow for incomplete states?
+      // I don't think incomplete states should happen inside the kernel at all.
+
+      // split the state
+      auto [state_a, state_b] = state.split( a_.concurrency.get( next_stage ) );
+
+      CHECK_EQ( state_a.batch_size(), a_.concurrency.get( next_stage ) );
+      CHECK_EQ( state_b.batch_size(), b_.concurrency.get( next_stage ) );
+
+      {
+        std::lock_guard lock { a_.mutex };
+        a_.processing.push( std::move( state_a ) );
+      }
+
+      {
+        std::lock_guard lock { b_.mutex };
+        b_.processing.push( std::move( state_b ) );
+      }
+
+      a_.cv.notify_one();
+      b_.cv.notify_one();
+    } else {
+      if ( a_.concurrency.get( next_stage ) == state.batch_size() ) {
+        std::lock_guard lock { a_.mutex };
+        a_.processing.push( std::move( state ) );
+        a_.cv.notify_one();
+      } else if ( b_.concurrency.get( next_stage ) == state.batch_size() ) {
+        std::lock_guard lock { b_.mutex };
+        b_.processing.push( std::move( state ) );
+        b_.cv.notify_one();
+      } else {
+        LOG( FATAL ) << "State batch size and concurrency settings do not match";
+      }
+    }
+  }
+}
+
+template<typename ModelA, typename ModelB>
+void HybridComputeKernel<ModelA, ModelB>::backlog_thread_func()
+{
 }
 
 } // namespace glinthawk::compute
