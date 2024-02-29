@@ -29,7 +29,7 @@ template<typename Model>
 class PreallocatingContextManager
 {
 public:
-  using StateType = BatchedInferenceState<typename Model::ConfigType>;
+  using StateType = glinthawk::models::BatchedInferenceState<typename Model::ConfigType>;
   using ContextPtr = std::shared_ptr<typename Model::ContextType>;
 
   PreallocatingContextManager( const typename Model::SettingsType& settings );
@@ -89,6 +89,7 @@ public:
   EventFD& event_fd() { return event_fd_; }
 
 private:
+  using Stage = glinthawk::models::InferenceStage;
   using StateType = glinthawk::models::BatchedInferenceState<ConfigType>;
 
   struct StateCompOp
@@ -124,7 +125,7 @@ private:
   ModelData<ModelB> b_;
 
   // a state with some empty slots
-  std::optional<BatchedState> incomplete_state_ {};
+  std::optional<StateType> incomplete_state_ {};
 
   EventFD event_fd_ {};
   std::atomic<bool> running_ { true };
@@ -159,7 +160,6 @@ private:
 
   // <threads>
   template<typename M>
-  requires std::same_as<M, ModelA> || std::same_as<M, ModelB>
   void execution_thread_func( ModelData<M>& model_data );
 
   void bookkeeping_thread_func();
@@ -189,9 +189,14 @@ HybridComputeKernel<ModelA, ModelB>::HybridComputeKernel( std::unique_ptr<ModelA
   , b_( std::move( model_b ), concurrency_b )
 {
   // check the concurrency settings to be permissible
-  CHECK_EQ( a_.concurrency.pre + b_.concurrency.pre, a_.concurrency.att + b_.concurrency.att );
-  CHECK_EQ( a_.concurrency.att + b_.concurrency.att, a_.concurrency.post + b_.concurrency.post );
-  CHECK_EQ( a_.concurrency.post + b_.concurrency.post, a_.concurrency.classify + b_.concurrency.classify );
+  CHECK_EQ( a_.concurrency.get( Stage::PreAttention ) + b_.concurrency.get( Stage::PreAttention ),
+            a_.concurrency.get( Stage::Attention ) + b_.concurrency.get( Stage::Attention ) );
+
+  CHECK_EQ( a_.concurrency.get( Stage::Attention ) + b_.concurrency.get( Stage::Attention ),
+            a_.concurrency.get( Stage::PostAttention ) + b_.concurrency.get( Stage::PostAttention ) );
+
+  CHECK_EQ( a_.concurrency.get( Stage::PostAttention ) + b_.concurrency.get( Stage::PostAttention ),
+            a_.concurrency.get( Stage::Classification ) + b_.concurrency.get( Stage::Classification ) );
 
   threads_.emplace_back( &HybridComputeKernel::backlog_thread_func, this );
   threads_.emplace_back( &HybridComputeKernel::bookkeeping_thread_func, this );
@@ -228,7 +233,7 @@ void HybridComputeKernel<ModelA, ModelB>::push( models::BatchedInferenceState<Co
   }
 
   // (2) is this the last layer? if so, we can get rid of the discard list.
-  if ( model_a_.settings().end_layer_num == Config::n_layers - 1 ) {
+  if ( a_.settings().end_layer_num == ConfigType::n_layers - 1 ) {
     state.clear_discards();
   }
 
@@ -282,7 +287,8 @@ void HybridComputeKernel<ModelA, ModelB>::release_discarded_contexts( const Stat
 
 template<typename ModelA, typename ModelB>
 template<typename M>
-void HybridComputeKernel<ModelA, ModelB>::execution_thread_func( ModelData<M>& model_data )
+void HybridComputeKernel<ModelA, ModelB>::execution_thread_func(
+  typename HybridComputeKernel<ModelA, ModelB>::template ModelData<M>& model_data )
 {
   while ( running_ ) {
     StateType input_state {};
@@ -290,8 +296,8 @@ void HybridComputeKernel<ModelA, ModelB>::execution_thread_func( ModelData<M>& m
     std::reference_wrapper<std::vector<std::shared_ptr<typename M::ContextType>>> contexts;
 
     {
-      std::unique_lock<std::mutex> lock { model_data.mutex };
-      cv.wait( lock, [this] { return !model_data.processing.empty(); } );
+      std::unique_lock lock { model_data.mutex };
+      model_data.cv.wait( lock, [&model_data] { return !model_data.processing.empty(); } );
       input_state = std::move( model_data.processing.top() );
       model_data.processing.pop();
     }
@@ -299,11 +305,11 @@ void HybridComputeKernel<ModelA, ModelB>::execution_thread_func( ModelData<M>& m
     const auto next_stage = input_state.next_stage();
     const auto next_layer = input_state.next_layer();
     const auto is_last_step
-      = ( next_stage == InferenceStage::Classification )
-        or ( next_stage == InferenceStage::PostAttention and next_layer == model_data.settings().end_layer_num );
+      = ( next_stage == Stage::Classification )
+        or ( next_stage == Stage::PostAttention and next_layer == model_data.settings().end_layer_num );
 
     // we only need the contexts for the attention stage
-    if ( next_stage == InferenceStage::Attention ) {
+    if ( next_stage == Stage::Attention ) {
       std::lock_guard lock { context_mutex_ };
       auto& context_pair = context_map_[input_state.id()];
       if constexpr ( std::same_as<M, ModelA> ) {
@@ -314,21 +320,19 @@ void HybridComputeKernel<ModelA, ModelB>::execution_thread_func( ModelData<M>& m
     }
 
     switch ( next_stage ) {
-      case InferenceStage::PreAttention:
+      case Stage::PreAttention:
         output_state = model_data.model->pre_attention_forward( std::move( input_state ) );
         break;
 
-      case InferenceStage::Attention:
+      case Stage::Attention:
         output_state = model_data.model->attention_forward( std::move( input_state ), contexts.get() );
         break;
 
-      case InferenceStage::PostAttention:
+      case Stage::PostAttention:
         output_state = model_data.model->post_attention_forward( std::move( input_state ) );
         break;
 
-      case InferenceStage::Classification:
-        output_state = model_data.model->classify_forward( std::move( input_state ) );
-        break;
+      case Stage::Classification: output_state = model_data.model->classify_forward( std::move( input_state ) ); break;
     }
 
     std::optional<StateType> merged_state;
@@ -355,7 +359,7 @@ void HybridComputeKernel<ModelA, ModelB>::execution_thread_func( ModelData<M>& m
         // yes; we need to send it to the outgoing queue
         {
           std::lock_guard lock { outgoing_.mutex };
-          global_outgoing_.push( std::move( *merged_state ) );
+          outgoing_.queue.push( std::move( *merged_state ) );
         }
 
         outgoing_.cv.notify_one();
@@ -363,7 +367,7 @@ void HybridComputeKernel<ModelA, ModelB>::execution_thread_func( ModelData<M>& m
         // no; we need to keep processing it
         {
           std::lock_guard lock { incoming_.mutex };
-          global_processing_.push( std::move( *merged_state ) );
+          incoming_.queue.push( std::move( *merged_state ) );
         }
 
         incoming_.cv.notify_one();
@@ -381,7 +385,9 @@ void HybridComputeKernel<ModelA, ModelB>::bookkeeping_thread_func()
     {
       std::unique_lock lock { incoming_.mutex };
       incoming_.cv.wait( lock, [this] { return !incoming_.queue.empty(); } );
-      state = std::move( incoming_.queue.front() );
+      const auto queue_top = incoming_.queue.top();
+
+      state = std::move( incoming_.queue.top() );
       incoming_.queue.pop();
     }
 
@@ -392,8 +398,8 @@ void HybridComputeKernel<ModelA, ModelB>::bookkeeping_thread_func()
     // can we, or have we already, allocated the contexts for this state?
 
     if ( context_map_.find( state.id() ) ) {
-      if ( a_.context_manager.free() < a_.concurrency.get( InferenceStage::Attention )
-           or b_.context_manager.free() < b_.concurrency.get( InferenceStage::Attention ) ) {
+      if ( a_.context_manager.free() < a_.concurrency.get( Stage::Attention )
+           or b_.context_manager.free() < b_.concurrency.get( Stage::Attention ) ) {
         // we don't have enough space for these contexts, this is going to the waiting queue
         std::unique_lock lock { waiting_.mutex };
         waiting_.queue.push( std::move( state ) );
@@ -403,18 +409,18 @@ void HybridComputeKernel<ModelA, ModelB>::bookkeeping_thread_func()
       std::vector<ContextPtrA> contexts_a;
       std::vector<ContextPtrB> contexts_b;
 
-      contexts_a.reserve( a_.concurrency.get( InferenceStage::Attention ) );
-      contexts_b.reserve( b_.concurrency.get( InferenceStage::Attention ) );
+      contexts_a.reserve( a_.concurrency.get( Stage::Attention ) );
+      contexts_b.reserve( b_.concurrency.get( Stage::Attention ) );
 
       for ( size_t i = 0; i < state.batch_size(); i++ ) {
-        if ( i < a_.concurrency.get( InferenceStage::Attention ) ) {
+        if ( i < a_.concurrency.get( Stage::Attention ) ) {
           auto ctx = a_.context_manager.get_context( state.prompt_id( i ) );
           if ( not ctx ) {
             LOG( FATAL ) << "Cannot allocate context.";
             break;
           }
           contexts_a.push_back( std::move( ctx ) );
-        } else if ( i < b_.concurrency.get( InferenceStage::Attention ) ) {
+        } else if ( i < b_.concurrency.get( Stage::Attention ) ) {
           auto ctx = b_.context_manager.get_context( state.prompt_id( i ) );
           if ( not ctx ) {
             LOG( FATAL ) << "Cannot allocate context.";
