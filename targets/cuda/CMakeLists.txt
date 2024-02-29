@@ -10,7 +10,7 @@ target_link_libraries ( glinthawkcompute_cuda
 
 # CUDA_CONVERT_FLAGS ( glinthawkcompute_cuda )
 
-list ( APPEND GLINTHAWK_TARGETS profile-stage )
+list ( APPEND GLINTHAWK_TARGETS profile-stage infer-hybrid )
 
 set ( __PLATFORM cuda )
 include ( ../_targets.cmake )
