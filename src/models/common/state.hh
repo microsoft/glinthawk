@@ -521,7 +521,7 @@ std::pair<BatchedInferenceState<Config>, BatchedInferenceState<Config>> BatchedI
     std::memcpy( state_b.kvs_.data(), kvs_.data() + size_a * kv_len(), size_b * kv_len() );
   }
 
-  return { state_a, state_b };
+  return std::make_pair( std::move( state_a ), std::move( state_b ) );
 }
 
 template<typename Config>

@@ -58,18 +58,18 @@ private:
 };
 
 template<typename Model>
-PreallocatingContextManager<Model>::PreallocatingContextManager( const size_t max_context_count,
-                                                                 const typename Model::SettingsType& settings )
+PreallocatingContextManager<Model>::PreallocatingContextManager( const typename Model::SettingsType& settings )
 {
-  for ( size_t i = 0; i < max_context_count; i++ ) {
+  for ( size_t i = 0; i < settings.max_context_count; i++ ) {
     free_contexts_.emplace_back( std::make_shared<typename Model::ContextType>( settings ) );
   }
 
-  LOG( INFO ) << "Preallocated " << max_context_count << " contexts.";
+  LOG( INFO ) << "Preallocated " << settings.max_context_count << " contexts.";
 }
 
 template<typename Model>
-ContextPtr PreallocatingContextManager<Model>::get_context( const PromptID& prompt_id )
+typename PreallocatingContextManager<Model>::ContextPtr PreallocatingContextManager<Model>::get_context(
+  const PromptID& prompt_id )
 {
   std::lock_guard lock { mutex_ };
 
@@ -190,17 +190,30 @@ private:
   using Stage = glinthawk::models::InferenceStage;
   using StateType = glinthawk::models::BatchedInferenceState<ConfigType>;
 
-  struct StateCompOp
+  // std::priority_queue does not allow for moving elements, so we need to wrap the state in a struct
+  // to be able to move it around. The struct keeps the comparison key separate from the state itself, so the state
+  // can be moved out without affecting the queue's invariant.
+  struct StateQueueItem
   {
-    bool operator()( const StateType& lhs, const StateType& rhs ) const
+    std::pair<size_t, size_t> _comp_key; /* (layer, stage) */
+    mutable StateType state;
+
+    StateQueueItem( StateType&& in_state )
+      : state( std::move( in_state ) )
+      , _comp_key( state.next_layer(), util::to_underlying( state.next_stage() ) )
     {
-      return util::to_underlying( lhs.next_stage() ) == util::to_underlying( rhs.next_stage() )
-               ? ( lhs.next_layer() < rhs.next_layer() )
-               : ( util::to_underlying( lhs.next_stage() ) < util::to_underlying( rhs.next_stage() ) );
     }
   };
 
-  using StatePriorityQueue = std::priority_queue<StateType, std::deque<StateType>, StateCompOp>;
+  struct StateCompOp
+  {
+    bool operator()( const StateQueueItem& lhs, const StateQueueItem& rhs ) const
+    {
+      return lhs._comp_key > rhs._comp_key;
+    }
+  };
+
+  using StatePriorityQueue = std::priority_queue<StateQueueItem, std::deque<StateQueueItem>, StateCompOp>;
 
   template<typename M>
   requires std::same_as<M, ModelA> || std::same_as<M, ModelB>
@@ -368,7 +381,7 @@ bool HybridComputeKernel<ModelA, ModelB>::pop( models::BatchedInferenceState<Con
     return false;
   }
 
-  state = std::move( outgoing_.queue.top() );
+  state = std::move( outgoing_.queue.top().state );
   outgoing_.pop();
   return true;
 }
@@ -396,7 +409,7 @@ void HybridComputeKernel<ModelA, ModelB>::execution_thread_func(
     {
       std::unique_lock lock { model_data.mutex };
       model_data.cv.wait( lock, [&model_data] { return !model_data.processing.empty(); } );
-      input_state = std::move( model_data.processing.top() );
+      input_state = std::move( model_data.processing.top().state );
       model_data.processing.pop();
     }
 
@@ -483,9 +496,8 @@ void HybridComputeKernel<ModelA, ModelB>::bookkeeping_thread_func()
     {
       std::unique_lock lock { incoming_.mutex };
       incoming_.cv.wait( lock, [this] { return !incoming_.queue.empty(); } );
-      const auto queue_top = incoming_.queue.top();
 
-      state = std::move( incoming_.queue.top() );
+      state = std::move( incoming_.queue.top().state );
       incoming_.queue.pop();
     }
 
@@ -495,7 +507,7 @@ void HybridComputeKernel<ModelA, ModelB>::bookkeeping_thread_func()
 
     // can we, or have we already, allocated the contexts for this state?
 
-    if ( context_map_.find( state.id() ) ) {
+    if ( context_map_.find( state.id() ) == context_map_.end() ) {
       if ( a_.context_manager.free() < a_.concurrency.get( Stage::Attention )
            or b_.context_manager.free() < b_.concurrency.get( Stage::Attention ) ) {
         // we don't have enough space for these contexts, this is going to the waiting queue
