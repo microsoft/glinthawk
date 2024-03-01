@@ -527,7 +527,7 @@ std::pair<BatchedInferenceState<Config>, BatchedInferenceState<Config>> BatchedI
 template<typename Config>
 void BatchedInferenceState<Config>::merge( BatchedInferenceState&& other )
 {
-  CHECK_EQ( metadata_.dtype, other.metadata_.dtype ) << "States with different data types";
+  CHECK( metadata_.dtype == other.metadata_.dtype ) << "States with different data types";
   CHECK_EQ( metadata_.route_id, other.metadata_.route_id ) << "States with different route IDs";
   CHECK_EQ( metadata_.model_id, other.metadata_.model_id ) << "States with different model IDs";
   CHECK_EQ( metadata_.next_layer, other.metadata_.next_layer ) << "States with different next layers";

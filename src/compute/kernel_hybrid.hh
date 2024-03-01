@@ -79,11 +79,13 @@ typename PreallocatingContextManager<Model>::ContextPtr PreallocatingContextMana
   }
 
   if ( free_contexts_.empty() ) {
+    LOG( WARNING ) << "No free contexts available.";
     return {};
   }
 
   auto& ctx = free_contexts_.front();
   auto [it_new, inserted] = allocated_contexts_.emplace( prompt_id, std::move( ctx ) );
+  free_contexts_.pop_front();
   return it_new->second;
 }
 
@@ -224,7 +226,6 @@ private:
     std::unique_ptr<M> model;
     PreallocatingContextManager<M> context_manager;
     const Concurrency concurrency;
-    const typename M::SettingsType settings;
 
     StatePriorityQueue processing {};
     std::mutex mutex {};
@@ -287,7 +288,6 @@ HybridComputeKernel<ModelA, ModelB>::ModelData<M>::ModelData( std::unique_ptr<M>
   : model( std::move( in_model ) )
   , context_manager( model->settings() )
   , concurrency( in_concurrency )
-  , settings( model->settings() )
 {
 }
 
@@ -344,7 +344,7 @@ void HybridComputeKernel<ModelA, ModelB>::push( models::BatchedInferenceState<Co
   }
 
   // (2) is this the last layer? if so, we can get rid of the discard list.
-  if ( a_.settings().end_layer_num == ConfigType::n_layers - 1 ) {
+  if ( a_.model->settings().end_layer_num == ConfigType::n_layers - 1 ) {
     state.clear_discards();
   }
 
@@ -382,7 +382,7 @@ bool HybridComputeKernel<ModelA, ModelB>::pop( models::BatchedInferenceState<Con
   }
 
   state = std::move( outgoing_.queue.top().state );
-  outgoing_.pop();
+  outgoing_.queue.pop();
   return true;
 }
 
@@ -404,8 +404,8 @@ void HybridComputeKernel<ModelA, ModelB>::execution_thread_func(
   while ( running_ ) {
     StateType input_state {};
     StateType output_state {};
-    std::reference_wrapper<std::vector<std::shared_ptr<typename M::ContextType>>> contexts;
 
+    // get the next state to process
     {
       std::unique_lock lock { model_data.mutex };
       model_data.cv.wait( lock, [&model_data] { return !model_data.processing.empty(); } );
@@ -413,31 +413,32 @@ void HybridComputeKernel<ModelA, ModelB>::execution_thread_func(
       model_data.processing.pop();
     }
 
+    const auto local_id = input_state.id();
     const auto next_stage = input_state.next_stage();
     const auto next_layer = input_state.next_layer();
     const auto is_last_step
       = ( next_stage == Stage::Classification )
-        or ( next_stage == Stage::PostAttention and next_layer == model_data.settings().end_layer_num );
+        or ( next_stage == Stage::PostAttention and next_layer == model_data.model->settings().end_layer_num );
 
-    // we only need the contexts for the attention stage
-    if ( next_stage == Stage::Attention ) {
-      std::lock_guard lock { context_mutex_ };
-      auto& context_pair = context_map_[input_state.id()];
-      if constexpr ( std::same_as<M, ModelA> ) {
-        contexts = std::ref( context_pair.first );
-      } else {
-        contexts = std::ref( context_pair.second );
-      }
-    }
-
+    // run the corresponding forward function
     switch ( next_stage ) {
       case Stage::PreAttention:
         output_state = model_data.model->pre_attention_forward( std::move( input_state ) );
         break;
 
-      case Stage::Attention:
-        output_state = model_data.model->attention_forward( std::move( input_state ), contexts.get() );
-        break;
+      case Stage::Attention: {
+        std::unique_lock lock { context_mutex_ };
+
+        if constexpr ( std::same_as<M, ModelA> ) {
+          auto& contexts = context_map_[local_id].first;
+          lock.unlock();
+          output_state = model_data.model->attention_forward( std::move( input_state ), contexts );
+        } else {
+          auto& contexts = context_map_[local_id].second;
+          lock.unlock();
+          output_state = model_data.model->attention_forward( std::move( input_state ), contexts );
+        }
+      } break;
 
       case Stage::PostAttention:
         output_state = model_data.model->post_attention_forward( std::move( input_state ) );
@@ -449,18 +450,22 @@ void HybridComputeKernel<ModelA, ModelB>::execution_thread_func(
     std::optional<StateType> merged_state;
     {
       std::lock_guard lock { splitted_state_mutex_ };
-      auto& state_pair = splitted_state_map_[output_state.id()];
+
+      auto& entry = splitted_state_map_[local_id];
+      auto& state_a = entry.first;
+      auto& state_b = entry.second;
 
       if constexpr ( std::same_as<M, ModelA> ) {
-        state_pair.first.emplace( std::move( output_state ) );
+        state_a.emplace( std::move( output_state ) );
       } else {
-        state_pair.second.emplace( std::move( output_state ) );
+        state_b.emplace( std::move( output_state ) );
       }
 
-      if ( state_pair.first.has_value() and state_pair.second.has_value() ) {
-        // merge the states
-        merged_state.emplace( state_pair.first->merge( std::move( *state_pair.second ) ) );
-        state_pair.erase( output_state.id() );
+      if ( state_a.has_value() and state_b.has_value() ) {
+        // merge back the states
+        state_a->merge( std::move( *state_b ) );
+        merged_state.emplace( std::move( *state_a ) );
+        splitted_state_map_.erase( local_id );
       }
     }
 
@@ -468,6 +473,12 @@ void HybridComputeKernel<ModelA, ModelB>::execution_thread_func(
       // was this the last layer and stage served by this kernel?
       if ( is_last_step ) {
         // yes; we need to send it to the outgoing queue
+        {
+          // remove the contexts from the context map
+          std::unique_lock lock { context_mutex_ };
+          context_map_.erase( local_id );
+        }
+
         {
           std::lock_guard lock { outgoing_.mutex };
           outgoing_.queue.push( std::move( *merged_state ) );
@@ -530,7 +541,7 @@ void HybridComputeKernel<ModelA, ModelB>::bookkeeping_thread_func()
             break;
           }
           contexts_a.push_back( std::move( ctx ) );
-        } else if ( i < b_.concurrency.get( Stage::Attention ) ) {
+        } else if ( i < a_.concurrency.get( Stage::Attention ) + b_.concurrency.get( Stage::Attention ) ) {
           auto ctx = b_.context_manager.get_context( state.prompt_id( i ) );
           if ( not ctx ) {
             LOG( FATAL ) << "Cannot allocate context.";
