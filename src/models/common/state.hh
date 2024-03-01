@@ -44,7 +44,7 @@ private:
 
   struct __attribute__( ( packed ) ) PromptData
   {
-    bool active { true };
+    bool active { false };
 
     PromptID prompt_id {};
     uint32_t token {};
@@ -450,7 +450,6 @@ bool BatchedInferenceState<Config>::replenish_from( BatchedInferenceState& other
     }
 
     other.prompts_[other_idx] = {};
-    other.prompts_[other_idx].active = false;
     other_idx++;
   }
 
@@ -527,6 +526,19 @@ std::pair<BatchedInferenceState<Config>, BatchedInferenceState<Config>> BatchedI
 template<typename Config>
 void BatchedInferenceState<Config>::merge( BatchedInferenceState&& other )
 {
+  CHECK_GT( metadata_.batch_size + other.metadata_.batch_size, 0 ) << "No states to merge";
+
+  // merging into an empty state
+  if ( metadata_.batch_size == 0 ) {
+    *this = std::move( other );
+    return;
+  }
+
+  // merging an empty state
+  if ( other.metadata_.batch_size == 0 ) {
+    return;
+  }
+
   CHECK( metadata_.dtype == other.metadata_.dtype ) << "States with different data types";
   CHECK_EQ( metadata_.route_id, other.metadata_.route_id ) << "States with different route IDs";
   CHECK_EQ( metadata_.model_id, other.metadata_.model_id ) << "States with different model IDs";
