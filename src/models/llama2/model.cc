@@ -132,10 +132,13 @@ Llama2<Config, DType, LlamaOperations, Context>::Llama2( const std::filesystem::
                  reinterpret_cast<DType*>( layer_mmap.addr() ),
                  layer_size,
                  CopyType::HostToDevice );
-
-      LOG( INFO ) << "Loaded layer " << i << " (" << layer_size << " bytes).";
     }
+
+    LOG( INFO ) << "Loaded layer weights (" << settings_.start_layer_num << " to " << settings_.end_layer_num << ", "
+                << ( layer_size * settings_.n_layers_loaded() ) << " bytes).";
   }
+
+  LOG( INFO ) << "Model " << typeid( decltype( this ) ).name() << " instantiated.";
 }
 template<typename Config, typename DType, typename LlamaOperations, typename Context>
 void Llama2<Config, DType, LlamaOperations, Context>::check_batch(
