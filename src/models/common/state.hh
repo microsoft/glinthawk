@@ -96,6 +96,8 @@ public:
   BatchedInferenceState( BatchedInferenceState&& other ) = default;
   BatchedInferenceState& operator=( BatchedInferenceState&& other ) = default;
 
+  bool empty() const { return metadata_.batch_size == 0; }
+
   // metadata setters
   void set_id( const uint64_t id ) { metadata_.id = id; }
   void set_dtype( const DataType dtype ) { metadata_.dtype_ = dtype; }
@@ -475,6 +477,9 @@ std::pair<BatchedInferenceState<Config>, BatchedInferenceState<Config>> BatchedI
 {
   CHECK_LT( n, metadata_.batch_size ) << "n must be less than the batch size";
 
+  LOG( INFO ) << "Splitting state of size " << metadata_.batch_size << " into states of sizes " << n << " and "
+              << ( metadata_.batch_size - n ) << ".";
+
   const size_t size_a = n;
   const size_t size_b = metadata_.batch_size - n;
 
@@ -548,6 +553,8 @@ void BatchedInferenceState<Config>::merge( BatchedInferenceState&& other )
   CHECK_EQ( metadata_.has_queries, other.metadata_.has_queries ) << "States with different query states";
   CHECK_EQ( metadata_.has_kvs, other.metadata_.has_kvs ) << "States with different key-value states";
 
+  LOG( INFO ) << "Merging states of sizes " << metadata_.batch_size << " and " << other.metadata_.batch_size;
+
   BatchedInferenceState new_state( metadata_.batch_size + other.metadata_.batch_size,
                                    metadata_.dtype,
                                    metadata_.route_id,
@@ -592,12 +599,13 @@ template<typename Config>
 std::string BatchedInferenceState<Config>::debug_string( const bool prompt_details ) const
 {
   std::ostringstream oss;
-  oss << "BatchedInferenceState(" << "batch_size=" << metadata_.batch_size << ", " << "dtype=" << metadata_.dtype
-      << ", " << "route_id=" << metadata_.route_id << ", " << "model_id=" << metadata_.model_id << ", "
-      << "next_layer=" << metadata_.next_layer << ", " << "next_stage=" << metadata_.next_stage << ", "
-      << "has_activations=" << metadata_.has_activations << ", " << "activations.len=" << activations_.len() << ", "
-      << "has_queries=" << metadata_.has_queries << ", " << "queries.len=" << queries_.len() << ", "
-      << "has_kvs=" << metadata_.has_kvs << ", " << "kvs.len=" << kvs_.len() << ", " << "discarded_contexts=[ ";
+  oss << "BatchedInferenceState(" << "local_id=" << metadata_.id << ", " << "batch_size=" << metadata_.batch_size
+      << ", " << "dtype=" << metadata_.dtype << ", " << "route_id=" << metadata_.route_id << ", "
+      << "model_id=" << metadata_.model_id << ", " << "next_layer=" << metadata_.next_layer << ", "
+      << "next_stage=" << metadata_.next_stage << ", " << "has_activations=" << metadata_.has_activations << ", "
+      << "activations.len=" << activations_.len() << ", " << "has_queries=" << metadata_.has_queries << ", "
+      << "queries.len=" << queries_.len() << ", " << "has_kvs=" << metadata_.has_kvs << ", " << "kvs.len=" << kvs_.len()
+      << ", " << "discarded_contexts=[ ";
 
   for ( const auto& d : discarded_contexts_ ) {
     oss << " " << d.prompt_id.base58digest().substr( 0, 8 );
@@ -617,6 +625,8 @@ std::string BatchedInferenceState<Config>::debug_string( const bool prompt_detai
   } else {
     oss << "prompts.len=" << prompts_.size();
   }
+
+  oss << ")";
 
   return oss.str();
 }
