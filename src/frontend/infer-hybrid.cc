@@ -91,6 +91,8 @@ public:
     kernel_.event_fd().set_blocking( true );
 
     for ( size_t pos = 0; pos < ModelA::ConfigType::seq_len; pos++ ) {
+      DLOG( INFO ) << "Processing state: " << state_.debug_string( false );
+
       kernel_.push( move( state_ ) );
       kernel_.event_fd().read_event();
       kernel_.pop( state_ );

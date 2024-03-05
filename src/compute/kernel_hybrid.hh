@@ -14,6 +14,7 @@
 #include <queue>
 #include <thread>
 #include <tuple>
+#include <typeinfo>
 #include <vector>
 
 #include "models/common/state.hh"
@@ -64,7 +65,7 @@ PreallocatingContextManager<Model>::PreallocatingContextManager( const typename 
     free_contexts_.emplace_back( std::make_shared<typename Model::ContextType>( settings ) );
   }
 
-  LOG( INFO ) << "Preallocated " << settings.max_context_count << " contexts.";
+  DLOG( INFO ) << "Preallocated " << settings.max_context_count << " contexts.";
 }
 
 template<typename Model>
@@ -330,6 +331,8 @@ void HybridComputeKernel<ModelA, ModelB>::push( models::BatchedInferenceState<Co
   auto push_to_incoming = [this]( StateType&& state ) {
     state.set_id( current_local_state_id_++ );
 
+    DLOG( INFO ) << "Pushing state to incoming queue: " << state.debug_string( false );
+
     {
       std::lock_guard lock { incoming_.mutex };
       incoming_.queue.push( std::move( state ) );
@@ -369,6 +372,8 @@ void HybridComputeKernel<ModelA, ModelB>::push( models::BatchedInferenceState<Co
     push_to_incoming( std::move( state ) );
   } else if ( state.free_slots() < state.batch_size() ) {
     incomplete_state_ = std::move( state );
+  } else {
+    LOG( WARNING ) << "Empty state pushed to incoming queue: " << state.debug_string( false );
   }
 }
 
@@ -412,6 +417,9 @@ void HybridComputeKernel<ModelA, ModelB>::execution_thread_func(
       input_state = std::move( model_data.processing.top().state );
       model_data.processing.pop();
     }
+
+    DLOG( INFO ) << "Popped state from processing: " << input_state.debug_string( false ) << " (by "
+                << ( std::is_same_v<ModelA, M> ? "A" : "B" ) << ")";
 
     const auto local_id = input_state.id();
     const auto next_stage = input_state.next_stage();
@@ -479,6 +487,8 @@ void HybridComputeKernel<ModelA, ModelB>::execution_thread_func(
           context_map_.erase( local_id );
         }
 
+        DLOG( INFO ) << "Pushing state to outgoing queue: " << merged_state->debug_string( false );
+
         {
           std::lock_guard lock { outgoing_.mutex };
           outgoing_.queue.push( std::move( *merged_state ) );
@@ -487,6 +497,8 @@ void HybridComputeKernel<ModelA, ModelB>::execution_thread_func(
         outgoing_.cv.notify_one();
       } else {
         // no; we need to keep processing it
+        DLOG( INFO ) << "Pushing state back to incoming queue: " << merged_state->debug_string( false );
+
         {
           std::lock_guard lock { incoming_.mutex };
           incoming_.queue.push( std::move( *merged_state ) );
@@ -510,6 +522,8 @@ void HybridComputeKernel<ModelA, ModelB>::bookkeeping_thread_func()
 
       state = std::move( incoming_.queue.top().state );
       incoming_.queue.pop();
+
+      DLOG( INFO ) << "Popped state from incoming queue: " << state.debug_string( false );
     }
 
     // TODO(sadjad): check if this state is even valid for this kernel
