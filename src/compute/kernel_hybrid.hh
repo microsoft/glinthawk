@@ -471,8 +471,14 @@ void HybridComputeKernel<ModelA, ModelB>::execution_thread_func(
 
       if ( state_a.has_value() and state_b.has_value() ) {
         // merge back the states
-        state_a->merge( std::move( *state_b ) );
-        merged_state.emplace( std::move( *state_a ) );
+        if ( state_b->empty() ) {
+          merged_state.emplace( std::move( *state_a ) );
+        } else if ( state_a->empty() ) {
+          merged_state.emplace( std::move( *state_b ) );
+        } else {
+          state_a->merge( std::move( *state_b ) );
+          merged_state.emplace( std::move( *state_a ) );
+        }
         splitted_state_map_.erase( local_id );
       }
     }
@@ -494,7 +500,7 @@ void HybridComputeKernel<ModelA, ModelB>::execution_thread_func(
           outgoing_.queue.push( std::move( *merged_state ) );
         }
 
-        outgoing_.cv.notify_one();
+        event_fd_.write_event();
       } else {
         // no; we need to keep processing it
         DLOG( INFO ) << "Pushing state back to incoming queue: " << merged_state->debug_string( false );
@@ -603,12 +609,30 @@ void HybridComputeKernel<ModelA, ModelB>::bookkeeping_thread_func()
       b_.cv.notify_one();
     } else {
       if ( a_.concurrency.get( next_stage ) == state.batch_size() ) {
-        std::lock_guard lock { a_.mutex };
-        a_.processing.push( std::move( state ) );
+        DLOG( INFO ) << "Pushing state to A's processing queue: " << state.debug_string( false );
+
+        {
+          std::lock_guard lock { splitted_state_mutex_ };
+          splitted_state_map_[state.id()].second.emplace();
+        }
+
+        {
+          std::lock_guard lock { a_.mutex };
+          a_.processing.push( std::move( state ) );
+        }
         a_.cv.notify_one();
       } else if ( b_.concurrency.get( next_stage ) == state.batch_size() ) {
-        std::lock_guard lock { b_.mutex };
-        b_.processing.push( std::move( state ) );
+        DLOG( INFO ) << "Pushing state to B's processing queue: " << state.debug_string( false );
+
+        {
+          std::lock_guard lock { splitted_state_mutex_ };
+          splitted_state_map_[state.id()].first.emplace();
+        }
+
+        {
+          std::lock_guard lock { b_.mutex };
+          b_.processing.push( std::move( state ) );
+        }
         b_.cv.notify_one();
       } else {
         LOG( FATAL ) << "State batch size and concurrency settings do not match";
