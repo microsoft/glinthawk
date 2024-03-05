@@ -134,15 +134,11 @@ Llama2<Config, DType, LlamaOperations, Context>::Llama2( const std::filesystem::
       FileDescriptor layer_fd { CHECK_SYSCALL( "open", open( layer_path.c_str(), O_RDONLY ) ) };
       MMap_Region layer_mmap { nullptr, layer_read_size, PROT_READ, MAP_PRIVATE, layer_fd.fd_num(), 0 };
 
-      ops_.copy_table( reinterpret_cast<DType*>( reinterpret_cast<uint8_t*>( layers_buffer_.get() )
-                                                 + ( i - settings_.start_layer_num ) * layer_size ),
-                       reinterpret_cast<DType*>( layer_mmap.addr() ),
-                       layer_weights_[i].weight_offset( settings_ ),
-                       layer_weights_[i].read_offset(),
-                       layer_weights_[i].weight_size( settings_ ),
-                       CopyType::HostToDevice );
-
-      LOG( INFO ) << "Loaded layer " << i << " (" << layer_size << " bytes).";
+      ops_.copy( reinterpret_cast<DType*>( reinterpret_cast<uint8_t*>( layers_buffer_.get() )
+                                           + ( i - settings_.start_layer_num ) * layer_size ),
+                 reinterpret_cast<DType*>( layer_mmap.addr() ),
+                 layer_size,
+                 CopyType::HostToDevice );
     }
   } else if ( layer_size > 0 ) {
     LOG( WARNING ) << "Randomizing LAYERS...";
@@ -153,7 +149,12 @@ Llama2<Config, DType, LlamaOperations, Context>::Llama2( const std::filesystem::
                       10.0 / sqrt( Config::dim ) );
     ops_.copy(
       layers_buffer_.get(), layer_host.get(), layer_size * settings_.n_layers_loaded(), CopyType::HostToDevice );
+
+    LOG( INFO ) << "Loaded layer weights (" << settings_.start_layer_num << " to " << settings_.end_layer_num << ", "
+                << ( layer_size * settings_.n_layers_loaded() ) << " bytes).";
   }
+
+  LOG( INFO ) << "Model " << typeid( decltype( this ) ).name() << " instantiated.";
 }
 template<typename Config, typename DType, typename LlamaOperations, typename Context>
 void Llama2<Config, DType, LlamaOperations, Context>::check_batch(

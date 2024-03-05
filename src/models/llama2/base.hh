@@ -9,12 +9,13 @@
 #include <optional>
 #include <sstream>
 #include <string>
+#include <typeinfo>
 #include <unordered_map>
 #include <vector>
 
 #include "context.hh"
-#include "models/types.hh"
 #include "models/llama2/ops/concept.hh"
+#include "models/types.hh"
 #include "variants.hh"
 
 namespace glinthawk::models::llama2 {
@@ -370,7 +371,7 @@ Settings<T>::Settings( const std::filesystem::path& config_file,
   CHECK_LT( end_layer_num, T::n_layers ) << "End layer must be less than the number of layers.";
   CHECK_LE( start_layer_num, end_layer_num ) << "Start layer must be less than or equal to end layer.";
 
-  LOG( INFO ) << "Loaded settings and validated " << to_string();
+  LOG( INFO ) << "Instantiated settings for " << typeid( T ).name() << ": " << to_string();
 }
 
 template<typename T>
