@@ -84,6 +84,16 @@ public:
 
   void run()
   {
+    static const oof::color colors[] = {
+      oof::color { 255, 0, 0 },     oof::color { 0, 255, 0 },     oof::color { 0, 0, 255 },
+      oof::color { 255, 255, 0 },   oof::color { 255, 0, 255 },   oof::color { 0, 255, 255 },
+      oof::color { 128, 0, 0 },     oof::color { 0, 128, 0 },     oof::color { 0, 0, 128 },
+      oof::color { 128, 128, 0 },   oof::color { 128, 0, 128 },   oof::color { 0, 128, 128 },
+      oof::color { 128, 128, 128 }, oof::color { 192, 0, 0 },     oof::color { 0, 192, 0 },
+      oof::color { 0, 0, 192 },     oof::color { 192, 192, 0 },   oof::color { 192, 0, 192 },
+      oof::color { 0, 192, 192 },   oof::color { 192, 192, 192 },
+    };
+
     std::random_device rd;
     std::mt19937 gen { rd() };
     std::uniform_real_distribution<float> dis { 0.0, 1.0 };
@@ -91,24 +101,13 @@ public:
     kernel_.event_fd().set_blocking( true );
 
     for ( size_t pos = 0; pos < ModelA::ConfigType::seq_len; pos++ ) {
-      DLOG( INFO ) << "Processing state: " << state_.debug_string( false );
-
       kernel_.push( move( state_ ) );
-      kernel_.event_fd().read_event();
+      kernel_.event_fd().read_event(); // blocks until results are ready
       kernel_.pop( state_ );
 
-      if ( not temp_ ) {
-        // if temperature is 0, we expect all prompts in the batch to have the same output; the following checks this.
-        for ( size_t i = 0; i < state_.batch_size(); ++i ) {
-          if ( state_.token_pos( i ) < tokens_.size() ) {
-            CHECK_EQ( state_.token( i ), tokens_[state_.token_pos( i )] );
-          } else if ( state_.token_pos( i ) == tokens_.size() ) {
-            tokens_.push_back( state_.token( i ) );
-          } else {
-            LOG( FATAL ) << "Unexpected token pos: " << state_.token_pos( i ) << " vs " << tokens_.size();
-          }
-        }
+      CHECK( kernel_.pop( state_ ) == false );
 
+      if ( temp_ == 0 ) {
         // random chance to terminate a prompt early (otherwise they will all have the same length)
         for ( size_t i = 0; i < state_.batch_size(); ++i ) {
           if ( state_.token_pos( i ) >= 128 and dis( gen ) < 0.05 ) {
@@ -121,6 +120,8 @@ public:
           if ( state_.finished( i ) ) {
             state_.discard( i );
             any_finished = true;
+            cout << oof::fg_color( i == 0 ? oof::color { 255, 255, 255 } : colors[( i - 1 ) % sizeof( colors )] )
+                 << "<|" << oof::reset_formatting();
           }
         }
 
@@ -131,14 +132,22 @@ public:
         }
       }
 
-      cerr << vocabulary_.get_word( state_.token( 0 ) );
+      const auto token = state_.token( 0 );
+      cout << vocabulary_.get_word( token ) << flush;
+
+      for ( size_t i = 1; i < state_.batch_size(); i++ ) {
+        if ( token != state_.token( i ) ) {
+          cout << oof::fg_color( colors[( i - 1 ) % sizeof( colors )] ) << "["
+               << vocabulary_.get_word( state_.token( i ) ) << "]" << oof::reset_formatting();
+        }
+      }
     }
   }
 };
 
 void usage( const char* argv0 )
 {
-  cout << "Usage: " << argv0 << " <model_dir> <model_name> <tokenizer_path> <batch_size> <temperature>" << endl;
+  cerr << "Usage: " << argv0 << " <model_dir> <model_name> <tokenizer_path> <batch_size> <temperature>" << endl;
 }
 
 int main( int argc, char* argv[] )
