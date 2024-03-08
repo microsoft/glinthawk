@@ -476,30 +476,44 @@ std::pair<BatchedInferenceState<Config>, BatchedInferenceState<Config>> BatchedI
   const size_t n )
 {
   CHECK_LT( n, metadata_.batch_size ) << "n must be less than the batch size";
+  CHECK_GT( n, 0 ) << "n must be greater than 0";
 
-  LOG( INFO ) << "Splitting state of size " << metadata_.batch_size << " into states of sizes " << n << " and "
-              << ( metadata_.batch_size - n ) << ".";
+  DLOG( INFO ) << "Splitting state of size " << metadata_.batch_size << " into states of sizes " << n << " and "
+               << ( metadata_.batch_size - n ) << ".";
 
   const size_t size_a = n;
   const size_t size_b = metadata_.batch_size - n;
 
-  BatchedInferenceState<Config> state_a( size_a,
-                                         metadata_.dtype,
-                                         metadata_.route_id,
-                                         metadata_.model_id,
-                                         metadata_.has_activations,
-                                         metadata_.has_queries,
-                                         metadata_.has_kvs );
+  BatchedInferenceState<Config> state_a, state_b;
 
-  BatchedInferenceState<Config> state_b( size_b,
-                                         metadata_.dtype,
-                                         metadata_.route_id,
-                                         metadata_.model_id,
-                                         metadata_.has_activations,
-                                         metadata_.has_queries,
-                                         metadata_.has_kvs );
+  state_a.metadata_ = metadata_;
+  state_a.metadata_.batch_size = size_a;
+  state_a.prompts_.resize( size_a );
 
-  // XXX how about the discarded contexts?
+  state_b.metadata_ = metadata_;
+  state_b.metadata_.batch_size = size_b;
+  state_b.prompts_.resize( size_b );
+
+  if ( this->has_activations() ) {
+    state_a.allocate_activations();
+    state_b.allocate_activations();
+  }
+
+  if ( this->has_queries() ) {
+    state_a.allocate_queries();
+    state_b.allocate_queries();
+  }
+
+  if ( this->has_kvs() ) {
+    state_a.allocate_kvs();
+    state_b.allocate_kvs();
+  }
+
+  // moving all the discarded contexts to the first state
+  state_a.discarded_contexts_ = discarded_contexts_;
+  state_a.metadata_.discarded_contexts = metadata_.discarded_contexts;
+  state_b.discarded_contexts_.clear();
+  state_b.metadata_.discarded_contexts = 0;
 
   for ( size_t i = 0; i < size_a; i++ ) {
     state_a.prompts_[i] = prompts_[i];
@@ -531,7 +545,7 @@ std::pair<BatchedInferenceState<Config>, BatchedInferenceState<Config>> BatchedI
 template<typename Config>
 void BatchedInferenceState<Config>::merge( BatchedInferenceState&& other )
 {
-  CHECK_GT( metadata_.batch_size + other.metadata_.batch_size, 0 ) << "No states to merge";
+  CHECK_GT( metadata_.batch_size + other.metadata_.batch_size, 0 ) << "Merging two empty states";
 
   // merging into an empty state
   if ( metadata_.batch_size == 0 ) {
@@ -555,22 +569,25 @@ void BatchedInferenceState<Config>::merge( BatchedInferenceState&& other )
 
   LOG( INFO ) << "Merging states of sizes " << metadata_.batch_size << " and " << other.metadata_.batch_size;
 
-  BatchedInferenceState new_state( metadata_.batch_size + other.metadata_.batch_size,
-                                   metadata_.dtype,
-                                   metadata_.route_id,
-                                   metadata_.model_id,
-                                   metadata_.has_activations,
-                                   metadata_.has_queries,
-                                   metadata_.has_kvs );
+  BatchedInferenceState new_state;
+  new_state.metadata_ = metadata_;
+  new_state.metadata_.batch_size += other.metadata_.batch_size;
 
   // XXX how about the discarded contexts?
 
+  new_state.prompts_.resize( metadata_.batch_size + other.metadata_.batch_size );
+
   // copying prompt data
+  for ( size_t i = 0; i < metadata_.batch_size; i++ ) {
+    new_state.prompts_[i] = prompts_[i];
+  }
+
   for ( size_t i = 0; i < other.metadata_.batch_size; i++ ) {
-    prompts_[i + metadata_.batch_size] = other.prompts_[i];
+    new_state.prompts_[i + metadata_.batch_size] = other.prompts_[i];
   }
 
   if ( metadata_.has_activations ) {
+    new_state.allocate_activations();
     std::memcpy( new_state.activations_.data(), activations_.data(), metadata_.batch_size * activation_len() );
     std::memcpy( new_state.activations_.data() + metadata_.batch_size * activation_len(),
                  other.activations_.data(),
@@ -578,6 +595,7 @@ void BatchedInferenceState<Config>::merge( BatchedInferenceState&& other )
   }
 
   if ( metadata_.has_queries ) {
+    new_state.allocate_queries();
     std::memcpy( new_state.queries_.data(), queries_.data(), metadata_.batch_size * q_len() );
     std::memcpy( new_state.queries_.data() + metadata_.batch_size * q_len(),
                  other.queries_.data(),
@@ -585,6 +603,7 @@ void BatchedInferenceState<Config>::merge( BatchedInferenceState&& other )
   }
 
   if ( metadata_.has_kvs ) {
+    new_state.allocate_kvs();
     std::memcpy( new_state.kvs_.data(), kvs_.data(), metadata_.batch_size * kv_len() );
     std::memcpy( new_state.kvs_.data() + metadata_.batch_size * kv_len(),
                  other.kvs_.data(),
