@@ -55,7 +55,7 @@ public:
 
   void read_event()
   {
-    char buffer[8];
+    char buffer[8] = {};
     std::string_view sv( buffer, sizeof( buffer ) );
     read( sv );
 
