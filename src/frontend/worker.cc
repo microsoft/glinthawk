@@ -58,9 +58,9 @@ int main( int argc, char* argv[] )
 
 #define CREATE_AND_RUN_WORKER( MODEL_NAME, CLASS_NAME )                                                                \
   if ( model_name == MODEL_NAME ) {                                                                                    \
-    core::BatchedWorker<_GLINTHAWK_ARCH_NS_::CLASS_NAME<_GLINTHAWK_DTYPE_>> worker { listen_addr,                      \
-                                                                                     coordinator_addr,                 \
-                                                                                     model_path };                     \
+    core::BatchedWorker<_GLINTHAWK_ARCH_NS_::CLASS_NAME<_GLINTHAWK_DTYPE_>,                                            \
+                        compute::BatchedComputeKernel<_GLINTHAWK_ARCH_NS_::CLASS_NAME<_GLINTHAWK_DTYPE_>>>             \
+      worker { listen_addr, coordinator_addr, model_path };                                                            \
     worker.run();                                                                                                      \
   }
 
