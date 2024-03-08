@@ -65,7 +65,7 @@ PreallocatingContextManager<Model>::PreallocatingContextManager( const typename 
     free_contexts_.emplace_back( std::make_shared<typename Model::ContextType>( settings ) );
   }
 
-  DLOG( INFO ) << "Preallocated " << settings.max_context_count << " contexts.";
+  LOG( INFO ) << "Preallocated " << settings.max_context_count << " contexts (" << typeid( *this ).name() << ")";
 }
 
 template<typename Model>
@@ -419,14 +419,15 @@ void HybridComputeKernel<ModelA, ModelB>::execution_thread_func(
     }
 
     DLOG( INFO ) << "Popped state from processing: " << input_state.debug_string( false ) << " (by "
-                << ( std::is_same_v<ModelA, M> ? "A" : "B" ) << ")";
+                 << ( std::is_same_v<ModelA, M> ? "A" : "B" ) << ")";
 
     const auto local_id = input_state.id();
     const auto next_stage = input_state.next_stage();
     const auto next_layer = input_state.next_layer();
     const auto is_last_step
       = ( next_stage == Stage::Classification )
-        or ( next_stage == Stage::PostAttention and next_layer == model_data.model->settings().end_layer_num );
+        or ( next_stage == Stage::PostAttention and next_layer == model_data.model->settings().end_layer_num
+             and next_layer < ConfigType::n_layers - 1 );
 
     // run the corresponding forward function
     switch ( next_stage ) {
@@ -459,9 +460,7 @@ void HybridComputeKernel<ModelA, ModelB>::execution_thread_func(
     {
       std::lock_guard lock { splitted_state_mutex_ };
 
-      auto& entry = splitted_state_map_[local_id];
-      auto& state_a = entry.first;
-      auto& state_b = entry.second;
+      auto& [state_a, state_b] = splitted_state_map_[local_id];
 
       if constexpr ( std::same_as<M, ModelA> ) {
         state_a.emplace( std::move( output_state ) );
@@ -599,13 +598,12 @@ void HybridComputeKernel<ModelA, ModelB>::bookkeeping_thread_func()
         std::lock_guard lock { a_.mutex };
         a_.processing.push( std::move( state_a ) );
       }
+      a_.cv.notify_one();
 
       {
         std::lock_guard lock { b_.mutex };
         b_.processing.push( std::move( state_b ) );
       }
-
-      a_.cv.notify_one();
       b_.cv.notify_one();
     } else {
       if ( a_.concurrency.get( next_stage ) == state.batch_size() ) {
