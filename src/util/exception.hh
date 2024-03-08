@@ -60,6 +60,7 @@ inline int CHECK_SYSCALL( const char* s_attempt, const int return_value )
   }
 
   CHECK_ERR( return_value ) << s_attempt;
+  return return_value; // unreachable, but gcc won't shut up
 }
 
 inline int CHECK_SYSCALL( const std::string& s_attempt, const int return_value )
