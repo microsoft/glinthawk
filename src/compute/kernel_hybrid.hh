@@ -177,10 +177,8 @@ public:
   };
 
 public:
-  HybridComputeKernel( std::unique_ptr<ModelA>&& model_a,
-                       std::unique_ptr<ModelB>&& model_b,
-                       const Concurrency& concurrency_a,
-                       const Concurrency& concurrency_b );
+  template<typename... Args>
+  HybridComputeKernel( const Concurrency& concurrency_a, const Concurrency& concurrency_b, Args&&... args );
 
   ~HybridComputeKernel();
 
@@ -293,12 +291,12 @@ HybridComputeKernel<ModelA, ModelB>::ModelData<M>::ModelData( std::unique_ptr<M>
 }
 
 template<typename ModelA, typename ModelB>
-HybridComputeKernel<ModelA, ModelB>::HybridComputeKernel( std::unique_ptr<ModelA>&& model_a,
-                                                          std::unique_ptr<ModelB>&& model_b,
-                                                          const Concurrency& concurrency_a,
-                                                          const Concurrency& concurrency_b )
-  : a_( std::move( model_a ), concurrency_a )
-  , b_( std::move( model_b ), concurrency_b )
+template<typename... Args>
+HybridComputeKernel<ModelA, ModelB>::HybridComputeKernel( const Concurrency& concurrency_a,
+                                                          const Concurrency& concurrency_b,
+                                                          Args&&... args )
+  : a_( std::make_unique<ModelA>( std::forward<Args>( args )... ), concurrency_a )
+  , b_( std::make_unique<ModelB>( std::forward<Args>( args )... ), concurrency_b )
 {
   // check the concurrency settings to be permissible
   CHECK_EQ( a_.concurrency.get( Stage::PreAttention ) + b_.concurrency.get( Stage::PreAttention ),
@@ -409,6 +407,10 @@ void HybridComputeKernel<ModelA, ModelB>::execution_thread_func(
   while ( running_ ) {
     StateType input_state {};
     StateType output_state {};
+
+    LOG( WARNING ) << "Current status: " << "incoming_size=" << incoming_.queue.size() << ", "
+                   << "waiting_size=" << waiting_.queue.size() << ", " << "a_processing_size=" << a_.processing.size()
+                   << ", " << "b_processing_size=" << b_.processing.size();
 
     // get the next state to process
     {
