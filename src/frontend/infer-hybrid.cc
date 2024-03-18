@@ -67,10 +67,13 @@ public:
                   const float temp )
     : batch_size_( batch_size )
     , temp_( temp )
-    , kernel_( make_unique<ModelA>( model_path, 0, std::numeric_limits<uint32_t>::max(), batch_size, batch_size ),
-               make_unique<ModelB>( model_path, 0, std::numeric_limits<uint32_t>::max(), batch_size, batch_size ),
-               { batch_size, 0, batch_size, batch_size },
-               { 0, batch_size, 0, 0 } )
+    , kernel_( { batch_size, 0, batch_size, batch_size },
+               { 0, batch_size, 0, 0 },
+               model_path,
+               0,                                    /* start layer */
+               std::numeric_limits<uint32_t>::max(), /* end layer */
+               batch_size,
+               64 /* max context count */ )
     , vocabulary_( tokenizer_path )
     , state_( batch_size, DataType::_GLINTHAWK_DTYPE_NAME_, {}, {}, false, false, false )
   {
