@@ -147,8 +147,9 @@ private:
   }
 
 public:
-  BatchedComputeKernel( std::unique_ptr<Model>&& model, const uint64_t target_conc_size )
-    : model_( std::move( model ) )
+  template<typename... Args>
+  BatchedComputeKernel( const uint64_t target_conc_size, Args&&... args )
+    : model_( std::make_unique<Model>( std::forward<Args>( args )... ) )
     , context_manager_( std::make_unique<ContextManager<Model>>( model_->settings() ) )
     , target_conc_size_( target_conc_size )
     , released_( 0 )
