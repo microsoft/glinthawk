@@ -27,13 +27,16 @@
 #include "util/eventloop.hh"
 #include "util/timerfd.hh"
 
+#include "models/llama2/variants.hh"
+
 #include "glinthawk.pb.h"
 
 #include "concurrentqueue/blockingconcurrentqueue.h"
 
 namespace glinthawk::core {
 
-template<typename Model, typename ComputeKernel>
+template<typename ModelConfig, typename ComputeKernel>
+requires models::llama2::ModelConfig<ModelConfig>
 class BatchedWorker
 {
 private:
@@ -41,7 +44,7 @@ private:
   {
   public:
     net::Address address;
-    std::vector<models::BatchedInferenceState<typename Model::ConfigType>> outgoing_states {};
+    std::vector<models::BatchedInferenceState<ModelConfig>> outgoing_states {};
     core::MessageHandler<net::TCPSession> message_handler;
 
     Peer( const net::Address& addr, net::TCPSocket&& socket )
@@ -52,7 +55,7 @@ private:
   };
 
 private:
-  using BatchedState = glinthawk::models::BatchedInferenceState<typename Model::ConfigType>;
+  using BatchedState = glinthawk::models::BatchedInferenceState<ModelConfig>;
   using RouteMap = std::map<std::pair<uint32_t, typename models::InferenceStage>, net::Address>;
 
   std::atomic_bool running_ { true };
@@ -166,8 +169,8 @@ DataType get_datatype()
 
 }
 
-template<typename Model, typename ComputeKernel>
-void BatchedWorker<Model, ComputeKernel>::setup_stats_handler()
+template<typename ModelConfig, typename ComputeKernel>
+void BatchedWorker<ModelConfig, ComputeKernel>::setup_stats_handler()
 {
   /* let's see if telegraph is listening */
   std::error_code err;
@@ -184,18 +187,18 @@ void BatchedWorker<Model, ComputeKernel>::setup_stats_handler()
     "Stats timer",
     Direction::In,
     stats_timer_,
-    std::bind( &BatchedWorker<Model, ComputeKernel>::handle_stats, this ),
+    std::bind( &BatchedWorker<ModelConfig, ComputeKernel>::handle_stats, this ),
     [] { return true; },
     [] { LOG( ERROR ) << "Stats timer stopped."; } );
 }
 
-template<typename Model, typename ComputeKernel>
-void BatchedWorker<Model, ComputeKernel>::setup_peer( std::map<net::Address, Peer>::iterator peer_it )
+template<typename ModelConfig, typename ComputeKernel>
+void BatchedWorker<ModelConfig, ComputeKernel>::setup_peer( std::map<net::Address, Peer>::iterator peer_it )
 {
   peer_it->second.message_handler.install_rules(
     this->event_loop_,
     this->rule_categories_,
-    std::bind( &BatchedWorker<Model, ComputeKernel>::handle_peer_message, this, std::placeholders::_1 ),
+    std::bind( &BatchedWorker<ModelConfig, ComputeKernel>::handle_peer_message, this, std::placeholders::_1 ),
     [] { LOG( INFO ) << "Connection to peer closed."; } );
 
   event_loop_.add_rule(
@@ -212,8 +215,8 @@ void BatchedWorker<Model, ComputeKernel>::setup_peer( std::map<net::Address, Pee
     [peer_it] { return not peer_it->second.outgoing_states.empty(); } );
 }
 
-template<typename Model, typename ComputeKernel>
-void BatchedWorker<Model, ComputeKernel>::setup_blobstore( const std::string& blobstore_uri )
+template<typename ModelConfig, typename ComputeKernel>
+void BatchedWorker<ModelConfig, ComputeKernel>::setup_blobstore( const std::string& blobstore_uri )
 {
   auto blobstore = storage::BlobStore::create( blobstore_uri );
   CHECK( blobstore ) << "Could not create blobstore: " << blobstore_uri;
@@ -224,16 +227,16 @@ void BatchedWorker<Model, ComputeKernel>::setup_blobstore( const std::string& bl
   LOG( INFO ) << "Blobstore setup complete: " << blobstore_->to_string();
 }
 
-template<typename Model, typename ComputeKernel>
-void BatchedWorker<Model, ComputeKernel>::setup_compute_kernel( const std::filesystem::path& model_root,
-                                                                const int start_layer,
-                                                                const int end_layer,
-                                                                const int concurrency_size_pre_attention,
-                                                                const int concurrency_size_attention,
-                                                                const int concurrency_size_post_attention,
-                                                                const int concurrency_size_classification,
-                                                                const int max_context_count,
-                                                                const bool randomize )
+template<typename ModelConfig, typename ComputeKernel>
+void BatchedWorker<ModelConfig, ComputeKernel>::setup_compute_kernel( const std::filesystem::path& model_root,
+                                                                      const int start_layer,
+                                                                      const int end_layer,
+                                                                      const int concurrency_size_pre_attention,
+                                                                      const int concurrency_size_attention,
+                                                                      const int concurrency_size_post_attention,
+                                                                      const int concurrency_size_classification,
+                                                                      const int max_context_count,
+                                                                      const bool randomize )
 {
   CHECK_LE( start_layer, end_layer ) << "start_layer must be less than or equal to end_layer";
 
@@ -243,20 +246,19 @@ void BatchedWorker<Model, ComputeKernel>::setup_compute_kernel( const std::files
                                                concurrency_size_classification } );
 
   compute_kernel_ = std::make_unique<ComputeKernel>(
-    std::make_unique<Model>( model_root, start_layer, end_layer, max_concurrency_size, max_context_count, randomize ),
-    max_concurrency_size );
+    max_concurrency_size, model_root, start_layer, end_layer, max_concurrency_size, max_context_count, randomize );
 
   event_loop_.add_rule( "Compute Kernel",
                         Direction::In,
                         compute_kernel_->event_fd(),
-                        std::bind( &BatchedWorker<Model, ComputeKernel>::handle_compute_kernel_event, this ),
+                        std::bind( &BatchedWorker<ModelConfig, ComputeKernel>::handle_compute_kernel_event, this ),
                         [this] { return this->compute_kernel_ != nullptr; } );
 }
 
-template<typename Model, typename ComputeKernel>
-BatchedWorker<Model, ComputeKernel>::BatchedWorker( const net::Address& worker_address,
-                                                    const net::Address& coordinator_address,
-                                                    const std::filesystem::path& model_root )
+template<typename ModelConfig, typename ComputeKernel>
+BatchedWorker<ModelConfig, ComputeKernel>::BatchedWorker( const net::Address& worker_address,
+                                                          const net::Address& coordinator_address,
+                                                          const std::filesystem::path& model_root )
   : listen_address_( worker_address )
   , listen_socket_( [this]() -> net::TCPSocket {
     net::TCPSocket socket;
@@ -284,7 +286,7 @@ BatchedWorker<Model, ComputeKernel>::BatchedWorker( const net::Address& worker_a
   coordinator_.message_handler.install_rules(
     this->event_loop_,
     this->rule_categories_,
-    std::bind( &BatchedWorker<Model, ComputeKernel>::handle_coordinator_message, this, std::placeholders::_1 ),
+    std::bind( &BatchedWorker<ModelConfig, ComputeKernel>::handle_coordinator_message, this, std::placeholders::_1 ),
     [] { LOG( FATAL ) << "Connection to coordinator closed."; },
     [] { LOG( FATAL ) << "Exception in coordinator message handler."; } );
 
@@ -292,7 +294,7 @@ BatchedWorker<Model, ComputeKernel>::BatchedWorker( const net::Address& worker_a
     "Worker listen",
     Direction::In,
     listen_socket_,
-    std::bind( &BatchedWorker<Model, ComputeKernel>::listen_callback, this ),
+    std::bind( &BatchedWorker<ModelConfig, ComputeKernel>::listen_callback, this ),
     [] { return true; },
     [] { LOG( ERROR ) << "Worker stopped listening."; } );
 
@@ -310,8 +312,8 @@ BatchedWorker<Model, ComputeKernel>::BatchedWorker( const net::Address& worker_a
   setup_stats_handler();
 }
 
-template<typename Model, typename ComputeKernel>
-void BatchedWorker<Model, ComputeKernel>::listen_callback()
+template<typename ModelConfig, typename ComputeKernel>
+void BatchedWorker<ModelConfig, ComputeKernel>::listen_callback()
 {
   net::TCPSocket socket = listen_socket_.accept();
   auto addr = socket.peer_address();
@@ -324,8 +326,8 @@ void BatchedWorker<Model, ComputeKernel>::listen_callback()
   setup_peer( peer_it );
 }
 
-template<typename Model, typename ComputeKernel>
-bool BatchedWorker<Model, ComputeKernel>::handle_coordinator_message( core::Message&& msg )
+template<typename ModelConfig, typename ComputeKernel>
+bool BatchedWorker<ModelConfig, ComputeKernel>::handle_coordinator_message( core::Message&& msg )
 {
   LOG( INFO ) << "(Coordinator) Incoming message: " << msg.info();
 
@@ -364,7 +366,7 @@ bool BatchedWorker<Model, ComputeKernel>::handle_coordinator_message( core::Mess
 
     case Message::OpCode::BatchedInferenceState: {
       // got an inference state from the coordinator
-      auto state = models::BatchedInferenceState<typename Model::ConfigType>( msg.payload() );
+      auto state = models::BatchedInferenceState<ModelConfig>( msg.payload() );
       LOG( ERROR ) << "Got inference state from coordinator; this behavior is not supported.";
       break;
     }
@@ -422,7 +424,7 @@ bool BatchedWorker<Model, ComputeKernel>::handle_coordinator_message( core::Mess
       }
 
       RouteMap dummy_route = it->second;
-      std::vector<models::BatchedInferenceState<typename Model::ConfigType>> states {};
+      std::vector<models::BatchedInferenceState<ModelConfig>> states {};
 
       // prompt id is sha256( current_time and dummy_prompt_current_id_ )
       auto generate_next_prompt_id = [this]() -> PromptID {
@@ -449,8 +451,9 @@ bool BatchedWorker<Model, ComputeKernel>::handle_coordinator_message( core::Mess
       const uint32_t batch_count = ( prompt_count + ( batch_size - 1 ) ) / batch_size;
 
       for ( size_t i = 0; i < batch_count; i++ ) {
-        models::BatchedInferenceState<typename Model::ConfigType> state {
-          batch_size, get_datatype<typename Model::ModelDataType>(), RouteID {}, ModelID {}, false, false, false
+        // FIXME hardcoded float16
+        models::BatchedInferenceState<ModelConfig> state {
+          batch_size, DataType::Float16, RouteID {}, ModelID {}, false, false, false
         };
 
         for ( size_t j = 0; j < batch_size; j++ ) {
@@ -469,7 +472,7 @@ bool BatchedWorker<Model, ComputeKernel>::handle_coordinator_message( core::Mess
       // also run the completion commiting thread
       if ( not completion_commit_thread_.joinable() ) {
         completion_commit_thread_
-          = std::thread( std::bind( &BatchedWorker<Model, ComputeKernel>::completion_commit_thread_func, this ) );
+          = std::thread( std::bind( &BatchedWorker<ModelConfig, ComputeKernel>::completion_commit_thread_func, this ) );
       }
 
       break;
@@ -503,14 +506,14 @@ bool BatchedWorker<Model, ComputeKernel>::handle_coordinator_message( core::Mess
 
       // make sure the prompt preparation thread is running
       if ( not prompt_preparation_thread_.joinable() ) {
-        prompt_preparation_thread_
-          = std::thread( std::bind( &BatchedWorker<Model, ComputeKernel>::prompt_preparation_thread_func, this ) );
+        prompt_preparation_thread_ = std::thread(
+          std::bind( &BatchedWorker<ModelConfig, ComputeKernel>::prompt_preparation_thread_func, this ) );
       }
 
       // also run the completion commiting thread
       if ( not completion_commit_thread_.joinable() ) {
         completion_commit_thread_
-          = std::thread( std::bind( &BatchedWorker<Model, ComputeKernel>::completion_commit_thread_func, this ) );
+          = std::thread( std::bind( &BatchedWorker<ModelConfig, ComputeKernel>::completion_commit_thread_func, this ) );
       }
 
       break;
@@ -525,12 +528,12 @@ bool BatchedWorker<Model, ComputeKernel>::handle_coordinator_message( core::Mess
   return true;
 }
 
-template<typename Model, typename ComputeKernel>
-void BatchedWorker<Model, ComputeKernel>::handle_compute_kernel_event()
+template<typename ModelConfig, typename ComputeKernel>
+void BatchedWorker<ModelConfig, ComputeKernel>::handle_compute_kernel_event()
 {
   this->compute_kernel_->event_fd().read_event();
 
-  models::BatchedInferenceState<typename Model::ConfigType> state;
+  models::BatchedInferenceState<ModelConfig> state;
 
   while ( this->compute_kernel_->pop( state ) ) {
     __stats__.increment<Counters::StatesProcessed>( state.batch_size() );
@@ -555,8 +558,8 @@ void BatchedWorker<Model, ComputeKernel>::handle_compute_kernel_event()
   }
 }
 
-template<typename Model, typename ComputeKernel>
-bool BatchedWorker<Model, ComputeKernel>::handle_peer_message( core::Message&& msg )
+template<typename ModelConfig, typename ComputeKernel>
+bool BatchedWorker<ModelConfig, ComputeKernel>::handle_peer_message( core::Message&& msg )
 {
   DLOG( INFO ) << "(Peer) Incoming message: " << msg.info();
 
@@ -603,8 +606,8 @@ bool BatchedWorker<Model, ComputeKernel>::handle_peer_message( core::Message&& m
   return true;
 }
 
-template<typename Model, typename ComputeKernel>
-void BatchedWorker<Model, ComputeKernel>::handle_stats()
+template<typename ModelConfig, typename ComputeKernel>
+void BatchedWorker<ModelConfig, ComputeKernel>::handle_stats()
 {
   stats_timer_.read_event();
   if ( telegraf_logger_ != nullptr ) {
@@ -619,24 +622,24 @@ void BatchedWorker<Model, ComputeKernel>::handle_stats()
   __stats__.zero_out();
 }
 
-template<typename Model, typename ComputeKernel>
-void BatchedWorker<Model, ComputeKernel>::run()
+template<typename ModelConfig, typename ComputeKernel>
+void BatchedWorker<ModelConfig, ComputeKernel>::run()
 {
   while ( event_loop_.wait_next_event( -1 ) != EventLoop::Result::Exit ) {}
 }
 
-template<typename Model, typename ComputeKernel>
-void BatchedWorker<Model, ComputeKernel>::prompt_preparation_thread_func()
+template<typename ModelConfig, typename ComputeKernel>
+void BatchedWorker<ModelConfig, ComputeKernel>::prompt_preparation_thread_func()
 {
 }
 
-template<typename Model, typename ComputeKernel>
-void BatchedWorker<Model, ComputeKernel>::completion_commit_thread_func()
+template<typename ModelConfig, typename ComputeKernel>
+void BatchedWorker<ModelConfig, ComputeKernel>::completion_commit_thread_func()
 {
 }
 
-template<typename Model, typename ComputeKernel>
-BatchedWorker<Model, ComputeKernel>::~BatchedWorker()
+template<typename ModelConfig, typename ComputeKernel>
+BatchedWorker<ModelConfig, ComputeKernel>::~BatchedWorker()
 {
   LOG( INFO ) << "BatchedWorker shutting down.";
   running_ = false;
