@@ -632,7 +632,7 @@ std::string BatchedInferenceState<Config>::debug_string( const bool prompt_detai
 
   oss << "], ";
 
-  if ( prompt_details ) {
+  if ( not prompt_details ) {
     oss << "prompts=[";
 
     for ( const auto& p : prompts_ ) {
