@@ -23,6 +23,8 @@
 #include "util/eventfd.hh"
 #include "util/util.hh"
 
+#include "common.hh"
+
 namespace glinthawk::compute {
 
 namespace {
@@ -159,6 +161,8 @@ public:
   using ConfigType = typename ModelA::ConfigType;
   using ContextPtrA = std::shared_ptr<typename ModelA::ContextType>;
   using ContextPtrB = std::shared_ptr<typename ModelB::ContextType>;
+
+  static constexpr KernelType Type = KernelType::Hybrid;
 
   class Concurrency
   {
@@ -326,14 +330,14 @@ HybridComputeKernel<ModelA, ModelB>::~HybridComputeKernel()
 template<typename ModelA, typename ModelB>
 void HybridComputeKernel<ModelA, ModelB>::push( models::BatchedInferenceState<ConfigType>&& state )
 {
-  auto push_to_incoming = [this]( StateType&& state ) {
-    state.set_id( current_local_state_id_++ );
+  auto push_to_incoming = [this]( StateType&& s ) {
+    s.set_id( current_local_state_id_++ );
 
-    DLOG( INFO ) << "Pushing state to incoming queue: " << state.debug_string( false );
+    DLOG( INFO ) << "Pushing state to incoming queue: " << s.debug_string( false );
 
     {
       std::lock_guard lock { incoming_.mutex };
-      incoming_.queue.push( std::move( state ) );
+      incoming_.queue.push( std::move( s ) );
     }
 
     incoming_.cv.notify_one();
