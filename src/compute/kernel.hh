@@ -17,6 +17,8 @@
 #include "prompt/prompt.hh"
 #include "util/eventfd.hh"
 
+#include "common.hh"
+
 namespace glinthawk::compute {
 
 namespace {
@@ -64,6 +66,8 @@ public:
   using ModelConfig = typename Model::ConfigType;
   using BatchedState = glinthawk::models::BatchedInferenceState<ModelConfig>;
   using ContextPtr = std::shared_ptr<typename Model::ContextType>;
+
+  static constexpr KernelType Type = KernelType::Batched;
 
 private:
   std::unique_ptr<Model> model_;

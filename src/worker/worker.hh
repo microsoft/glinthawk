@@ -11,6 +11,7 @@
 #include <thread>
 
 #include "compute/kernel.hh"
+#include "compute/kernel_hybrid.hh"
 #include "message/handler.hh"
 #include "message/message.hh"
 #include "message/util.hh"
@@ -35,8 +36,31 @@
 
 namespace glinthawk::core {
 
+namespace {
+
+// XXX(sadjad): this is not ideal. We should unify the way we describe the datatypes across the codebase.
+template<typename DType>
+DataType get_datatype()
+{
+  if constexpr ( std::is_same_v<DType, float> ) {
+    return DataType::Float32;
+  }
+#if defined( TARGET_PLATFORM_AMD64 )
+  else if constexpr ( std::is_same_v<DType, _Float16> ) {
+    return DataType::Float16;
+  }
+#elif defined( TARGET_PLATFORM_CUDA )
+  else if constexpr ( std::is_same_v<DType, __half> ) {
+    return DataType::Float16;
+  }
+#endif
+}
+
+} // anonymous namespace
+
 template<typename ModelConfig, typename ComputeKernel>
 requires models::llama2::ModelConfig<ModelConfig>
+         && compute::KernelConcept<ComputeKernel, models::BatchedInferenceState<ModelConfig>>
 class BatchedWorker
 {
 private:
@@ -106,13 +130,13 @@ private:
   void setup_peer( std::map<net::Address, Peer>::iterator peer_it );
   void setup_blobstore( const std::string& blobstore_uri );
   void setup_compute_kernel( const std::filesystem::path& model_root,
-                             const int start_layer,
-                             const int end_layer,
-                             const int concurrency_size_pre_attention,
-                             const int concurrency_size_attention,
-                             const int concurrency_size_post_attention,
-                             const int concurrency_size_classification,
-                             const int max_context_count,
+                             const uint32_t start_layer,
+                             const uint32_t end_layer,
+                             const uint32_t concurrency_size_pre_attention,
+                             const uint32_t concurrency_size_attention,
+                             const uint32_t concurrency_size_post_attention,
+                             const uint32_t concurrency_size_classification,
+                             const uint32_t max_context_count,
                              const bool randomize );
   void setup_stats_handler();
 
@@ -147,27 +171,6 @@ public:
 
   void run();
 };
-
-namespace {
-
-template<typename DType>
-DataType get_datatype()
-{
-  if constexpr ( std::is_same_v<DType, float> ) {
-    return DataType::Float32;
-  }
-#if defined( TARGET_PLATFORM_AMD64 )
-  else if constexpr ( std::is_same_v<DType, _Float16> ) {
-    return DataType::Float16;
-  }
-#elif defined( TARGET_PLATFORM_CUDA )
-  else if constexpr ( std::is_same_v<DType, __half> ) {
-    return DataType::Float16;
-  }
-#endif
-}
-
-}
 
 template<typename ModelConfig, typename ComputeKernel>
 void BatchedWorker<ModelConfig, ComputeKernel>::setup_stats_handler()
@@ -229,13 +232,13 @@ void BatchedWorker<ModelConfig, ComputeKernel>::setup_blobstore( const std::stri
 
 template<typename ModelConfig, typename ComputeKernel>
 void BatchedWorker<ModelConfig, ComputeKernel>::setup_compute_kernel( const std::filesystem::path& model_root,
-                                                                      const int start_layer,
-                                                                      const int end_layer,
-                                                                      const int concurrency_size_pre_attention,
-                                                                      const int concurrency_size_attention,
-                                                                      const int concurrency_size_post_attention,
-                                                                      const int concurrency_size_classification,
-                                                                      const int max_context_count,
+                                                                      const uint32_t start_layer,
+                                                                      const uint32_t end_layer,
+                                                                      const uint32_t concurrency_size_pre_attention,
+                                                                      const uint32_t concurrency_size_attention,
+                                                                      const uint32_t concurrency_size_post_attention,
+                                                                      const uint32_t concurrency_size_classification,
+                                                                      const uint32_t max_context_count,
                                                                       const bool randomize )
 {
   CHECK_LE( start_layer, end_layer ) << "start_layer must be less than or equal to end_layer";
@@ -245,8 +248,23 @@ void BatchedWorker<ModelConfig, ComputeKernel>::setup_compute_kernel( const std:
                                                concurrency_size_post_attention,
                                                concurrency_size_classification } );
 
-  compute_kernel_ = std::make_unique<ComputeKernel>(
-    max_concurrency_size, model_root, start_layer, end_layer, max_concurrency_size, max_context_count, randomize );
+  if constexpr ( ComputeKernel::Type == compute::KernelType::Batched ) {
+    compute_kernel_ = std::make_unique<ComputeKernel>(
+      max_concurrency_size, model_root, start_layer, end_layer, max_concurrency_size, max_context_count, randomize );
+  } else if constexpr ( ComputeKernel::Type == compute::KernelType::Hybrid ) {
+    compute_kernel_ = std::make_unique<ComputeKernel>(
+      typename ComputeKernel::Concurrency {
+        concurrency_size_pre_attention, 0, concurrency_size_post_attention, concurrency_size_classification },
+      typename ComputeKernel::Concurrency { 0, concurrency_size_attention, 0, 0 },
+      model_root,
+      start_layer,
+      end_layer,
+      max_concurrency_size,
+      max_context_count,
+      randomize );
+  } else {
+    LOG( FATAL ) << "Invalid ComputeKernel type.";
+  }
 
   event_loop_.add_rule( "Compute Kernel",
                         Direction::In,
