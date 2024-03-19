@@ -1,13 +1,8 @@
 import settings
 
-import sys
-import enum
-import click
 import socket
 import asyncio
 import logging
-import datetime
-import itertools
 
 from enum import Enum
 from rich.logging import RichHandler
@@ -111,7 +106,6 @@ class Coordinator:
     async def message_processor(self):
         while True:
             worker, message = await self.incoming_messages.get()
-            # self.logger.info(f'Received "{message!r}" from {worker.id}.')
 
             if message.opcode == Message.OpCode.Hey:
                 proto = protobuf.Hey()
@@ -124,16 +118,13 @@ class Coordinator:
                     worker.state = Worker.State.Disconnected
                     self.push_message(worker, Message.OpCode.Bye, b"")
                     self.logger.warning(f"Dropped the connection to {worker.id}.")
+                    # TODO(sadjad): remove the worker from the list
                     continue
 
                 if worker.model_slice_start[0] == 0 and worker.model_slice_start[1] == Stage.PreAttention:
                     self.first_worker = worker
                 elif worker.model_slice_start[1] == Stage.Classification:
                     self.classification_worker = worker
-
-                self.logger.info(
-                    f"Worker {worker.id} is at {proto.ip}:{worker.port} (platform={Platform.Name(worker.platform)})."
-                )
 
                 # Set worker concurrency params
                 max_concurrency_size_pre = 0
@@ -156,6 +147,11 @@ class Coordinator:
                         max_concurrency_size_pre = self.concurrency_size_pre
                         max_concurrency_size_post = self.concurrency_size_post
 
+                worker.concurrency_size_pre = max_concurrency_size_pre
+                worker.concurrency_size_att = max_concurrency_size_att
+                worker.concurrency_size_post = max_concurrency_size_post
+                worker.concurrency_size_cls = max_concurrency_size_cls
+
                 self.push_message(
                     worker,
                     Message.OpCode.InitializeWorker,
@@ -163,14 +159,18 @@ class Coordinator:
                         model_name=self.model.name,
                         start_layer=worker.model_slice_start[0],
                         end_layer=worker.model_slice_end[0],
-                        concurrency_pre_att_size=max_concurrency_size_pre,
-                        concurrency_att_size=max_concurrency_size_att,
-                        concurrency_post_att_size=max_concurrency_size_post,
-                        concurrency_cls_size=max_concurrency_size_cls,
+                        concurrency_pre_att_size=worker.concurrency_size_pre,
+                        concurrency_att_size=worker.concurrency_size_att,
+                        concurrency_post_att_size=worker.concurrency_size_post,
+                        concurrency_cls_size=worker.concurrency_size_cls,
                         max_context_count=context_count,
                         randomize=False,
                         blobstore_uri=settings.GLINTHAWK_PROMPT_BLOBSTORE,
                     ),
+                )
+
+                self.logger.info(
+                    f"Worker {worker.id} is at {proto.ip}:{worker.port} [{worker}]."
                 )
 
                 if (
