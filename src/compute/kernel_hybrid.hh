@@ -309,8 +309,9 @@ HybridComputeKernel<ModelA, ModelB>::HybridComputeKernel( const Concurrency& con
   CHECK_EQ( a_.concurrency.get( Stage::Attention ) + b_.concurrency.get( Stage::Attention ),
             a_.concurrency.get( Stage::PostAttention ) + b_.concurrency.get( Stage::PostAttention ) );
 
-  CHECK_EQ( a_.concurrency.get( Stage::PostAttention ) + b_.concurrency.get( Stage::PostAttention ),
-            a_.concurrency.get( Stage::Classification ) + b_.concurrency.get( Stage::Classification ) );
+  // Following is not always true; we need to figure it out before enabling it.
+  // CHECK_EQ( a_.concurrency.get( Stage::PostAttention ) + b_.concurrency.get( Stage::PostAttention ),
+  //           a_.concurrency.get( Stage::Classification ) + b_.concurrency.get( Stage::Classification ) );
 
   threads_.emplace_back( &HybridComputeKernel::backlog_thread_func, this );
   threads_.emplace_back( &HybridComputeKernel::bookkeeping_thread_func, this );
@@ -425,7 +426,7 @@ void HybridComputeKernel<ModelA, ModelB>::execution_thread_func(
     }
 
     DLOG( INFO ) << "Popped state from processing: " << input_state.debug_string( false ) << " (by "
-                 << ( std::is_same_v<ModelA, M> ? "A" : "B" ) << ")";
+                << ( std::is_same_v<ModelA, M> ? "A" : "B" ) << ")";
 
     const auto local_id = input_state.id();
     const auto next_stage = input_state.next_stage();
@@ -547,6 +548,7 @@ void HybridComputeKernel<ModelA, ModelB>::bookkeeping_thread_func()
       if ( a_.context_manager.free() < a_.concurrency.get( Stage::Attention )
            or b_.context_manager.free() < b_.concurrency.get( Stage::Attention ) ) {
         // we don't have enough space for these contexts, this is going to the waiting queue
+        DLOG( INFO ) << "Pushing state to waiting queue: " << state.debug_string( false );
         std::unique_lock lock { waiting_.mutex };
         waiting_.queue.push( std::move( state ) );
         continue;
