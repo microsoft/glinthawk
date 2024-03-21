@@ -1,3 +1,5 @@
+#pragma once
+
 #include "../blobstore.hh"
 
 #include <functional>

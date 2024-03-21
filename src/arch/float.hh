@@ -1,3 +1,5 @@
+#pragma once
+
 #if defined( TARGET_PLATFORM_CUDA )
 #include <cuda_fp16.h>
 #endif
