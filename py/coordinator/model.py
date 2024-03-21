@@ -28,9 +28,15 @@ class Model:
             worker.model_slice_start = (self.n_layers - 1, Stage.Classification)
             worker.model_slice_end = (self.n_layers - 1, Stage.Classification)
         elif self._assigned_workers < num_layer_workers:
+            first_layer = self._assigned_workers * self.layers_per_worker
+            last_layer = (self._assigned_workers + 1) * self.layers_per_worker - 1
             # assign the worker to the next set of layers
-            worker.model_slice_start = (self._assigned_workers * self.layers_per_worker, Stage.PreAttention)
-            worker.model_slice_end = ((self._assigned_workers + 1) * self.layers_per_worker - 1, Stage.PostAttention)
+            worker.model_slice_start = (first_layer, Stage.PreAttention)
+            worker.model_slice_end = (last_layer, Stage.PostAttention)
+
+            if last_layer == self.n_layers - 1:
+                # We're responsible for classification
+                worker.model_slice_end = (last_layer, Stage.Classification)
         else:
             # No more workers should be assigned
             return False

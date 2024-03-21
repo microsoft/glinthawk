@@ -126,31 +126,12 @@ class Coordinator:
                 elif worker.model_slice_start[1] == Stage.Classification:
                     self.classification_worker = worker
 
-                # Set worker concurrency params
-                max_concurrency_size_pre = 0
-                max_concurrency_size_att = 0
-                max_concurrency_size_post = 0
-                max_concurrency_size_cls = 0
-                context_count = 0
+                context_count = self.gpu_context_count if worker.platform == Platform.CUDA else self.cpu_context_count
 
-                if worker.model_slice_start[1] == Stage.Classification:
-                    if worker.platform == Platform.AMD64:
-                        max_concurrency_size_cls = 0
-                    elif worker.platform == Platform.CUDA:
-                        max_concurrency_size_cls = self.concurrency_size_cls
-                else:
-                    max_concurrency_size_att = self.concurrency_size_att
-                    if worker.platform == Platform.AMD64:
-                        context_count = self.cpu_context_count
-                    elif worker.platform == Platform.CUDA:
-                        context_count = self.gpu_context_count
-                        max_concurrency_size_pre = self.concurrency_size_pre
-                        max_concurrency_size_post = self.concurrency_size_post
-
-                worker.concurrency_size_pre = max_concurrency_size_pre
-                worker.concurrency_size_att = max_concurrency_size_att
-                worker.concurrency_size_post = max_concurrency_size_post
-                worker.concurrency_size_cls = max_concurrency_size_cls
+                worker.concurrency_size_pre = self.concurrency_size_pre
+                worker.concurrency_size_att = self.concurrency_size_att
+                worker.concurrency_size_post = self.concurrency_size_post
+                worker.concurrency_size_cls = self.concurrency_size_cls
 
                 self.push_message(
                     worker,
@@ -169,9 +150,7 @@ class Coordinator:
                     ),
                 )
 
-                self.logger.info(
-                    f"Worker {worker.id} is at {proto.ip}:{worker.port} [{worker}]."
-                )
+                self.logger.info(f"Worker {worker.id} is at {proto.ip}:{worker.port} [{worker}].")
 
                 if (
                     self.model.all_assigned()
@@ -186,7 +165,7 @@ class Coordinator:
                             self.push_message(w, Message.OpCode.SetRoute, routing_message)
 
                     self.logger.info(
-                        f"Layer 0 is at {socket.inet_ntoa(self.first_worker.ip)}:{self.first_worker.port};"
+                        f"Layer 0 is at {socket.inet_ntoa(self.first_worker.ip)}:{self.first_worker.port}; "
                         "completions can be found there."
                     )
 
