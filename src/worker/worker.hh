@@ -444,7 +444,7 @@ bool BatchedWorker<ModelConfig, ComputeKernel>::handle_coordinator_message( core
       RouteMap dummy_route = it->second;
       std::vector<models::BatchedInferenceState<ModelConfig>> states {};
 
-      // prompt id is sha256( current_time and dummy_prompt_current_id_ )
+      // prompt id is sha256( current_time || dummy_prompt_current_id_ )
       auto generate_next_prompt_id = [this]() -> PromptID {
         PromptID prompt_id;
         char prompt_id_buf[sizeof( uint64_t ) * 2];
@@ -474,6 +474,8 @@ bool BatchedWorker<ModelConfig, ComputeKernel>::handle_coordinator_message( core
           batch_size, DataType::Float16, RouteID {}, ModelID {}, false, false, false
         };
 
+        DLOG(INFO) << "Pushing dummy prompts: " << i * batch_size << " to " << ( i + 1 ) * batch_size;
+
         for ( size_t j = 0; j < batch_size; j++ ) {
           const auto idx = i * batch_size + j;
 
@@ -484,6 +486,7 @@ bool BatchedWorker<ModelConfig, ComputeKernel>::handle_coordinator_message( core
           state.set_prompt( idx, generate_next_prompt_id(), 1 /* TOKEN_BOS */, 0, temp_dist( temp_gen ), 1 );
         }
 
+        DLOG(INFO) << "Generated state: " << state.debug_string( true );
         this->compute_kernel_->push( std::move( state ) );
       }
 
@@ -587,7 +590,7 @@ bool BatchedWorker<ModelConfig, ComputeKernel>::handle_peer_message( core::Messa
 
       BatchedState state { msg.payload() };
 
-      // LOG( INFO ) << state.debug_string( true );
+      LOG( INFO ) << state.debug_string( true );
 
       if ( route_set_.find( state.route_id() ) == route_set_.end() ) {
         LOG( FATAL ) << "No route with id=" << state.route_id() << " in route set.";
