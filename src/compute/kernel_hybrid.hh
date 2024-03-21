@@ -372,11 +372,13 @@ void HybridComputeKernel<ModelA, ModelB>::push( models::BatchedInferenceState<Co
 
   // (4) there's something left in the input state; let's see if we can push it to the incoming queue
   if ( state.free_slots() == 0 ) {
+    // all slots are filled; push it to the incoming queue
     push_to_incoming( std::move( state ) );
   } else if ( state.free_slots() < state.batch_size() ) {
+    // some slots are filled; keep it as an incomplete state
     incomplete_state_ = std::move( state );
   } else {
-    LOG( WARNING ) << "Empty state pushed to incoming queue: " << state.debug_string( false );
+    // all slots are empty; discard it
   }
 }
 

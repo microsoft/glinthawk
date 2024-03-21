@@ -40,7 +40,7 @@ namespace {
 
 // XXX(sadjad): this is not ideal. We should unify the way we describe the datatypes across the codebase.
 template<typename DType>
-DataType get_datatype()
+constexpr DataType get_datatype()
 {
   if constexpr ( std::is_same_v<DType, float> ) {
     return DataType::Float32;
@@ -181,7 +181,8 @@ void BatchedWorker<ModelConfig, ComputeKernel>::setup_stats_handler()
   if ( std::filesystem::is_socket( telegraf_socket, err ) ) {
     LOG( INFO ) << "Telegraf socket found at " << telegraf_socket.string();
     telegraf_logger_ = std::make_unique<monitoring::TelegrafLogger>( telegraf_socket );
-    telegraf_logger_->install_rules( event_loop_, telegraf_rule_categories_, []( auto&& ) { return true; }, [] {} );
+    telegraf_logger_->install_rules(
+      event_loop_, telegraf_rule_categories_, []( auto&& ) { return true; }, [] {} );
   } else {
     LOG( WARNING ) << "Telegraf socket not found at " << telegraf_socket.string();
   }
@@ -474,7 +475,7 @@ bool BatchedWorker<ModelConfig, ComputeKernel>::handle_coordinator_message( core
           batch_size, DataType::Float16, RouteID {}, ModelID {}, false, false, false
         };
 
-        DLOG(INFO) << "Pushing dummy prompts: " << i * batch_size << " to " << ( i + 1 ) * batch_size;
+        DLOG( INFO ) << "Pushing dummy prompts: " << i * batch_size << " to " << ( i + 1 ) * batch_size;
 
         for ( size_t j = 0; j < batch_size; j++ ) {
           const auto idx = i * batch_size + j;
@@ -486,7 +487,7 @@ bool BatchedWorker<ModelConfig, ComputeKernel>::handle_coordinator_message( core
           state.set_prompt( idx, generate_next_prompt_id(), 1 /* TOKEN_BOS */, 0, temp_dist( temp_gen ), 1 );
         }
 
-        DLOG(INFO) << "Generated state: " << state.debug_string( true );
+        DLOG( INFO ) << "Generated state: " << state.debug_string( true );
         this->compute_kernel_->push( std::move( state ) );
       }
 
@@ -598,16 +599,16 @@ bool BatchedWorker<ModelConfig, ComputeKernel>::handle_peer_message( core::Messa
 
       if ( state.next_layer() == 0 and state.next_stage() == models::InferenceStage::PreAttention ) {
         /* first worker in the chain */
-
         for ( size_t i = 0; i < state.batch_size(); i++ ) {
           __stats__.increment<Counters::TokensGenerated>();
 
           if ( state.finished( i ) ) {
-            auto& completion = this->completion_manager_->get( state.prompt_id( i ) );
+            auto& prompt_id = state.prompt_id( i );
+            auto& completion = this->completion_manager_->get( prompt_id );
             completion.add_token( state.token( i ) );
             __stats__.increment<Counters::PromptsCompleted>();
             __stats__.add_point<IntDistributions::PromptLength>( state.token_pos( i ) );
-            completion_manager_->terminate( state.prompt_id( i ) );
+            completion_manager_->terminate( prompt_id );
 
             state.discard( i );
           }
