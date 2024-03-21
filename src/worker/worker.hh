@@ -590,7 +590,7 @@ bool BatchedWorker<ModelConfig, ComputeKernel>::handle_peer_message( core::Messa
 
       BatchedState state { msg.payload() };
 
-      LOG( INFO ) << state.debug_string( true );
+      DLOG( INFO ) << state.debug_string( true );
 
       if ( route_set_.find( state.route_id() ) == route_set_.end() ) {
         LOG( FATAL ) << "No route with id=" << state.route_id() << " in route set.";
