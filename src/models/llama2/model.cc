@@ -224,7 +224,8 @@ template<typename Config, typename DType, typename LlamaOperations, typename Con
 void Llama2<Config, DType, LlamaOperations, Context>::attention_ops()
 {
   // TODO: We should either make parallel tokens in one prompt work, or remove the feature altogether (and put
-  //  protections in place).
+  // protections in place).
+  // XXX(sadjad): With HybridKernel, this will run on the CPU; maybe should be moved to pre-attention?
   ops_.apply_rope( this->state_.curr_concurrency_size,
                    this->state_.batch_token_positions,
                    this->base_weights_.freq_cis_real,
