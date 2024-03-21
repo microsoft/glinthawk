@@ -413,9 +413,11 @@ void HybridComputeKernel<ModelA, ModelB>::execution_thread_func(
     StateType input_state {};
     StateType output_state {};
 
-    LOG( WARNING ) << "Current status: " << "incoming_size=" << incoming_.queue.size() << ", "
-                   << "waiting_size=" << waiting_.queue.size() << ", " << "a_processing_size=" << a_.processing.size()
-                   << ", " << "b_processing_size=" << b_.processing.size();
+    DLOG( WARNING ) << "Current status: "
+                    << "incoming_size=" << incoming_.queue.size() << ", "
+                    << "waiting_size=" << waiting_.queue.size() << ", "
+                    << "a_processing_size=" << a_.processing.size() << ", "
+                    << "b_processing_size=" << b_.processing.size();
 
     // get the next state to process
     {
@@ -426,7 +428,7 @@ void HybridComputeKernel<ModelA, ModelB>::execution_thread_func(
     }
 
     DLOG( INFO ) << "Popped state from processing: " << input_state.debug_string( false ) << " (by "
-                << ( std::is_same_v<ModelA, M> ? "A" : "B" ) << ")";
+                 << ( std::is_same_v<ModelA, M> ? "A" : "B" ) << ")";
 
     const auto local_id = input_state.id();
     const auto next_stage = input_state.next_stage();
