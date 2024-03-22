@@ -18,46 +18,9 @@
 #include "util/eventfd.hh"
 
 #include "common.hh"
+#include "contextman.hh"
 
 namespace glinthawk::compute {
-
-namespace {
-
-template<typename Model>
-class ContextManager
-{
-private:
-  std::unordered_map<glinthawk::PromptID, std::shared_ptr<typename Model::ContextType>> contexts_ {};
-  const typename Model::SettingsType settings_ {};
-
-public:
-  ContextManager( const typename Model::SettingsType& settings )
-    : settings_( settings )
-  {
-  }
-
-  std::shared_ptr<typename Model::ContextType> get_context( const glinthawk::PromptID& prompt_id,
-                                                            bool emplace_empty = false )
-  {
-    auto it = contexts_.find( prompt_id );
-    if ( it != contexts_.end() ) {
-      return it->second;
-    }
-
-    auto context = std::make_shared<typename Model::ContextType>( settings_ );
-
-    if ( not context.get()->empty() or emplace_empty ) {
-      contexts_.emplace( prompt_id, context );
-      DLOG( INFO ) << "(size: " << contexts_.size() << ") Added context for " << prompt_id;
-    }
-
-    return context;
-  }
-
-  bool release( const glinthawk::PromptID& prompt_id ) { return contexts_.erase( prompt_id ) > 0; }
-};
-
-} // anonymous namespace
 
 template<typename Model>
 class BatchedComputeKernel
