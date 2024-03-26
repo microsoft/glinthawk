@@ -112,8 +112,6 @@ private:
   std::array<StateType, 2> active_states_ {};
   std::array<std::vector<ContextPtrB>, 2> active_contexts_ {};
 
-  size_t ready_to_process_count_ { 0 };
-
   // <threads>
   std::vector<std::thread> threads_;
 
@@ -141,7 +139,7 @@ SimpleHybridComputeKernel<ModelA, ModelB>::ModelData<M>::ModelData( std::unique_
 template<typename ModelA, typename ModelB>
 template<typename... Args>
 SimpleHybridComputeKernel<ModelA, ModelB>::SimpleHybridComputeKernel( const uint32_t concurrency, Args&&... args )
-  : concurrency_( concurrency )
+  : concurrency_( concurrency / 2 )
   , a_( std::make_unique<ModelA>( std::forward<Args>( args )... ) )
   , b_( std::make_unique<ModelB>( std::forward<Args>( args )... ) )
 {
@@ -325,20 +323,21 @@ void SimpleHybridComputeKernel<ModelA, ModelB>::execution_thread_func(
           case 1: model_forward( input_state, active_contexts_[active_state_index] ); break;
         }
       }
-
-      if constexpr ( model_idx == 0 ) {
-        if ( iteration >= 2 * N ) {
-          // we're done with the last layer; let's push the state to the outgoing queue
-          {
-            std::lock_guard lock { outgoing_.mutex };
-            outgoing_.queue.push( std::move( active_states_[active_state_index] ) );
-          }
-        }
-      }
     }
 
     if constexpr ( model_idx == 0 ) {
+      active_states_[0].merge( std::move( active_states_[1] ) );
+
+      {
+        std::lock_guard lock { outgoing_.mutex };
+        outgoing_.queue.push( std::move( active_states_[0] ) );
+      }
+
+      // notify the user about the new outgoing state
       event_fd_.write_event();
+
+      // allow for the bookkeeping thread to process the next incoming state
+      // XXX(sadjad): this behavior can be improved
       is_processing_.store( false );
       incoming_.cv.notify_one();
     }
@@ -349,14 +348,19 @@ template<typename ModelA, typename ModelB>
 void SimpleHybridComputeKernel<ModelA, ModelB>::bookkeeping_thread_func()
 {
   while ( running_ ) {
-    while ( ready_to_process_count_ < 2 ) {
+    StateType incoming_state;
+
+    {
       std::unique_lock lock { incoming_.mutex };
       incoming_.cv.wait( lock, [this] { return !incoming_.queue.empty() && !is_processing_; } );
-      active_states_[ready_to_process_count_++] = std::move( incoming_.queue.front() );
+      incoming_state = std::move( incoming_.queue.front() );
       incoming_.queue.pop();
     }
 
-    ready_to_process_count_ = 0;
+    CHECK_EQ( incoming_state.batch_size(), concurrency_ * 2 ) << "Batch size mismatch.";
+    std::tie( active_states_[0], active_states_[1] ) = incoming_state.split( concurrency_ );
+
+    // XXX(sadjad): deal with backlog
 
     // TODO(sadjad): check if this state is even valid for this kernel
     // TODO(sadjad): discard the finished prompts (state.discarded_contexts_)
