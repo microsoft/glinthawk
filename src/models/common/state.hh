@@ -567,8 +567,6 @@ void BatchedInferenceState<Config>::merge( BatchedInferenceState&& other )
   CHECK_EQ( metadata_.has_queries, other.metadata_.has_queries ) << "States with different query states";
   CHECK_EQ( metadata_.has_kvs, other.metadata_.has_kvs ) << "States with different key-value states";
 
-  LOG( INFO ) << "Merging states of sizes " << metadata_.batch_size << " and " << other.metadata_.batch_size;
-
   BatchedInferenceState new_state;
   new_state.metadata_ = metadata_;
   new_state.metadata_.batch_size += other.metadata_.batch_size;

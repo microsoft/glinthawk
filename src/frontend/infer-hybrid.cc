@@ -30,7 +30,6 @@ private:
   compute::SimpleHybridComputeKernel<ModelA, ModelB> kernel_;
   llama2::Vocabulary vocabulary_;
   StateType state_;
-  StateType shadow_state_;
 
   std::vector<uint32_t> tokens_ { 1 /* BOS */ };
 
@@ -80,7 +79,6 @@ public:
                64 /* max context count */ )
     , vocabulary_( tokenizer_path )
     , state_( make_state() )
-    , shadow_state_( make_state() )
   {
   }
 
@@ -104,10 +102,8 @@ public:
 
     for ( size_t pos = 0; pos < ModelA::ConfigType::seq_len; pos++ ) {
       kernel_.push( move( state_ ) );
-      kernel_.push( move( shadow_state_ ) );
       kernel_.event_fd().read_event(); // blocks until results are ready
       kernel_.pop( state_ );
-      kernel_.pop( shadow_state_ );
 
       CHECK( kernel_.pop( state_ ) == false );
 
