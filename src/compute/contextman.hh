@@ -1,9 +1,8 @@
 #pragma once
 
+#include <glog/logging.h>
 #include <optional>
 #include <vector>
-#include <glog/logging.h>
-
 
 #include "models/common/state.hh"
 #include "models/types.hh"
