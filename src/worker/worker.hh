@@ -436,19 +436,16 @@ bool BatchedWorker<ModelConfig, ComputeKernel>::handle_coordinator_message( core
         break;
       }
 
-      auto it = route_set_.find( RouteID {} );
-      if ( it == route_set_.end() ) {
+      if ( route_set_.find( RouteID {} ) == route_set_.end() ) {
         LOG( FATAL ) << "No dummy route set; cannot push dummy prompts.";
         break;
       }
 
-      RouteMap dummy_route = it->second;
       std::vector<models::BatchedInferenceState<ModelConfig>> states {};
 
       // prompt id is sha256( current_time || dummy_prompt_current_id_ )
       auto generate_next_prompt_id = [this]() -> PromptID {
-        PromptID prompt_id;
-        char prompt_id_buf[sizeof( uint64_t ) * 2];
+        char prompt_id_buf[2 * sizeof( uint64_t )];
         const uint64_t current_time
           = std::chrono::duration_cast<std::chrono::nanoseconds>( std::chrono::system_clock::now().time_since_epoch() )
               .count();
@@ -456,6 +453,7 @@ bool BatchedWorker<ModelConfig, ComputeKernel>::handle_coordinator_message( core
         memcpy( prompt_id_buf, &current_time, sizeof( uint64_t ) );
         memcpy( prompt_id_buf + sizeof( uint64_t ), &( this->dummy_prompt_current_id_ ), sizeof( uint64_t ) );
 
+        PromptID prompt_id;
         util::digest::sha256( { prompt_id_buf, sizeof( prompt_id_buf ) }, prompt_id );
 
         this->dummy_prompt_current_id_++;
@@ -465,7 +463,7 @@ bool BatchedWorker<ModelConfig, ComputeKernel>::handle_coordinator_message( core
       // generating random temperatures
       std::random_device rd {};
       std::mt19937 temp_gen { rd() };
-      std::uniform_real_distribution<float> temp_dist( 0.0f, 1.0f );
+      std::uniform_real_distribution<float> temp_dist { 0.0f, 1.0f };
 
       const uint32_t batch_count = ( prompt_count + ( batch_size - 1 ) ) / batch_size;
 
@@ -484,7 +482,7 @@ bool BatchedWorker<ModelConfig, ComputeKernel>::handle_coordinator_message( core
             break;
           }
 
-          state.set_prompt( idx, generate_next_prompt_id(), 1 /* TOKEN_BOS */, 0, temp_dist( temp_gen ), 1 );
+          state.set_prompt( j, generate_next_prompt_id(), 1 /* TOKEN_BOS */, 0, temp_dist( temp_gen ), 1 );
         }
 
         DLOG( INFO ) << "Generated state: " << state.debug_string( true );

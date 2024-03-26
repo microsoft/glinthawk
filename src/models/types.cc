@@ -121,10 +121,10 @@ ostream& operator<<( ostream& os, const glinthawk::DataBuffer& v )
 std::ostream& operator<<( std::ostream& os, const glinthawk::models::InferenceStage& v )
 {
   switch ( v ) {
-    case glinthawk::models::InferenceStage::PreAttention: os << "PreAttention"; break;
-    case glinthawk::models::InferenceStage::Attention: os << "Attention"; break;
-    case glinthawk::models::InferenceStage::PostAttention: os << "PostAttention"; break;
-    case glinthawk::models::InferenceStage::Classification: os << "Classification"; break;
+    case glinthawk::models::InferenceStage::PreAttention: os << "Pre"; break;
+    case glinthawk::models::InferenceStage::Attention: os << "Att"; break;
+    case glinthawk::models::InferenceStage::PostAttention: os << "Post"; break;
+    case glinthawk::models::InferenceStage::Classification: os << "Cls"; break;
     default: os << "Unknown"; break;
   }
 

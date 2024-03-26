@@ -7,7 +7,7 @@
 #define OOF_IMPL
 #include "oof/oof.hh"
 
-#include "compute/kernel_hybrid.hh"
+#include "compute/kernel_hybrid_simple.hh"
 #include "models/common/state.hh"
 #include "models/llama2/model.hh"
 #include "util/timer.hh"
@@ -27,9 +27,10 @@ private:
   const uint32_t batch_size_;
   const float temp_;
 
-  compute::HybridComputeKernel<ModelA, ModelB> kernel_;
+  compute::SimpleHybridComputeKernel<ModelA, ModelB> kernel_;
   llama2::Vocabulary vocabulary_;
   StateType state_;
+  StateType shadow_state_;
 
   std::vector<uint32_t> tokens_ { 1 /* BOS */ };
 
@@ -53,9 +54,13 @@ private:
   StateType make_state()
   {
     StateType st { batch_size_, DataType::_GLINTHAWK_DTYPE_NAME_, {}, {}, false, false, false };
+
     for ( size_t i = 0; i < batch_size_; ++i ) {
       st.set_prompt( i, next_prompt_id(), 1 /* BOS */, 0, temp_, 1 );
     }
+
+    st.set_next_layer( 0 );
+    st.set_next_stage( InferenceStage::PreAttention );
 
     return st;
   }
@@ -67,22 +72,16 @@ public:
                   const float temp )
     : batch_size_( batch_size )
     , temp_( temp )
-    , kernel_( { batch_size, 0, batch_size, batch_size },
-               { 0, batch_size, 0, 0 },
+    , kernel_( batch_size,
                model_path,
                0,                                    /* start layer */
                std::numeric_limits<uint32_t>::max(), /* end layer */
                batch_size,
                64 /* max context count */ )
     , vocabulary_( tokenizer_path )
-    , state_( batch_size, DataType::_GLINTHAWK_DTYPE_NAME_, {}, {}, false, false, false )
+    , state_( make_state() )
+    , shadow_state_( make_state() )
   {
-    state_.set_next_layer( 0 );
-    state_.set_next_stage( InferenceStage::PreAttention );
-
-    for ( size_t i = 0; i < batch_size_; ++i ) {
-      state_.set_prompt( i, next_prompt_id(), 1 /* BOS */, 0, temp_, 1 );
-    }
   }
 
   void run()
@@ -105,8 +104,10 @@ public:
 
     for ( size_t pos = 0; pos < ModelA::ConfigType::seq_len; pos++ ) {
       kernel_.push( move( state_ ) );
+      kernel_.push( move( shadow_state_ ) );
       kernel_.event_fd().read_event(); // blocks until results are ready
       kernel_.pop( state_ );
+      kernel_.pop( shadow_state_ );
 
       CHECK( kernel_.pop( state_ ) == false );
 
