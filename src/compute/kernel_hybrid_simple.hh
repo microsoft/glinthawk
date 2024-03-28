@@ -103,7 +103,7 @@ private:
   // from A perspective: 0 -> process state[0], 1 -> process state[1]
 
   // Used to synchronize the model threads. Every time this barrier is reached, the processing mode is toggled,
-  // swapping the states processed by ModelA and ModelB
+  // swapping the states processed by ModelA and ModelB.
   std::barrier<> sync_point { 2 };
 
   std::atomic<bool> is_processing_states_ { false };
@@ -355,10 +355,31 @@ void SimpleHybridComputeKernel<ModelA, ModelB>::bookkeeping_thread_func()
 
     CHECK_EQ( incoming_state.batch_size(), concurrency_ * 2 ) << "Batch size mismatch.";
 
+    // First, let's see if we have enough space for contexts.
+    std::vector<ContextPtrB> incoming_contexts;
+    incoming_contexts.reserve( incoming_state.batch_size() );
+
+    for ( size_t i = 0; i < incoming_state.batch_size(); i++ ) {
+      auto ctx = b_.context_manager.get_context( incoming_state.prompt_id( i ) );
+
+      if ( not ctx ) {
+        break;
+      }
+
+      incoming_contexts.push_back( std::move( ctx ) );
+    }
+
+    if ( incoming_contexts.size() != incoming_state.batch_size() ) {
+      // We didn't have enough space for the contexts, this is going to the waiting queue.
+      DLOG( INFO ) << "Pushing state to waiting queue: " << incoming_state.debug_string( false );
+      std::unique_lock lock { waiting_.mutex };
+      waiting_.queue.push( std::move( incoming_state ) );
+      continue;
+    }
+
     // If we're processing the active_states_ at the moment, we prepare the next batch and put it in next_states_.
     // It will be swapped for active_states_ when the processing threads are done.
     const bool is_processing = is_processing_states_.load();
-
     decltype( active_states_ )& states_to_fill = ( not is_processing ) ? active_states_ : next_states_;
     decltype( active_contexts_ )& contexts_to_fill = ( not is_processing ) ? active_contexts_ : next_contexts_;
 
@@ -366,31 +387,11 @@ void SimpleHybridComputeKernel<ModelA, ModelB>::bookkeeping_thread_func()
     // XXX(sadjad): We should make this zero-copy.
     std::tie( states_to_fill[0], states_to_fill[1] ) = incoming_state.split( concurrency_ );
 
-    for ( size_t i = 0; i < 2; i++ ) {
-      auto& state = states_to_fill[i];
-      auto& state_context = contexts_to_fill[i];
+    contexts_to_fill[0] = { std::make_move_iterator( incoming_contexts.begin() ),
+                            std::make_move_iterator( incoming_contexts.begin() + concurrency_ ) };
 
-      state_context.clear();
-      state_context.reserve( state.batch_size() );
-
-      if ( b_.context_manager.free() < state.batch_size() ) {
-        // we don't have enough space for these contexts, this is going to the waiting queue
-        DLOG( INFO ) << "Pushing state to waiting queue: " << state.debug_string( false );
-        std::unique_lock lock { waiting_.mutex };
-        waiting_.queue.push( std::move( state ) );
-        continue;
-      }
-
-      for ( size_t i = 0; i < state.batch_size(); i++ ) {
-        auto ctx = b_.context_manager.get_context( state.prompt_id( i ) );
-        if ( not ctx ) {
-          LOG( FATAL ) << "Cannot allocate context.";
-          break;
-        }
-
-        state_context.push_back( std::move( ctx ) );
-      }
-    }
+    contexts_to_fill[1] = { std::make_move_iterator( incoming_contexts.begin() + concurrency_ ),
+                            std::make_move_iterator( incoming_contexts.end() ) };
 
     // Wait until the processing threads are done with the current batch
     is_processing_states_.wait( true );
