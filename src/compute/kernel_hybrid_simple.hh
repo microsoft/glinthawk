@@ -13,6 +13,7 @@
 #include <mutex>
 #include <optional>
 #include <queue>
+#include <shared_mutex>
 #include <thread>
 #include <tuple>
 #include <typeinfo>
@@ -26,8 +27,6 @@
 
 #include "common.hh"
 #include "contextman.hh"
-
-#include "oof/oof.hh"
 
 namespace glinthawk::compute {
 
@@ -101,16 +100,21 @@ private:
   GlobalQueue outgoing_;
   // </queues>
 
-  std::atomic_bool is_processing_ { false };
-
   // from A perspective: 0 -> process state[0], 1 -> process state[1]
 
-  // Used to synchronize the model threads. Every time this barrier is reached, the processing mode is toggled, swapping
-  // the states processed by ModelA and ModelB
+  // Used to synchronize the model threads. Every time this barrier is reached, the processing mode is toggled,
+  // swapping the states processed by ModelA and ModelB
   std::barrier<> sync_point { 2 };
 
+  std::atomic<bool> is_processing_states_ { false };
+
+  // the states that are currently being processed
   std::array<StateType, 2> active_states_ {};
   std::array<std::vector<ContextPtrB>, 2> active_contexts_ {};
+
+  // the states that will be processed next
+  std::array<StateType, 2> next_states_ {};
+  std::array<std::vector<ContextPtrB>, 2> next_contexts_ {};
 
   // <threads>
   std::vector<std::thread> threads_;
@@ -291,24 +295,16 @@ void SimpleHybridComputeKernel<ModelA, ModelB>::execution_thread_func(
 {
   constexpr size_t model_idx = std::is_same<M, ModelA>() ? 0 : 1;
   auto& model = *model_data.model;
-
-  //// XXX DEBUG
-  std::array<oof::color, 2> thread_colors;
-  std::array<oof::color, 2> state_colors;
-  thread_colors[0] = { 0, 0, 255 };
-  thread_colors[1] = { 255, 0, 0 };
-  state_colors[0] = { 255, 255, 0 };
-  state_colors[1] = { 255, 0, 255 };
-  //// XXX DEBUG
+  const auto N = model.settings().n_layers_loaded();
 
   while ( running_ ) {
-    is_processing_.wait( false );
-
-    const auto N = model.settings().n_layers_loaded();
+    is_processing_states_.wait( false );
 
     for ( size_t iteration = 0; iteration < 2 * N + 2; iteration++ ) {
       sync_point.arrive_and_wait();
 
+      // During even iterations, ModelA processes pre/post-attention for [0] and ModelB does attention for [1]. During
+      // odd iterations, ModelA does pre/post-attention for [1] and ModelB does attention for [0].
       const auto active_state_index = ( model_idx == 0 ) ? ( iteration % 2 ) : ( ( iteration + 1 ) % 2 );
       StateType& input_state = active_states_[active_state_index];
 
@@ -326,6 +322,7 @@ void SimpleHybridComputeKernel<ModelA, ModelB>::execution_thread_func(
     }
 
     if constexpr ( model_idx == 0 ) {
+      // We don't need to wait for the other thread, since it has nothing to do in the last iteration.
       active_states_[0].merge( std::move( active_states_[1] ) );
 
       {
@@ -336,10 +333,9 @@ void SimpleHybridComputeKernel<ModelA, ModelB>::execution_thread_func(
       // notify the user about the new outgoing state
       event_fd_.write_event();
 
-      // allow for the bookkeeping thread to process the next incoming state
-      // XXX(sadjad): this behavior can be improved
-      is_processing_.store( false );
-      incoming_.cv.notify_one();
+      // we're done with processing the input; let's signal the bookkeeping thread
+      is_processing_states_.store( false );
+      is_processing_states_.notify_all();
     }
   }
 }
@@ -352,22 +348,27 @@ void SimpleHybridComputeKernel<ModelA, ModelB>::bookkeeping_thread_func()
 
     {
       std::unique_lock lock { incoming_.mutex };
-      incoming_.cv.wait( lock, [this] { return !incoming_.queue.empty() && !is_processing_; } );
+      incoming_.cv.wait( lock, [this] { return !incoming_.queue.empty(); } );
       incoming_state = std::move( incoming_.queue.front() );
       incoming_.queue.pop();
     }
 
     CHECK_EQ( incoming_state.batch_size(), concurrency_ * 2 ) << "Batch size mismatch.";
-    std::tie( active_states_[0], active_states_[1] ) = incoming_state.split( concurrency_ );
 
-    // XXX(sadjad): deal with backlog
+    // If we're processing the active_states_ at the moment, we prepare the next batch and put it in next_states_.
+    // It will be swapped for active_states_ when the processing threads are done.
+    const bool is_processing = is_processing_states_.load();
 
-    // TODO(sadjad): check if this state is even valid for this kernel
-    // TODO(sadjad): discard the finished prompts (state.discarded_contexts_)
+    decltype( active_states_ )& states_to_fill = ( not is_processing ) ? active_states_ : next_states_;
+    decltype( active_contexts_ )& contexts_to_fill = ( not is_processing ) ? active_contexts_ : next_contexts_;
 
-    for ( size_t state_idx = 0; state_idx < 2; state_idx++ ) {
-      auto& state = active_states_[state_idx];
-      auto& state_context = active_contexts_[state_idx];
+    // Split the incoming state into two parts.
+    // XXX(sadjad): We should make this zero-copy.
+    std::tie( states_to_fill[0], states_to_fill[1] ) = incoming_state.split( concurrency_ );
+
+    for ( size_t i = 0; i < 2; i++ ) {
+      auto& state = states_to_fill[i];
+      auto& state_context = contexts_to_fill[i];
 
       state_context.clear();
       state_context.reserve( state.batch_size() );
@@ -391,8 +392,18 @@ void SimpleHybridComputeKernel<ModelA, ModelB>::bookkeeping_thread_func()
       }
     }
 
-    is_processing_.store( true );
-    is_processing_.notify_all();
+    // Wait until the processing threads are done with the current batch
+    is_processing_states_.wait( true );
+
+    if ( is_processing ) {
+      // We were processing states when we received the new batch. Swap the active and next states.
+      active_states_ = std::move( next_states_ );
+      active_contexts_ = std::move( next_contexts_ );
+    }
+
+    // Notify the processing threads that they can start processing the new batch
+    is_processing_states_.store( true );
+    is_processing_states_.notify_all();
   }
 }
 
