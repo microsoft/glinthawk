@@ -318,7 +318,7 @@ void HybridComputeKernel<ModelA, ModelB>::execution_thread_func(
     // run the corresponding forward function
     switch ( next_stage ) {
       case Stage::PreAttention:
-        output_state = model_data.model->pre_attention_forward( std::move( input_state ) );
+        output_state = model_data.model->forward_pre_attention( std::move( input_state ) );
         break;
 
       case Stage::Attention: {
@@ -327,19 +327,19 @@ void HybridComputeKernel<ModelA, ModelB>::execution_thread_func(
         if constexpr ( std::same_as<M, ModelA> ) {
           auto& contexts = context_map_[local_id].first;
           lock.unlock();
-          output_state = model_data.model->attention_forward( std::move( input_state ), contexts );
+          output_state = model_data.model->forward_attention( std::move( input_state ), contexts );
         } else {
           auto& contexts = context_map_[local_id].second;
           lock.unlock();
-          output_state = model_data.model->attention_forward( std::move( input_state ), contexts );
+          output_state = model_data.model->forward_attention( std::move( input_state ), contexts );
         }
       } break;
 
       case Stage::PostAttention:
-        output_state = model_data.model->post_attention_forward( std::move( input_state ) );
+        output_state = model_data.model->forward_post_attention( std::move( input_state ) );
         break;
 
-      case Stage::Classification: output_state = model_data.model->classify_forward( std::move( input_state ) ); break;
+      case Stage::Classification: output_state = model_data.model->forward_classify( std::move( input_state ) ); break;
     }
 
     std::optional<StateType> merged_state;
