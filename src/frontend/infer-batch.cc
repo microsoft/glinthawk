@@ -89,17 +89,17 @@ public:
     for ( size_t pos = 0; pos < Model::ConfigType::seq_len; pos++ ) {
       for ( size_t layer = 0; layer < Model::ConfigType::n_layers; layer++ ) {
         state_ = ser_des( move( state_ ) );
-        state_ = model_.pre_attention_forward( move( state_ ) );
+        state_ = model_.forward_pre_attention( move( state_ ) );
 
         state_ = ser_des( move( state_ ) );
-        state_ = model_.attention_forward( move( state_ ), contexts_ );
+        state_ = model_.forward_attention( move( state_ ), contexts_ );
 
         state_ = ser_des( move( state_ ) );
-        state_ = model_.post_attention_forward( move( state_ ) );
+        state_ = model_.forward_post_attention( move( state_ ) );
 
         if ( state_.next_stage() == InferenceStage::Classification ) {
           state_ = ser_des( move( state_ ) );
-          state_ = model_.classify_forward( move( state_ ) );
+          state_ = model_.forward_classify( move( state_ ) );
         }
       }
 

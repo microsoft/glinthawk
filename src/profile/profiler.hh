@@ -140,11 +140,11 @@ public:
       const auto start = std::chrono::steady_clock::now();
 
       if ( stage_ == Stage::PreAttention ) {
-        std::ignore = model_.pre_attention_forward( std::move( states ) );
+        std::ignore = model_.forward_pre_attention( std::move( states ) );
       } else if ( stage_ == Stage::Attention ) {
-        std::ignore = model_.attention_forward( std::move( states ), contexts_ );
+        std::ignore = model_.forward_attention( std::move( states ), contexts_ );
       } else if ( stage_ == Stage::PostAttention ) {
-        std::ignore = model_.post_attention_forward( std::move( states ) );
+        std::ignore = model_.forward_post_attention( std::move( states ) );
       } else {
         LOG( FATAL ) << "Unknown stage";
       }

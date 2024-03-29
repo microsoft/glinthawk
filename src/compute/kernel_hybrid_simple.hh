@@ -260,19 +260,19 @@ void SimpleHybridComputeKernel<ModelA, ModelB>::model_forward( StateType& state 
   const auto model_end_layer = model.settings().end_layer_num;
 
   if ( next_stage == Stage::PostAttention ) {
-    output = model.post_attention_forward( std::move( state ) );
+    output = model.forward_post_attention( std::move( state ) );
 
     if ( output.next_stage() == Stage::PreAttention and next_layer <= model_end_layer ) {
       // since we serve the next layer, let's do pre-attention right here
-      output = model.pre_attention_forward( std::move( output ) );
+      output = model.forward_pre_attention( std::move( output ) );
     } else if ( output.next_stage() == Stage::Classification and next_layer == ConfigType::n_layers - 1
                 and next_layer == model_end_layer ) {
-      output = model.classify_forward( std::move( output ) );
+      output = model.forward_classify( std::move( output ) );
     }
   } else if ( next_stage == Stage::PreAttention ) {
-    output = model.pre_attention_forward( std::move( state ) );
+    output = model.forward_pre_attention( std::move( state ) );
   } else if ( next_stage == Stage::Classification ) {
-    output = model.classify_forward( std::move( state ) );
+    output = model.forward_classify( std::move( state ) );
   } else {
     LOG( FATAL ) << "Invalid stage: " << next_stage;
   }
@@ -289,7 +289,7 @@ void SimpleHybridComputeKernel<ModelA, ModelB>::model_forward( StateType& state,
   const auto next_stage = state.next_stage();
 
   if ( next_stage == Stage::Attention ) {
-    output = model.attention_forward( std::move( state ), contexts );
+    output = model.forward_attention( std::move( state ), contexts );
   } else {
     LOG( FATAL ) << "Invalid stage: " << next_stage;
   }

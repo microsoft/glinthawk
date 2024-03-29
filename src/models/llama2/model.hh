@@ -54,16 +54,16 @@ public:
   [[nodiscard]] StateType forward( StateType&& state, const ContextVector& ctxs );
 
   template<StateConcept StateType>
-  [[nodiscard]] StateType pre_attention_forward( StateType&& state );
+  [[nodiscard]] StateType forward_pre_attention( StateType&& state );
 
   template<StateConcept StateType>
-  [[nodiscard]] StateType attention_forward( StateType&& state, const ContextVector& ctxs );
+  [[nodiscard]] StateType forward_attention( StateType&& state, const ContextVector& ctxs );
 
   template<StateConcept StateType>
-  [[nodiscard]] StateType post_attention_forward( StateType&& state );
+  [[nodiscard]] StateType forward_post_attention( StateType&& state );
 
   template<StateConcept StateType>
-  [[nodiscard]] StateType classify_forward( StateType&& state );
+  [[nodiscard]] StateType forward_classify( StateType&& state );
 
   Settings<Config> settings() const { return settings_; }
   Operations& ops() { return ops_; }
@@ -498,7 +498,7 @@ StateType Llama2<Config, DType, LlamaOperations, Context>::forward( StateType&& 
 
 template<typename Config, typename DType, typename LlamaOperations, typename Context>
 template<StateConcept StateType>
-StateType Llama2<Config, DType, LlamaOperations, Context>::pre_attention_forward( StateType&& states )
+StateType Llama2<Config, DType, LlamaOperations, Context>::forward_pre_attention( StateType&& states )
 {
   forward_prelude( states, {} );
   pre_attention_ops( states.next_layer() );
@@ -535,7 +535,7 @@ StateType Llama2<Config, DType, LlamaOperations, Context>::pre_attention_forward
 
 template<typename Config, typename DType, typename LlamaOperations, typename Context>
 template<StateConcept StateType>
-StateType Llama2<Config, DType, LlamaOperations, Context>::attention_forward( StateType&& states,
+StateType Llama2<Config, DType, LlamaOperations, Context>::forward_attention( StateType&& states,
                                                                               const ContextVector& contexts )
 {
   this->check_batch( states, contexts, InferenceStage::Attention );
@@ -621,7 +621,7 @@ StateType Llama2<Config, DType, LlamaOperations, Context>::attention_forward( St
 
 template<typename Config, typename DType, typename LlamaOperations, typename Context>
 template<StateConcept StateType>
-StateType Llama2<Config, DType, LlamaOperations, Context>::post_attention_forward( StateType&& states )
+StateType Llama2<Config, DType, LlamaOperations, Context>::forward_post_attention( StateType&& states )
 {
   this->check_batch( states, {}, InferenceStage::PostAttention );
   this->state_.curr_concurrency_size = states.batch_size();
@@ -643,7 +643,7 @@ StateType Llama2<Config, DType, LlamaOperations, Context>::post_attention_forwar
 
 template<typename Config, typename DType, typename LlamaOperations, typename Context>
 template<StateConcept StateType>
-StateType Llama2<Config, DType, LlamaOperations, Context>::classify_forward( StateType&& states )
+StateType Llama2<Config, DType, LlamaOperations, Context>::forward_classify( StateType&& states )
 {
   this->check_batch( states, {}, InferenceStage::Classification );
   this->state_.curr_concurrency_size = states.batch_size();
