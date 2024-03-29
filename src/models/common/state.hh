@@ -288,6 +288,125 @@ public:
 static_assert( StateConcept<BatchedInferenceState<models::llama2::configs::Stories_110M>> );
 
 template<typename Config>
+requires llama2::ModelConfig<Config>
+class BatchedInferenceStateSpan
+{
+private:
+  // This is a sin; we will fix it later.
+  BatchedInferenceState<Config>& state_;
+
+  size_t off_;
+  size_t n_;
+
+public:
+  BatchedInferenceStateSpan( BatchedInferenceState<Config>& state, size_t off, size_t n )
+    : state_( state )
+    , off_( off )
+    , n_( n )
+  {
+    CHECK_LE( off + n, state_.batch_size() ) << "Span out of bounds";
+  }
+
+  // A span can only be created from an existing state object, and cannot be serialized either.
+  // XXX(sadjad): catch this during compile time.
+  BatchedInferenceStateSpan( const std::string_view serialized_state ) { throw std::runtime_error( "not available" ); }
+  std::string serialize() const { throw std::runtime_error( "not available" ); }
+
+  bool empty() const { return n_ == 0; }
+
+  void set_id( const uint64_t id ) { state_.set_id( id ); }
+  void set_dtype( const DataType dtype ) { state_.set_dtype( dtype ); }
+  void set_route_id( const RouteID route_id ) { state_.set_route_id( route_id ); }
+  void set_model_id( const ModelID model_id ) { state_.set_model_id( model_id ); }
+  void set_next_layer( const uint32_t next_layer ) { state_.set_next_layer( next_layer ); }
+  void set_next_stage( const InferenceStage next_stage ) { state_.set_next_stage( next_stage ); }
+  void set_has_activations( const bool has_activations ) { state_.set_has_activations( has_activations ); }
+  void set_has_queries( const bool has_queries ) { state_.set_has_queries( has_queries ); }
+  void set_has_kvs( const bool has_kvs ) { state_.set_has_kvs( has_kvs ); }
+  void clear_discards() { state_.clear_discards(); }
+
+  uint64_t id() const { return state_.id(); }
+  uint32_t batch_size() const { return n_; }
+  DataType dtype() const { return state_.dtype(); }
+  RouteID route_id() const { return state_.route_id(); }
+  ModelID model_id() const { return state_.model_id(); }
+  uint32_t next_layer() const { return state_.next_layer(); }
+  InferenceStage next_stage() const { return state_.next_stage(); }
+  bool has_activations() const { return state_.has_activations(); }
+  bool has_queries() const { return state_.has_queries(); }
+  bool has_kvs() const { return state_.has_kvs(); }
+  uint32_t discarded_contexts() const { return state_.discarded_contexts(); }
+
+  const PromptID& discarded_prompt_id( const size_t i ) const { return state_.discarded_prompt_id( i ); }
+
+  void set_prompt( const size_t i,
+                   PromptID prompt_id,
+                   uint32_t token,
+                   uint32_t token_pos,
+                   float temperature,
+                   uint32_t prompt_length )
+  {
+    state_.set_prompt( off_ + i, prompt_id, token, token_pos, temperature, prompt_length );
+  }
+
+  PromptID prompt_id( const size_t i ) const { return state_.prompt_id( off_ + i ); }
+  uint32_t token( const size_t i ) const { return state_.token( off_ + i ); }
+  uint32_t token_pos( const size_t i ) const { return state_.token_pos( off_ + i ); }
+  uint32_t prompt_length( const size_t i ) const { return state_.prompt_length( off_ + i ); }
+  float temperature( const size_t i ) const { return state_.temperature( off_ + i ); }
+  bool finished( const size_t i ) const { return state_.finished( off_ + i ); }
+  bool active( const size_t i ) const { return state_.active( off_ + i ); }
+
+  void set_prompt_id( const size_t i, PromptID prompt_id ) { state_.set_prompt_id( off_ + i, prompt_id ); }
+  void set_token( const size_t i, uint32_t token ) { state_.set_token( off_ + i, token ); }
+  void set_token_pos( const size_t i, uint32_t token_pos ) { state_.set_token_pos( off_ + i, token_pos ); }
+  void set_prompt_length( const size_t i, uint32_t len ) { state_.set_prompt_length( off_ + i, len ); }
+  void set_temperature( const size_t i, float t ) { state_.set_temperature( off_ + i, t ); }
+  void set_finished( const size_t i ) { state_.set_finished( off_ + i ); }
+
+  void discard( const size_t i ) { state_.discard( off_ + i ); }
+
+  std::span<uint8_t> activations( const size_t i ) { return state_.activations( off_ + i ); }
+  std::span<uint8_t> q( const size_t i ) { return state_.q( off_ + i ); }
+  std::span<uint8_t> kv( const size_t i ) { return state_.kv( off_ + i ); }
+
+  std::span<const uint8_t> activations( const size_t i ) const { return state_.activations( off_ + i ); }
+  std::span<const uint8_t> q( const size_t i ) const { return state_.q( off_ + i ); }
+  std::span<const uint8_t> kv( const size_t i ) const { return state_.kv( off_ + i ); }
+
+  DataBuffer& activations() { return state_.activations(); }
+  DataBuffer& queries() { return state_.queries(); }
+  DataBuffer& kvs() { return state_.kvs(); }
+
+  const DataBuffer& activations() const { return state_.activations(); }
+  const DataBuffer& queries() const { return state_.queries(); }
+  const DataBuffer& kvs() const { return state_.kvs(); }
+
+  void allocate_activations() { state_.allocate_activations(); }
+  void allocate_queries() { state_.allocate_queries(); }
+  void allocate_kvs() { state_.allocate_kvs(); }
+
+  void deallocate_activations() { state_.deallocate_activations(); }
+  void deallocate_queries() { state_.deallocate_queries(); }
+  void deallocate_kvs() { state_.deallocate_kvs(); }
+
+  size_t free_slots() const { return state_.free_slots(); }
+
+  bool replenish_from( BatchedInferenceStateSpan& other ) { throw std::runtime_error( "not available" ); }
+
+  void merge( BatchedInferenceStateSpan&& other ) { throw std::runtime_error( "not available" ); }
+  std::string debug_string( const bool prompt_details = false ) const { return state_.debug_string( prompt_details ); }
+  std::pair<BatchedInferenceStateSpan, BatchedInferenceStateSpan> split( const size_t n )
+  {
+    throw std::runtime_error( "not available" );
+  }
+};
+
+static_assert( StateConcept<BatchedInferenceStateSpan<models::llama2::configs::Stories_110M>> );
+
+/*** Implementations ***/
+
+template<typename Config>
 BatchedInferenceState<Config>::BatchedInferenceState( uint32_t batch_size,
                                                       DataType dtype,
                                                       RouteID route_id,
