@@ -12,6 +12,126 @@
 
 namespace glinthawk::models {
 
+struct __attribute__( ( packed ) ) Metadata
+{
+  uint64_t id {};
+
+  uint32_t batch_size {};
+  DataType dtype { DataType::Float32 };
+  RouteID route_id {};
+  ModelID model_id {};
+  uint32_t next_layer { 0 };
+  InferenceStage next_stage { InferenceStage::PreAttention };
+
+  bool has_activations { false };
+  bool has_queries { false };
+  bool has_kvs { false };
+
+  uint32_t discarded_contexts { 0 };
+};
+
+/// @brief This struct is used to keep track of prompts that are done, and the workers can safely discard them.
+struct __attribute__( ( packed ) ) DiscardedContext
+{
+  PromptID prompt_id {};
+};
+
+struct __attribute__( ( packed ) ) PromptData
+{
+  bool active { false };
+
+  PromptID prompt_id {};
+  uint32_t token {};
+  uint32_t token_pos {};
+  uint8_t temperature {}; // compact temprature, between [0, 255]; has to be divided by 255.0f before use.
+  uint32_t prompt_length {};
+  bool finished { false };
+};
+
+template<typename T>
+concept StateConcept = requires( T state, const T cstate, const std::string cstr ) {
+  { T( cstr ) } -> std::same_as<T>;
+  { state.serialize() } -> std::same_as<std::string>;
+
+  { state.empty() } -> std::same_as<bool>;
+
+  { state.set_id( 0 ) };
+  { state.set_dtype( DataType::Float32 ) };
+  { state.set_route_id( {} ) };
+  { state.set_model_id( {} ) };
+  { state.set_next_layer( 0 ) };
+  { state.set_next_stage( InferenceStage::PreAttention ) };
+  { state.set_has_activations( false ) };
+  { state.set_has_queries( false ) };
+  { state.set_has_kvs( false ) };
+  { state.clear_discards() };
+
+  { cstate.id() } -> std::same_as<uint64_t>;
+  { cstate.batch_size() } -> std::same_as<uint32_t>;
+  { cstate.dtype() } -> std::same_as<DataType>;
+  { cstate.route_id() } -> std::same_as<RouteID>;
+  { cstate.model_id() } -> std::same_as<ModelID>;
+  { cstate.next_layer() } -> std::same_as<uint32_t>;
+  { cstate.next_stage() } -> std::same_as<InferenceStage>;
+  { cstate.has_activations() } -> std::same_as<bool>;
+  { cstate.has_queries() } -> std::same_as<bool>;
+  { cstate.has_kvs() } -> std::same_as<bool>;
+  { cstate.discarded_contexts() } -> std::same_as<uint32_t>;
+
+  { state.discarded_prompt_id( 0 ) } -> std::same_as<const PromptID&>;
+
+  { state.set_prompt( 0, {}, 0, 0, 0.0f, 0 ) };
+  { state.prompt_id( 0 ) } -> std::same_as<PromptID>;
+  { state.token( 0 ) } -> std::same_as<uint32_t>;
+  { state.token_pos( 0 ) } -> std::same_as<uint32_t>;
+  { state.prompt_length( 0 ) } -> std::same_as<uint32_t>;
+  { state.temperature( 0 ) } -> std::same_as<float>;
+  { state.finished( 0 ) } -> std::same_as<bool>;
+  { state.active( 0 ) } -> std::same_as<bool>;
+
+  { state.set_prompt_id( 0, {} ) };
+  { state.set_token( 0, 0 ) };
+  { state.set_token_pos( 0, 0 ) };
+  { state.set_prompt_length( 0, 0 ) };
+  { state.set_temperature( 0, 0.0f ) };
+  { state.set_finished( 0 ) };
+
+  { state.discard( 0 ) };
+
+  { state.activations( 0 ) } -> std::same_as<std::span<uint8_t>>;
+  { state.q( 0 ) } -> std::same_as<std::span<uint8_t>>;
+  { state.kv( 0 ) } -> std::same_as<std::span<uint8_t>>;
+
+  { state.activations() } -> std::same_as<DataBuffer&>;
+  { state.queries() } -> std::same_as<DataBuffer&>;
+  { state.kvs() } -> std::same_as<DataBuffer&>;
+
+  { cstate.activations( 0 ) } -> std::same_as<std::span<const uint8_t>>;
+  { cstate.q( 0 ) } -> std::same_as<std::span<const uint8_t>>;
+  { cstate.kv( 0 ) } -> std::same_as<std::span<const uint8_t>>;
+
+  { cstate.activations() } -> std::same_as<const DataBuffer&>;
+  { cstate.queries() } -> std::same_as<const DataBuffer&>;
+  { cstate.kvs() } -> std::same_as<const DataBuffer&>;
+
+  { state.allocate_activations() };
+  { state.allocate_queries() };
+  { state.allocate_kvs() };
+
+  { state.deallocate_activations() };
+  { state.deallocate_queries() };
+  { state.deallocate_kvs() };
+
+  { state.free_slots() } -> std::same_as<size_t>;
+
+  { state.replenish_from( state ) } -> std::same_as<bool>;
+  { state.split( 0 ) } -> std::same_as<std::pair<T, T>>;
+  { state.merge( std::move( state ) ) };
+
+  { cstate.debug_string() } -> std::same_as<std::string>;
+  { cstate.debug_string( true ) } -> std::same_as<std::string>;
+};
+
 // NOTE(sadjad): right now, inference state is designed to be used by Llama and Llama-like models. We need to work out
 // the generality later.
 template<typename Config>
@@ -19,41 +139,6 @@ requires llama2::ModelConfig<Config>
 class BatchedInferenceState
 {
 private:
-  struct __attribute__( ( packed ) ) Metadata
-  {
-    uint64_t id {}; // only used internally
-
-    uint32_t batch_size {};
-    DataType dtype { DataType::Float32 };
-    RouteID route_id {};
-    ModelID model_id {};
-    uint32_t next_layer { 0 };
-    InferenceStage next_stage { InferenceStage::PreAttention };
-
-    bool has_activations { false };
-    bool has_queries { false };
-    bool has_kvs { false };
-
-    uint32_t discarded_contexts { 0 };
-  };
-
-  struct __attribute__( ( packed ) ) DiscardedContext
-  {
-    PromptID prompt_id {};
-  };
-
-  struct __attribute__( ( packed ) ) PromptData
-  {
-    bool active { false };
-
-    PromptID prompt_id {};
-    uint32_t token {};
-    uint32_t token_pos {};
-    uint8_t temperature {}; // compact temprature, between [0, 255]; has to be divided by 255.0f before use.
-    uint32_t prompt_length {};
-    bool finished { false };
-  };
-
   Metadata metadata_ {};
   std::vector<DiscardedContext> discarded_contexts_ {};
   std::vector<PromptData> prompts_ {};
@@ -100,7 +185,7 @@ public:
 
   // metadata setters
   void set_id( const uint64_t id ) { metadata_.id = id; }
-  void set_dtype( const DataType dtype ) { metadata_.dtype_ = dtype; }
+  void set_dtype( const DataType dtype ) { metadata_.dtype = dtype; }
   void set_route_id( const RouteID route_id ) { metadata_.route_id = route_id; }
   void set_model_id( const ModelID model_id ) { metadata_.model_id = model_id; }
   void set_next_layer( const uint32_t next_layer ) { metadata_.next_layer = next_layer; }
@@ -197,8 +282,10 @@ public:
   /// @return The merged state.
   void merge( BatchedInferenceState&& other );
 
-  std::string debug_string( const bool prompt_details ) const;
+  std::string debug_string( const bool prompt_details = false ) const;
 };
+
+static_assert( StateConcept<BatchedInferenceState<models::llama2::configs::Stories_110M>> );
 
 template<typename Config>
 BatchedInferenceState<Config>::BatchedInferenceState( uint32_t batch_size,
