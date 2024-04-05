@@ -12,7 +12,7 @@
 
 namespace glinthawk::models {
 
-struct __attribute__( ( packed ) ) Metadata
+struct __attribute__( ( packed ) ) StateMetadata
 {
   uint64_t id {};
 
@@ -132,6 +132,12 @@ concept StateConcept = requires( T state, const T cstate, const std::string cstr
   { cstate.debug_string( true ) } -> std::same_as<std::string>;
 };
 
+// Forward declaration for BatchedInferenceStateSpan
+
+template<typename Config>
+requires llama2::ModelConfig<Config>
+class BatchedInferenceStateSpan;
+
 // NOTE(sadjad): right now, inference state is designed to be used by Llama and Llama-like models. We need to work out
 // the generality later.
 template<typename Config>
@@ -139,7 +145,7 @@ requires llama2::ModelConfig<Config>
 class BatchedInferenceState
 {
 private:
-  Metadata metadata_ {};
+  StateMetadata metadata_ {};
   std::vector<DiscardedContext> discarded_contexts_ {};
   std::vector<PromptData> prompts_ {};
 
@@ -275,6 +281,11 @@ public:
   /// @return A pair of states.
   std::pair<BatchedInferenceState, BatchedInferenceState> split( const size_t n );
 
+  /// @brief Like `split`, but creates spans of the current state instead of a new state.
+  /// @param n The size of the first state span.
+  /// @return A pair of StateSpans.
+  std::pair<BatchedInferenceStateSpan<Config>, BatchedInferenceStateSpan<Config>> soft_split( const size_t n );
+
   /// @brief Merge the current state with another state. The difference between this and replenish_from is that this
   /// function merges the states, while replenish_from only replaces inactive prompts. The second state after merging
   /// will always be empty.
@@ -394,12 +405,13 @@ public:
 
   bool replenish_from( BatchedInferenceStateSpan& other ) { throw std::runtime_error( "not available" ); }
 
-  void merge( BatchedInferenceStateSpan&& other ) { throw std::runtime_error( "not available" ); }
-  std::string debug_string( const bool prompt_details = false ) const { return state_.debug_string( prompt_details ); }
   std::pair<BatchedInferenceStateSpan, BatchedInferenceStateSpan> split( const size_t n )
   {
     throw std::runtime_error( "not available" );
   }
+
+  void merge( BatchedInferenceStateSpan&& other ) { throw std::runtime_error( "not available" ); }
+  std::string debug_string( const bool prompt_details = false ) const { return state_.debug_string( prompt_details ); }
 };
 
 static_assert( StateConcept<BatchedInferenceStateSpan<models::llama2::configs::Stories_110M>> );
@@ -444,11 +456,11 @@ BatchedInferenceState<Config>::BatchedInferenceState( const std::string_view ser
   auto ptr = serialized_state.data();
 
   // we need to make sure that the serialized state is at least as big as the metadata
-  size_t expected_size = sizeof( Metadata );
+  size_t expected_size = sizeof( StateMetadata );
   CHECK_GE( serialized_state.size(), expected_size ) << "Serialized state is too small to contain metadata";
 
-  metadata_ = *reinterpret_cast<const Metadata*>( ptr );
-  ptr += sizeof( Metadata );
+  metadata_ = *reinterpret_cast<const StateMetadata*>( ptr );
+  ptr += sizeof( StateMetadata );
 
   expected_size += sizeof( DiscardedContext ) * metadata_.discarded_contexts;
   expected_size += sizeof( PromptData ) * metadata_.batch_size;
@@ -499,7 +511,7 @@ template<typename Config>
 std::string BatchedInferenceState<Config>::serialize() const
 {
   std::string serialized_state;
-  const size_t expected_size = sizeof( Metadata )                                                    /* metadata */
+  const size_t expected_size = sizeof( StateMetadata )                                               /* metadata */
                                + sizeof( DiscardedContext ) * discarded_contexts_.size()             /* discards */
                                + sizeof( PromptData ) * metadata_.batch_size                         /* prompts */
                                + ( has_activations() ? metadata_.batch_size * activation_len() : 0 ) /* activations */
@@ -509,7 +521,7 @@ std::string BatchedInferenceState<Config>::serialize() const
   // reserve enough space for the state
   serialized_state.reserve( expected_size );
 
-  serialized_state.append( reinterpret_cast<const char*>( &metadata_ ), sizeof( Metadata ) );
+  serialized_state.append( reinterpret_cast<const char*>( &metadata_ ), sizeof( StateMetadata ) );
 
   serialized_state.append( reinterpret_cast<const char*>( discarded_contexts_.data() ),
                            discarded_contexts_.size() * sizeof( DiscardedContext ) );
@@ -746,6 +758,22 @@ std::pair<BatchedInferenceState<Config>, BatchedInferenceState<Config>> BatchedI
   }
 
   return std::make_pair( std::move( state_a ), std::move( state_b ) );
+}
+
+template<typename Config>
+std::pair<BatchedInferenceStateSpan<Config>, BatchedInferenceStateSpan<Config>>
+BatchedInferenceState<Config>::soft_split( const size_t n )
+{
+  CHECK_LT( n, metadata_.batch_size ) << "n must be less than the batch size";
+  CHECK_GT( n, 0 ) << "n must be greater than 0";
+
+  DLOG( INFO ) << "Splitting state of size " << metadata_.batch_size << " into states of sizes " << n << " and "
+               << ( metadata_.batch_size - n ) << ".";
+
+  BatchedInferenceStateSpan<Config> state_a( *this, 0, n );
+  BatchedInferenceStateSpan<Config> state_b( *this, n, metadata_.batch_size - n );
+
+  return std::make_pair( state_a, state_b );
 }
 
 template<typename Config>
