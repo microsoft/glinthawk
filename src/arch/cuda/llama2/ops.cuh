@@ -22,7 +22,7 @@ public:
   using ContextType = Ctx;
 
 private:
-  std::unique_ptr<curandState, models::common::cuda::CUDADeleter<curandState>> rng_state { nullptr };
+  mutable std::unique_ptr<curandState, models::common::cuda::CUDADeleter<curandState>> rng_state { nullptr };
   void setup_rng( unsigned long seed, const uint64_t size, const uint64_t batch_size );
 
 public:
@@ -33,31 +33,34 @@ public:
                          const typename ContextType::LayerContextType layer_contexts[],
                          DType* att,
                          const uint64_t batch_size,
-                         const uint32_t* token_positions );
+                         const uint32_t* token_positions ) const;
 
   void attention_2_gemm( const DType* att,
                          const typename ContextType::LayerContextType layer_contexts[],
                          DType* xb,
                          const uint64_t batch_size,
-                         const uint32_t* token_positions );
+                         const uint32_t* token_positions ) const;
 
-  void attention_softmax( DType* att, const uint32_t* token_positions, DType* temp_buffer, const uint64_t batch_size );
+  void attention_softmax( DType* att,
+                          const uint32_t* token_positions,
+                          DType* temp_buffer,
+                          const uint64_t batch_size ) const;
 
   void apply_rope( const uint64_t curr_batch_size,
                    const uint32_t* token_positions,
                    const DType* freq_cis_real,
                    const DType* freq_cis_imag,
                    DType* state_q,
-                   typename ContextType::TokenContextType token_contexts[] );
+                   typename ContextType::TokenContextType token_contexts[] ) const;
 
-  void soft_sample( DType* v, const std::vector<glinthawk::float32_t>& temp_s, const uint64_t batch_size );
+  void soft_sample( DType* v, const std::vector<glinthawk::float32_t>& temp_s, const uint64_t batch_size ) const;
 
   void copy_kv_cache( typename ContextType::TokenContextType token_contexts[],
                       const DType* state_kv,
-                      const uint64_t batch_size );
+                      const uint64_t batch_size ) const;
 
   template<typename DTypeDst, typename DTypeSrc>
-  void convert_and_copy( DTypeDst* dst, const DTypeSrc* src, const uint64_t size, const CopyType );
+  void convert_and_copy( DTypeDst* dst, const DTypeSrc* src, const uint64_t size, const CopyType ) const;
 };
 
 template<typename Config, typename DType>
@@ -292,7 +295,7 @@ void LlamaOperations<Config, DType, ContextType>::attention_0_gemm(
   const typename ContextType::LayerContextType layer_contexts[],
   DType* att,
   const uint64_t batch_size,
-  const uint32_t* token_positions )
+  const uint32_t* token_positions ) const
 {
   static_assert( ContextType::LayerContextType::is_contiguous(), "ContextType::LayerContextType must be contiguous" );
 
@@ -344,7 +347,7 @@ void LlamaOperations<Config, DType, ContextType>::attention_2_gemm(
   const ContextType::LayerContextType layer_contexts[],
   DType* xb,
   const uint64_t batch_size,
-  const uint32_t* token_positions )
+  const uint32_t* token_positions ) const
 {
   static_assert( ContextType::LayerContextType::is_contiguous(), "ContextType::LayerContextType must be contiguous" );
 
@@ -400,7 +403,7 @@ template<typename Config, typename DType, typename ContextType>
 void LlamaOperations<Config, DType, ContextType>::attention_softmax( DType* att,
                                                                      const uint32_t* token_positions,
                                                                      DType* temp_buffer,
-                                                                     const uint64_t batch_size )
+                                                                     const uint64_t batch_size ) const
 {
   for ( uint64_t i = 0; i < batch_size; i++ ) {
     DType* this_att = att + i * Config::n_heads * Config::seq_len;
@@ -425,12 +428,13 @@ void LlamaOperations<Config, DType, ContextType>::attention_softmax( DType* att,
 }
 
 template<typename Config, typename DType, typename ContextType>
-void LlamaOperations<Config, DType, ContextType>::apply_rope( const uint64_t curr_batch_size,
-                                                              const uint32_t* token_positions,
-                                                              const DType* freq_cis_real,
-                                                              const DType* freq_cis_imag,
-                                                              DType* state_q,
-                                                              typename ContextType::TokenContextType token_contexts[] )
+void LlamaOperations<Config, DType, ContextType>::apply_rope(
+  const uint64_t curr_batch_size,
+  const uint32_t* token_positions,
+  const DType* freq_cis_real,
+  const DType* freq_cis_imag,
+  DType* state_q,
+  typename ContextType::TokenContextType token_contexts[] ) const
 {
   for ( uint64_t i = 0; i < curr_batch_size; i++ ) {
     do_rope<DType, Config::head_size, Config::gqa_size>
@@ -445,7 +449,7 @@ void LlamaOperations<Config, DType, ContextType>::apply_rope( const uint64_t cur
 template<typename Config, typename DType, typename ContextType>
 void LlamaOperations<Config, DType, ContextType>::soft_sample( DType* v,
                                                                const std::vector<float>& temp_s,
-                                                               const uint64_t batch_size )
+                                                               const uint64_t batch_size ) const
 {
   for ( uint64_t i = 0; i < batch_size; i++ ) {
     if ( temp_s[i] > 0 ) {
@@ -459,7 +463,7 @@ template<typename Config, typename DType, typename ContextType>
 void LlamaOperations<Config, DType, ContextType>::copy_kv_cache(
   typename ContextType::TokenContextType token_contexts[],
   const DType* state_kv,
-  const uint64_t batch_size )
+  const uint64_t batch_size ) const
 {
   for ( size_t i = 0; i < batch_size; i++ ) {
     if ( token_contexts[i].empty() ) {
@@ -480,7 +484,7 @@ template<typename DTypeDst, typename DTypeSrc>
 void LlamaOperations<Config, DType, ContextType>::convert_and_copy( DTypeDst* dst,
                                                                     const DTypeSrc* src,
                                                                     const uint64_t size,
-                                                                    const CopyType type )
+                                                                    const CopyType type ) const
 {
   switch ( type ) {
     case CopyType::DeviceToHost: {

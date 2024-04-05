@@ -27,28 +27,32 @@ public:
   Operations& operator=( Operations&& ) = default;
 
   template<uint64_t size>
-  void accum( DType* a, const DType* b, const uint64_t batch_size );
+  void accum( DType* a, const DType* b, const uint64_t batch_size ) const;
 
   template<uint64_t size>
-  void rmsnorm( DType* o, const DType* x, DType* temp, const DType* weight, const uint64_t batch_size );
+  void rmsnorm( DType* o, const DType* x, DType* temp, const DType* weight, const uint64_t batch_size ) const;
 
   template<uint64_t n>
-  void argmax( uint32_t* output, const DType* v, DType* temp, const uint64_t batch_size );
+  void argmax( uint32_t* output, const DType* v, DType* temp, const uint64_t batch_size ) const;
 
   template<uint64_t hidden_dim>
-  void silu( DType* hb, DType* hb2, const uint64_t batch_size );
+  void silu( DType* hb, DType* hb2, const uint64_t batch_size ) const;
 
   template<uint64_t s, uint64_t r>
-  void matmul( DType* xo, const DType* x, const DType* w, const uint64_t b );
+  void matmul( DType* xo, const DType* x, const DType* w, const uint64_t b ) const;
 
   template<uint64_t vocab_size>
-  void soft_sample( DType* v, const std::vector<float>& temp_s, const uint64_t batch_size );
+  void soft_sample( DType* v, const std::vector<float>& temp_s, const uint64_t batch_size ) const;
 
-  DeviceUniquePtr device_allocate( const uint64_t size_bytes );
+  DeviceUniquePtr device_allocate( const uint64_t size_bytes ) const;
 
-  void randomize_device_buffer( DType* buffer, const uint64_t len, const float min, const float max );
+  void randomize_device_buffer( DType* buffer, const uint64_t len, const float min, const float max ) const;
 
-  void copy( DType* dst, const DType* src, const uint64_t len_bytes, const CopyType type, const bool async = false );
+  void copy( DType* dst,
+             const DType* src,
+             const uint64_t len_bytes,
+             const CopyType type,
+             const bool async = false ) const;
 
   void copy_table( DType* dst,
                    const DType* src,
@@ -94,7 +98,7 @@ void fast_matmul_row_major( uint64_t n, const DType* A, const DType* B, DType* C
 
 template<typename DType>
 template<uint64_t size>
-void Operations<DType>::accum( DType* a, const DType* b, const uint64_t batch_size )
+void Operations<DType>::accum( DType* a, const DType* b, const uint64_t batch_size ) const
 {
   uint64_t b_idx;
   uint64_t i;
@@ -110,6 +114,7 @@ void Operations<DType>::accum( DType* a, const DType* b, const uint64_t batch_si
 template<typename DType>
 template<uint64_t size>
 void Operations<DType>::rmsnorm( DType* output, const DType* x, DType*, const DType* weight, const uint64_t batch_size )
+  const
 {
   uint64_t b;
 #pragma omp parallel for private( b )
@@ -137,7 +142,7 @@ void Operations<DType>::rmsnorm( DType* output, const DType* x, DType*, const DT
 
 template<typename DType>
 template<uint64_t n>
-void Operations<DType>::argmax( uint32_t* output, const DType* v, DType*, const uint64_t batch_size )
+void Operations<DType>::argmax( uint32_t* output, const DType* v, DType*, const uint64_t batch_size ) const
 {
   uint64_t b;
 #pragma omp parallel for private( b )
@@ -160,7 +165,7 @@ void Operations<DType>::argmax( uint32_t* output, const DType* v, DType*, const 
 
 template<typename DType>
 template<uint64_t hidden_dim>
-void Operations<DType>::silu( DType* hb, DType* hb2, const uint64_t batch_size )
+void Operations<DType>::silu( DType* hb, DType* hb2, const uint64_t batch_size ) const
 {
   uint64_t b;
 #pragma omp parallel for private( b )
@@ -178,7 +183,7 @@ void Operations<DType>::silu( DType* hb, DType* hb2, const uint64_t batch_size )
 
 template<typename DType>
 template<uint64_t s, uint64_t r>
-void Operations<DType>::matmul( DType* xout, const DType* x, const DType* w, const uint64_t b )
+void Operations<DType>::matmul( DType* xout, const DType* x, const DType* w, const uint64_t b ) const
 {
   // x(b,s) @ W(s,r) -> xout(b,r)
   // OR
@@ -196,13 +201,13 @@ void Operations<DType>::matmul( DType* xout, const DType* x, const DType* w, con
 }
 
 template<typename DType>
-Operations<DType>::DeviceUniquePtr Operations<DType>::device_allocate( const uint64_t size )
+Operations<DType>::DeviceUniquePtr Operations<DType>::device_allocate( const uint64_t size ) const
 {
   return DeviceUniquePtr { reinterpret_cast<DType*>( new uint8_t[size] ) };
 }
 
 template<typename DType>
-void Operations<DType>::copy( DType* dst, const DType* src, const uint64_t len_bytes, const CopyType, const bool )
+void Operations<DType>::copy( DType* dst, const DType* src, const uint64_t len_bytes, const CopyType, const bool ) const
 {
   std::memcpy( dst, src, len_bytes );
 }
@@ -223,7 +228,10 @@ void Operations<DType>::copy_table( DType* dst,
 }
 
 template<typename DType>
-void Operations<DType>::randomize_device_buffer( DType* buffer, const uint64_t len, const float min, const float max )
+void Operations<DType>::randomize_device_buffer( DType* buffer,
+                                                 const uint64_t len,
+                                                 const float min,
+                                                 const float max ) const
 {
   util::randomize_buffer( buffer, len, min, max );
 }

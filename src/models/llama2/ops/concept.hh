@@ -13,7 +13,7 @@ namespace {
 constexpr uint64_t UI64 = 1;
 
 template<typename T, typename DType, typename Settings>
-concept AdditionalLlamaOperationsConcept = requires( T t,
+concept AdditionalLlamaOperationsConcept = requires( const T t,
                                                      void* ptr_void,
                                                      DType* ptr,
                                                      DType* arr[],

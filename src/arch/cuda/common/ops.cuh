@@ -41,9 +41,9 @@ public:
   using Float32 = glinthawk::float32_t;
 
 protected:
-  cudaStream_t* streams { nullptr };
-  cublasHandle_t cublas_handle_default {};
-  cublasHandle_t* cublas_handle_array { nullptr };
+  mutable cudaStream_t* streams { nullptr };
+  mutable cublasHandle_t cublas_handle_default {};
+  mutable cublasHandle_t* cublas_handle_array { nullptr };
   int cublas_handle_count {};
 
   constexpr static cublasComputeType_t computeType = CUBLAS_COMPUTE_32F;
@@ -60,28 +60,32 @@ public:
   Operations& operator=( Operations&& ) = default;
 
   template<uint64_t size>
-  void accum( DType* a, const DType* b, const uint64_t batch_size );
+  void accum( DType* a, const DType* b, const uint64_t batch_size ) const;
 
   template<uint64_t size>
-  void rmsnorm( DType* o, const DType* x, DType* temp, const DType* weight, const uint64_t batch_size );
+  void rmsnorm( DType* o, const DType* x, DType* temp, const DType* weight, const uint64_t batch_size ) const;
 
   template<uint64_t n>
-  void argmax( uint32_t* output, const DType* v, DType* temp, const uint64_t batch_size );
+  void argmax( uint32_t* output, const DType* v, DType* temp, const uint64_t batch_size ) const;
 
   template<uint64_t hidden_dim>
-  void silu( DType* hb, DType* hb2, const uint64_t batch_size );
+  void silu( DType* hb, DType* hb2, const uint64_t batch_size ) const;
 
   template<uint64_t s, uint64_t r>
-  void matmul( DType* xo, const DType* x, const DType* w, const uint64_t b );
+  void matmul( DType* xo, const DType* x, const DType* w, const uint64_t b ) const;
 
   template<uint64_t vocab_size>
-  void soft_sample( DType* v, const std::vector<float>& temp_s, const uint64_t batch_size );
+  void soft_sample( DType* v, const std::vector<float>& temp_s, const uint64_t batch_size ) const;
 
-  DeviceUniquePtr device_allocate( const uint64_t size_bytes );
+  DeviceUniquePtr device_allocate( const uint64_t size_bytes ) const;
 
-  void randomize_device_buffer( DType* buffer, const uint64_t len, const float min, const float max );
+  void randomize_device_buffer( DType* buffer, const uint64_t len, const float min, const float max ) const;
 
-  void copy( DType* dst, const DType* l, const uint64_t batch_size, const CopyType type, const bool async = false );
+  void copy( DType* dst,
+             const DType* l,
+             const uint64_t batch_size,
+             const CopyType type,
+             const bool async = false ) const;
 
   void copy_table( DType* dst,
                    const DType* src,
@@ -482,7 +486,7 @@ template<>
 template<uint64_t size>
 void Operations<glinthawk::float32_t>::accum( glinthawk::float32_t* a,
                                               const glinthawk::float32_t* b,
-                                              const uint64_t batch_size )
+                                              const uint64_t batch_size ) const
 {
   const glinthawk::float32_t alpha = 1.0f;
   CHECK_CUBLAS( cublasSaxpy( cublas_handle_default, size * batch_size, &alpha, b, 1, a, 1 ) );
@@ -492,7 +496,7 @@ template<>
 template<uint64_t size>
 void Operations<glinthawk::float16_t>::accum( glinthawk::float16_t* a,
                                               const glinthawk::float16_t* b,
-                                              const uint64_t batch_size )
+                                              const uint64_t batch_size ) const
 {
   accum_cuda<<<div_ceil( size * batch_size, TPB ), TPB>>>( a, b, size * batch_size );
 }
@@ -503,7 +507,7 @@ void Operations<glinthawk::float16_t>::rmsnorm( glinthawk::float16_t* output,
                                                 const glinthawk::float16_t* x,
                                                 glinthawk::float16_t* temp,
                                                 const glinthawk::float16_t* weight,
-                                                const uint64_t batch_size )
+                                                const uint64_t batch_size ) const
 {
   square_reduce_step_1<size>( reinterpret_cast<glinthawk::float32_t*>( temp ), x, batch_size );
 
@@ -517,7 +521,7 @@ void Operations<glinthawk::float32_t>::rmsnorm( glinthawk::float32_t* output,
                                                 const glinthawk::float32_t* x,
                                                 glinthawk::float32_t* temp,
                                                 const glinthawk::float32_t* weight,
-                                                const uint64_t batch_size )
+                                                const uint64_t batch_size ) const
 {
   for ( size_t i = 0; i < batch_size; i++ ) {
     CHECK_CUBLAS( cublasSdot( cublas_handle_default, size, x + i * size, 1, x + i * size, 1, temp + i ) );
@@ -527,7 +531,7 @@ void Operations<glinthawk::float32_t>::rmsnorm( glinthawk::float32_t* output,
 
 template<typename DType>
 template<uint64_t n>
-void Operations<DType>::argmax( uint32_t* output, const DType* v, DType* temp, const uint64_t batch_size )
+void Operations<DType>::argmax( uint32_t* output, const DType* v, DType* temp, const uint64_t batch_size ) const
 {
   argmax_step_1<DType, n>( reinterpret_cast<uint32_t*>( temp ), v, batch_size );
   CHECK_CUDA( cudaMemcpy( output, temp, batch_size * sizeof( uint32_t ), cudaMemcpyDeviceToHost ) );
@@ -535,14 +539,14 @@ void Operations<DType>::argmax( uint32_t* output, const DType* v, DType* temp, c
 
 template<typename DType>
 template<uint64_t hidden_dim>
-void Operations<DType>::silu( DType* hb, DType* hb2, const uint64_t batch_size )
+void Operations<DType>::silu( DType* hb, DType* hb2, const uint64_t batch_size ) const
 {
   silu_direct<<<div_ceil( hidden_dim * batch_size, TPB ), TPB>>>( hb, hb2, hidden_dim * batch_size );
 }
 
 template<typename DType>
 template<uint64_t s, uint64_t r>
-void Operations<DType>::matmul( DType* xout, const DType* x, const DType* W, const uint64_t b )
+void Operations<DType>::matmul( DType* xout, const DType* x, const DType* W, const uint64_t b ) const
 {
   constexpr cudaDataType_t cuda_arg_type = std::is_same_v<DType, glinthawk::float16_t> ? CUDA_R_16F : CUDA_R_32F;
 
@@ -579,7 +583,7 @@ void Operations<DType>::matmul( DType* xout, const DType* x, const DType* W, con
 }
 
 template<typename DType>
-Operations<DType>::DeviceUniquePtr Operations<DType>::device_allocate( const uint64_t size_bytes )
+Operations<DType>::DeviceUniquePtr Operations<DType>::device_allocate( const uint64_t size_bytes ) const
 {
   DType* ptr;
   CHECK_CUDA( cudaMalloc( &ptr, size_bytes ) );
@@ -591,7 +595,7 @@ void Operations<DType>::copy( DType* dst,
                               const DType* l,
                               const uint64_t size_bytes,
                               const CopyType type,
-                              const bool async )
+                              const bool async ) const
 {
   auto convert_to_cuda = []( const CopyType type ) {
     switch ( type ) {
@@ -646,7 +650,10 @@ void Operations<DType>::copy_table( DType* dst,
 }
 
 template<typename DType>
-void Operations<DType>::randomize_device_buffer( DType* buffer, const uint64_t len, const float min, const float max )
+void Operations<DType>::randomize_device_buffer( DType* buffer,
+                                                 const uint64_t len,
+                                                 const float min,
+                                                 const float max ) const
 {
   std::unique_ptr<DType[]> host_buffer { new DType[len] };
   util::randomize_buffer( host_buffer.get(), len, min, max );

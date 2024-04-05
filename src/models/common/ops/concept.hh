@@ -4,8 +4,8 @@
 #include <cstdint>
 #include <cstring>
 
-#include "models/types.hh"
 #include "arch/float.hh"
+#include "models/types.hh"
 
 namespace glinthawk::models::common {
 
@@ -14,7 +14,7 @@ constexpr uint64_t UI64 = 1;
 }
 
 template<typename T, typename DType>
-concept OperationsConcept = requires( T t,
+concept OperationsConcept = requires( const T t,
                                       DType* ptr1,
                                       const DType* ptr2,
                                       uint32_t* ptr_uint32,
