@@ -85,6 +85,9 @@ public:
                           true,        true,
                           true };
 
+      state.set_next_layer( 1 );
+      state.set_next_stage( stage_ );
+
       if ( first_time ) {
         util::randomize_buffer( reinterpret_cast<ModelDataType*>( state.activations().data() ),
                                 state.activations().len() / sizeof( ModelDataType ),
