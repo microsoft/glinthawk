@@ -287,29 +287,26 @@ void HybridComputeKernel<ModelA, ModelB>::execution_thread_func(
   typename HybridComputeKernel<ModelA, ModelB>::template ModelData<M>& model_data )
 {
   while ( running_ ) {
-    StateType input_state {};
-    StateType output_state {};
+    StateType state {};
 
-    DLOG( WARNING ) << "Current status: "
-                    << "incoming_size=" << incoming_.queue.size() << ", "
-                    << "waiting_size=" << waiting_.queue.size() << ", "
-                    << "a_processing_size=" << a_.processing.size() << ", "
-                    << "b_processing_size=" << b_.processing.size();
+    DLOG( WARNING ) << "Current status: " << "incoming_size=" << incoming_.queue.size() << ", "
+                    << "waiting_size=" << waiting_.queue.size() << ", " << "a_processing_size=" << a_.processing.size()
+                    << ", " << "b_processing_size=" << b_.processing.size();
 
     // get the next state to process
     {
       std::unique_lock lock { model_data.mutex };
       model_data.cv.wait( lock, [&model_data] { return !model_data.processing.empty(); } );
-      input_state = std::move( model_data.processing.top().state );
+      state = std::move( model_data.processing.top().state );
       model_data.processing.pop();
     }
 
-    DLOG( INFO ) << "Popped state from processing: " << input_state.debug_string( false ) << " (by "
+    DLOG( INFO ) << "Popped state from processing: " << state.debug_string( false ) << " (by "
                  << ( std::is_same_v<ModelA, M> ? "A" : "B" ) << ")";
 
-    const auto local_id = input_state.id();
-    const auto next_stage = input_state.next_stage();
-    const auto next_layer = input_state.next_layer();
+    const auto local_id = state.id();
+    const auto next_stage = state.next_stage();
+    const auto next_layer = state.next_layer();
     const auto is_last_step
       = ( next_stage == Stage::Classification )
         or ( next_stage == Stage::PostAttention and next_layer == model_data.model->settings().end_layer_num
@@ -317,9 +314,7 @@ void HybridComputeKernel<ModelA, ModelB>::execution_thread_func(
 
     // run the corresponding forward function
     switch ( next_stage ) {
-      case Stage::PreAttention:
-        output_state = model_data.model->forward_pre_attention( std::move( input_state ) );
-        break;
+      case Stage::PreAttention: model_data.model->forward_pre_attention( state ); break;
 
       case Stage::Attention: {
         std::unique_lock lock { context_mutex_ };
@@ -327,19 +322,16 @@ void HybridComputeKernel<ModelA, ModelB>::execution_thread_func(
         if constexpr ( std::same_as<M, ModelA> ) {
           auto& contexts = context_map_[local_id].first;
           lock.unlock();
-          output_state = model_data.model->forward_attention( std::move( input_state ), contexts );
+          model_data.model->forward_attention( state, contexts );
         } else {
           auto& contexts = context_map_[local_id].second;
           lock.unlock();
-          output_state = model_data.model->forward_attention( std::move( input_state ), contexts );
+          model_data.model->forward_attention( state, contexts );
         }
       } break;
 
-      case Stage::PostAttention:
-        output_state = model_data.model->forward_post_attention( std::move( input_state ) );
-        break;
-
-      case Stage::Classification: output_state = model_data.model->forward_classify( std::move( input_state ) ); break;
+      case Stage::PostAttention: model_data.model->forward_post_attention( state ); break;
+      case Stage::Classification: model_data.model->forward_classify( state ); break;
     }
 
     std::optional<StateType> merged_state;
@@ -349,9 +341,9 @@ void HybridComputeKernel<ModelA, ModelB>::execution_thread_func(
       auto& [state_a, state_b] = splitted_state_map_[local_id];
 
       if constexpr ( std::same_as<M, ModelA> ) {
-        state_a.emplace( std::move( output_state ) );
+        state_a.emplace( std::move( state ) );
       } else {
-        state_b.emplace( std::move( output_state ) );
+        state_b.emplace( std::move( state ) );
       }
 
       if ( state_a.has_value() and state_b.has_value() ) {

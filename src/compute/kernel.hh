@@ -191,7 +191,7 @@ void BatchedComputeKernel<Model>::execution_thread_func()
 
   std::pair<BatchedState, std::vector<ContextPtr>> action;
 
-  BatchedState input_state;
+  BatchedState state;
   std::vector<ContextPtr> contexts;
 
   while ( running_ ) {
@@ -199,20 +199,20 @@ void BatchedComputeKernel<Model>::execution_thread_func()
       std::unique_lock lock( processing_mutex_ );
       processing_cv_.wait( lock, [this] { return !processing_.empty(); } );
 
-      input_state = std::move( processing_.front().first );
+      state = std::move( processing_.front().first );
       contexts = std::move( processing_.front().second );
       processing_.pop();
     }
 
     const auto start = std::chrono::steady_clock::now();
-    auto output_state = model_->forward( std::move( input_state ), contexts );
+    model_->forward( state, contexts );
     const auto duration
       = std::chrono::duration_cast<std::chrono::microseconds>( std::chrono::steady_clock::now() - start );
     __stats__.add_point<IntDistributions::KernelForwardTime>( duration.count() );
 
     {
       std::lock_guard lock( outgoing_mutex_ );
-      outgoing_.emplace( std::move( output_state ) );
+      outgoing_.emplace( std::move( state ) );
     }
 
     event_fd_.write_event();
