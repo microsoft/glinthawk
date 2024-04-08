@@ -601,7 +601,7 @@ bool BatchedWorker<ModelConfig, ComputeKernel>::handle_peer_message( core::Messa
           __stats__.increment<Counters::TokensGenerated>();
 
           if ( state.finished( i ) ) {
-            auto& prompt_id = state.prompt_id( i );
+            const auto& prompt_id = state.prompt_id( i );
             auto& completion = this->completion_manager_->get( prompt_id );
             completion.add_token( state.token( i ) );
             __stats__.increment<Counters::PromptsCompleted>();

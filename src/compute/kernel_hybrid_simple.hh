@@ -259,25 +259,22 @@ void SimpleHybridComputeKernel<ModelA, ModelB>::model_forward( StateType& state 
   const auto next_layer = state.next_layer();
   const auto model_end_layer = model.settings().end_layer_num;
 
-  if ( next_stage == Stage::PostAttention ) {
-    output = model.forward_post_attention( std::move( state ) );
+  switch ( next_stage ) {
+    case Stage::PostAttention:
+      model.forward_post_attention( state );
 
-    if ( output.next_stage() == Stage::PreAttention and next_layer <= model_end_layer ) {
-      // since we serve the next layer, let's do pre-attention right here
-      output = model.forward_pre_attention( std::move( output ) );
-    } else if ( output.next_stage() == Stage::Classification and next_layer == ConfigType::n_layers - 1
-                and next_layer == model_end_layer ) {
-      output = model.forward_classify( std::move( output ) );
-    }
-  } else if ( next_stage == Stage::PreAttention ) {
-    output = model.forward_pre_attention( std::move( state ) );
-  } else if ( next_stage == Stage::Classification ) {
-    output = model.forward_classify( std::move( state ) );
-  } else {
-    LOG( FATAL ) << "Invalid stage: " << next_stage;
+      if ( state.next_stage() == Stage::PreAttention and next_layer <= model_end_layer ) {
+        // since we serve the next layer, let's do pre-attention right here
+        model.forward_pre_attention( state );
+      } else if ( state.next_stage() == Stage::Classification and next_layer == ConfigType::n_layers - 1
+                  and next_layer == model_end_layer ) {
+        model.forward_classify( state );
+      }
+      break;
+
+    case Stage::PreAttention: model.forward_pre_attention( state ); break;
+    case Stage::Classification: model.forward_classify( state ); break;
   }
-
-  state = std::move( output );
 }
 
 template<typename ModelA, typename ModelB>
@@ -289,12 +286,10 @@ void SimpleHybridComputeKernel<ModelA, ModelB>::model_forward( StateType& state,
   const auto next_stage = state.next_stage();
 
   if ( next_stage == Stage::Attention ) {
-    output = model.forward_attention( std::move( state ), contexts );
+    model.forward_attention( state, contexts );
   } else {
     LOG( FATAL ) << "Invalid stage: " << next_stage;
   }
-
-  state = std::move( output );
 }
 
 template<typename ModelA, typename ModelB>

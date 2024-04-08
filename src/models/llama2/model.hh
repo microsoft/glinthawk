@@ -49,21 +49,23 @@ public:
           const uint64_t max_context_count = 1,
           const bool randomize_parameters = false );
 
-  // (input token|activations) -> [(pre -> att -> post) x n_layers] -> (?classify -> output token)
-  template<StateConcept StateType>
-  [[nodiscard]] StateType forward( StateType&& state, const ContextVector& ctxs );
+  /// \note forward_*() functions mutate the input state object.
+  // (input token|activations) -> {forward: [(pre -> att -> post) x n_layers] -> (?classify -> output token)}
 
   template<StateConcept StateType>
-  [[nodiscard]] StateType forward_pre_attention( StateType&& state );
+  void forward( StateType& state, const ContextVector& ctxs );
 
   template<StateConcept StateType>
-  [[nodiscard]] StateType forward_attention( StateType&& state, const ContextVector& ctxs );
+  void forward_pre_attention( StateType& state );
 
   template<StateConcept StateType>
-  [[nodiscard]] StateType forward_post_attention( StateType&& state );
+  void forward_attention( StateType& state, const ContextVector& ctxs );
 
   template<StateConcept StateType>
-  [[nodiscard]] StateType forward_classify( StateType&& state );
+  void forward_post_attention( StateType& state );
+
+  template<StateConcept StateType>
+  void forward_classify( StateType& state );
 
   Settings<Config> settings() const { return settings_; }
   Operations& ops() { return ops_; }
@@ -97,9 +99,7 @@ protected:
   void forward_prelude( StateType& inference_state, const ContextVector& contexts );
 
   template<StateConcept StateType>
-  [[nodiscard]] StateType forward_postlude( StateType&& inference_state,
-                                            const int32_t most_recent_layer_num,
-                                            const bool classified );
+  void forward_postlude( StateType& inference_state, const int32_t most_recent_layer_num, const bool classified );
 
   void pre_attention_ops( const int32_t layer_num, const bool update_kv_cache = false );
   void attention_ops();
@@ -410,9 +410,9 @@ void Llama2<Config, DType, LlamaOperations, Context>::forward_prelude( StateType
 
 template<typename Config, typename DType, typename LlamaOperations, typename Context>
 template<StateConcept StateType>
-StateType Llama2<Config, DType, LlamaOperations, Context>::forward_postlude( StateType&& states,
-                                                                             const int32_t most_recent_layer_num,
-                                                                             const bool classification_done )
+void Llama2<Config, DType, LlamaOperations, Context>::forward_postlude( StateType& states,
+                                                                        const int32_t most_recent_layer_num,
+                                                                        const bool classification_done )
 {
   if ( classification_done ) {
     CHECK_EQ( most_recent_layer_num, Config::n_layers - 1 );
@@ -459,13 +459,11 @@ StateType Llama2<Config, DType, LlamaOperations, Context>::forward_postlude( Sta
       states.set_next_layer( most_recent_layer_num + 1 );
     }
   }
-
-  return std::move( states );
 }
 
 template<typename Config, typename DType, typename LlamaOperations, typename Context>
 template<StateConcept StateType>
-StateType Llama2<Config, DType, LlamaOperations, Context>::forward( StateType&& states, const ContextVector& contexts )
+void Llama2<Config, DType, LlamaOperations, Context>::forward( StateType& states, const ContextVector& contexts )
 {
   forward_prelude( states, contexts );
 
@@ -482,15 +480,15 @@ StateType Llama2<Config, DType, LlamaOperations, Context>::forward( StateType&& 
 
   if ( this->settings_.end_layer_num == Config::n_layers - 1 ) {
     classify_ops();
-    return forward_postlude( std::move( states ), this->settings_.end_layer_num, true );
+    return forward_postlude( states, this->settings_.end_layer_num, true );
   } else {
-    return forward_postlude( std::move( states ), this->settings_.end_layer_num, false );
+    return forward_postlude( states, this->settings_.end_layer_num, false );
   }
 }
 
 template<typename Config, typename DType, typename LlamaOperations, typename Context>
 template<StateConcept StateType>
-StateType Llama2<Config, DType, LlamaOperations, Context>::forward_pre_attention( StateType&& states )
+void Llama2<Config, DType, LlamaOperations, Context>::forward_pre_attention( StateType& states )
 {
   forward_prelude( states, {} );
   pre_attention_ops( states.next_layer() );
@@ -522,13 +520,12 @@ StateType Llama2<Config, DType, LlamaOperations, Context>::forward_pre_attention
     reinterpret_cast<DType*>( states.kvs().data() ), this->state_.kv, states.kvs().len(), CopyType::DeviceToHost );
 
   states.set_next_stage( InferenceStage::Attention );
-  return std::move( states );
 }
 
 template<typename Config, typename DType, typename LlamaOperations, typename Context>
 template<StateConcept StateType>
-StateType Llama2<Config, DType, LlamaOperations, Context>::forward_attention( StateType&& states,
-                                                                              const ContextVector& contexts )
+void Llama2<Config, DType, LlamaOperations, Context>::forward_attention( StateType& states,
+                                                                         const ContextVector& contexts )
 {
   this->check_batch( states, contexts, InferenceStage::Attention );
   this->state_.curr_concurrency_size = states.batch_size();
@@ -608,12 +605,11 @@ StateType Llama2<Config, DType, LlamaOperations, Context>::forward_attention( St
   }
 
   states.set_next_stage( InferenceStage::PostAttention );
-  return std::move( states );
 }
 
 template<typename Config, typename DType, typename LlamaOperations, typename Context>
 template<StateConcept StateType>
-StateType Llama2<Config, DType, LlamaOperations, Context>::forward_post_attention( StateType&& states )
+void Llama2<Config, DType, LlamaOperations, Context>::forward_post_attention( StateType& states )
 {
   this->check_batch( states, {}, InferenceStage::PostAttention );
   this->state_.curr_concurrency_size = states.batch_size();
@@ -629,13 +625,12 @@ StateType Llama2<Config, DType, LlamaOperations, Context>::forward_post_attentio
              CopyType::HostToDevice );
 
   post_attention_ops( states.next_layer() );
-
-  return forward_postlude( std::move( states ), states.next_layer(), false );
+  forward_postlude( states, states.next_layer(), /* classification done? */ false );
 }
 
 template<typename Config, typename DType, typename LlamaOperations, typename Context>
 template<StateConcept StateType>
-StateType Llama2<Config, DType, LlamaOperations, Context>::forward_classify( StateType&& states )
+void Llama2<Config, DType, LlamaOperations, Context>::forward_classify( StateType& states )
 {
   this->check_batch( states, {}, InferenceStage::Classification );
   this->state_.curr_concurrency_size = states.batch_size();
@@ -647,8 +642,7 @@ StateType Llama2<Config, DType, LlamaOperations, Context>::forward_classify( Sta
              CopyType::HostToDevice );
 
   classify_ops();
-
-  return forward_postlude( std::move( states ), states.next_layer(), true );
+  forward_postlude( states, states.next_layer(), /* classification done? */ true );
 }
 
 #define DECLARE_MODEL( PLATFORM, MODEL_NAME )                                                                          \
