@@ -174,11 +174,18 @@ Llama2<Config, DType, LlamaOperations, Context>::Llama2( const std::filesystem::
   }() )
   , state_( settings_, run_state_buffer_.get() )
 {
-  const std::string filename_suffix = "_" + dtype_str<DType>();
-  const auto base_path = model_dir / ( "BASEWEIGHTS" + filename_suffix );
+  auto copy_file_to_buffer = [this]( const std::filesystem::path& path, DType* buffer, const size_t size ) {
+    CHECK_EQ( std::filesystem::file_size( path ), size ) << "File " << path << " is not the expected size.";
+    FileDescriptor fd { CHECK_SYSCALL( "open", open( path.c_str(), O_RDONLY ) ) };
+    MMap_Region mmap { nullptr, size, PROT_READ, MAP_PRIVATE, fd.fd_num(), 0 };
+    this->ops_.copy( buffer, reinterpret_cast<DType*>( mmap.addr() ), size, CopyType::HostToDevice );
+  };
 
-  constexpr auto base_size = BaseWeights<Config, DType>::base_size();
-  constexpr auto layer_size = LayerWeights<Config, DType>::layer_size();
+  // Ugly
+  const std::string filename_suffix = "_" + dtype_str<DType>();
+
+  const auto base_size = BaseWeights<Config, DType>::base_size();
+  const auto layer_size = LayerWeights<Config, DType>::layer_size();
 
   if ( randomize_parameters ) {
     LOG( WARNING ) << "Randomizing weights and run state...";
@@ -199,33 +206,18 @@ Llama2<Config, DType, LlamaOperations, Context>::Llama2( const std::filesystem::
                                   10.0 / sqrt( Config::dim ) );
 
     LOG( WARNING ) << "Randomizing weights and run state... done.";
-  }
-
-  if ( not randomize_parameters ) {
-    // Load BASEWEIGHTS
-    CHECK_EQ( std::filesystem::file_size( base_path ), base_size ) << "Base weights are not the expected size.";
-    FileDescriptor base_fd { CHECK_SYSCALL( "open", open( base_path.c_str(), O_RDONLY ) ) };
-    MMap_Region base_mmap { nullptr, base_size, PROT_READ, MAP_PRIVATE, base_fd.fd_num(), 0 };
-
-    ops_.copy(
-      base_weights_buffer_.get(), reinterpret_cast<DType*>( base_mmap.addr() ), base_size, CopyType::HostToDevice );
+  } else { // not randomize_parameters
+    copy_file_to_buffer( model_dir / ( "BASEWEIGHTS" + filename_suffix ), base_weights_buffer_.get(), base_size );
 
     LOG( INFO ) << "Loaded base weights (" << base_size << " bytes).";
 
-    // Load LAYERi
+    // Load LAYER(i)
     for ( auto i = settings_.start_layer_num; i <= settings_.end_layer_num; i++ ) {
-      const auto layer_path = model_dir / ( "LAYER" + std::to_string( i ) + filename_suffix );
+      const auto filename = model_dir / ( "LAYER" + std::to_string( i ) + filename_suffix );
+      DType* ptr = reinterpret_cast<DType*>( reinterpret_cast<uint8_t*>( layers_buffer_.get() )
+                                             + ( i - settings_.start_layer_num ) * layer_size );
 
-      CHECK_EQ( std::filesystem::file_size( layer_path ), layer_size ) << "Layer " << i << " is not the expected size.";
-
-      FileDescriptor layer_fd { CHECK_SYSCALL( "open", open( layer_path.c_str(), O_RDONLY ) ) };
-      MMap_Region layer_mmap { nullptr, layer_size, PROT_READ, MAP_PRIVATE, layer_fd.fd_num(), 0 };
-
-      ops_.copy( reinterpret_cast<DType*>( reinterpret_cast<uint8_t*>( layers_buffer_.get() )
-                                           + ( i - settings_.start_layer_num ) * layer_size ),
-                 reinterpret_cast<DType*>( layer_mmap.addr() ),
-                 layer_size,
-                 CopyType::HostToDevice );
+      copy_file_to_buffer( filename, ptr, layer_size );
     }
 
     LOG( INFO ) << "Loaded layer weights (" << settings_.start_layer_num << " to " << settings_.end_layer_num << ", "
