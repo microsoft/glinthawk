@@ -181,10 +181,9 @@ void BatchedWorker<ModelConfig, ComputeKernel>::setup_stats_handler()
   if ( std::filesystem::is_socket( telegraf_socket, err ) ) {
     LOG( INFO ) << "Telegraf socket found at " << telegraf_socket.string();
     telegraf_logger_ = std::make_unique<monitoring::TelegrafLogger>( telegraf_socket );
-    telegraf_logger_->install_rules(
-      event_loop_, telegraf_rule_categories_, []( auto&& ) { return true; }, [] {} );
+    telegraf_logger_->install_rules( event_loop_, telegraf_rule_categories_, []( auto&& ) { return true; }, [] {} );
   } else {
-    LOG( WARNING ) << "Telegraf socket not found at " << telegraf_socket.string();
+    LOG( WARNING ) << "Telegraf socket not found at " << telegraf_socket.string() << "; stats are not being logged.";
   }
 
   event_loop_.add_rule(
@@ -263,6 +262,15 @@ void BatchedWorker<ModelConfig, ComputeKernel>::setup_compute_kernel( const std:
       max_concurrency_size,
       max_context_count,
       randomize );
+  } else if constexpr ( ComputeKernel::Type == compute::KernelType::SimpleHybrid ) {
+    compute_kernel_ = std::make_unique<ComputeKernel>( concurrency_size_attention,
+                                                       model_root,
+                                                       start_layer,
+                                                       end_layer,
+                                                       max_concurrency_size,
+                                                       max_context_count,
+                                                       randomize );
+
   } else {
     LOG( FATAL ) << "Invalid ComputeKernel type.";
   }
