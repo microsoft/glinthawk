@@ -22,6 +22,7 @@
 #include "models/common/state.hh"
 #include "models/types.hh"
 #include "monitoring/measurement.hh"
+#include "monitoring/util.hh"
 #include "util/eventfd.hh"
 #include "util/util.hh"
 
@@ -64,6 +65,9 @@ private:
     std::unique_ptr<M> model;
     PreallocatingContextManager<M> context_manager;
   };
+
+  // The global measurement object that is used to record the time spent in various parts of the kernel.
+  Measurement& __stats__ { global_measurement() };
 
   // The number of concurrent prompts that are processed by the model; this value will be used across all stages.
   // If you need different concurrency values for each stage, please use `HybridComputeKernel`.
@@ -128,10 +132,10 @@ private:
   void backlog_thread_func();
   // </threads>
 
-  void model_forward( StateType& state );
+  void model_step_forward( StateType& state );
 
   template<typename CtxType>
-  void model_forward( StateType& state, std::vector<CtxType>& contexts );
+  void model_step_forward( StateType& state, std::vector<CtxType>& contexts );
 };
 
 template<typename ModelA, typename ModelB>
@@ -249,7 +253,7 @@ void SimpleHybridComputeKernel<ModelA, ModelB>::release_discarded_contexts( cons
 }
 
 template<typename ModelA, typename ModelB>
-void SimpleHybridComputeKernel<ModelA, ModelB>::model_forward( StateType& state )
+void SimpleHybridComputeKernel<ModelA, ModelB>::model_step_forward( StateType& state )
 {
   StateType output;
 
@@ -261,32 +265,43 @@ void SimpleHybridComputeKernel<ModelA, ModelB>::model_forward( StateType& state 
 
   switch ( next_stage ) {
     case Stage::PostAttention:
-      model.forward_post_attention( state );
+      timeit<IntDistributions::KernelPostAttentionForwardTime>( __stats__,
+                                                                [&] { model.forward_post_attention( state ); } );
 
       if ( state.next_stage() == Stage::PreAttention and next_layer <= model_end_layer ) {
         // since we serve the next layer, let's do pre-attention right here
-        model.forward_pre_attention( state );
+        timeit<IntDistributions::KernelPreAttentionForwardTime>( __stats__,
+                                                                 [&] { model.forward_pre_attention( state ); } );
       } else if ( state.next_stage() == Stage::Classification and next_layer == ConfigType::n_layers - 1
                   and next_layer == model_end_layer ) {
-        model.forward_classify( state );
+        timeit<IntDistributions::KernelClassificationForwardTime>( __stats__,
+                                                                   [&] { model.forward_classify( state ); } );
       }
+
       break;
 
-    case Stage::PreAttention: model.forward_pre_attention( state ); break;
-    case Stage::Classification: model.forward_classify( state ); break;
+    case Stage::PreAttention:
+      timeit<IntDistributions::KernelPreAttentionForwardTime>( __stats__,
+                                                               [&] { model.forward_pre_attention( state ); } );
+      break;
+
+    case Stage::Classification:
+      timeit<IntDistributions::KernelClassificationForwardTime>( __stats__, [&] { model.forward_classify( state ); } );
+      break;
   }
 }
 
 template<typename ModelA, typename ModelB>
 template<typename CtxType>
-void SimpleHybridComputeKernel<ModelA, ModelB>::model_forward( StateType& state, std::vector<CtxType>& contexts )
+void SimpleHybridComputeKernel<ModelA, ModelB>::model_step_forward( StateType& state, std::vector<CtxType>& contexts )
 {
   StateType output;
   auto& model = *b_.model;
   const auto next_stage = state.next_stage();
 
   if ( next_stage == Stage::Attention ) {
-    model.forward_attention( state, contexts );
+    timeit<IntDistributions::KernelAttentionForwardTime>( __stats__,
+                                                          [&] { model.forward_attention( state, contexts ); } );
   } else {
     LOG( FATAL ) << "Invalid stage: " << next_stage;
   }
@@ -304,6 +319,8 @@ void SimpleHybridComputeKernel<ModelA, ModelB>::execution_thread_func(
   while ( running_ ) {
     is_processing_states_.wait( false );
 
+    const auto start_time = std::chrono::steady_clock::now();
+
     for ( size_t iteration = 0; iteration < 2 * N + 2; iteration++ ) {
       sync_point.arrive_and_wait();
 
@@ -319,8 +336,8 @@ void SimpleHybridComputeKernel<ModelA, ModelB>::execution_thread_func(
 
       if ( not should_skip ) {
         switch ( model_idx ) {
-          case 0: model_forward( input_state ); break;
-          case 1: model_forward( input_state, active_contexts_[active_state_index] ); break;
+          case 0: model_step_forward( input_state ); break;
+          case 1: model_step_forward( input_state, active_contexts_[active_state_index] ); break;
         }
       }
     }
@@ -328,6 +345,10 @@ void SimpleHybridComputeKernel<ModelA, ModelB>::execution_thread_func(
     if constexpr ( model_idx == 0 ) {
       // We don't need to wait for the other thread, since it has nothing to do in the last iteration.
       active_states_[0].merge( std::move( active_states_[1] ) );
+
+      const auto end_time = std::chrono::steady_clock::now();
+      const auto duration = std::chrono::duration_cast<std::chrono::microseconds>( end_time - start_time );
+      __stats__.add_point<IntDistributions::KernelForwardTime>( duration.count() );
 
       {
         std::lock_guard lock { outgoing_.mutex };
