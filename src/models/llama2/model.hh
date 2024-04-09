@@ -536,6 +536,8 @@ void Llama2<Config, DType, LlamaOperations, Context>::forward_attention( StateTy
     this->state_.batch_token_contexts[i] = contexts[i]->layer( states.next_layer() ).token( states.token_pos( i ) );
   }
 
+  // NOTE: We allow mixing FP16 in pre-/post-attention with FP32 during attention. Hence, the conversions.
+
   switch ( states.dtype() ) {
     case DataType::Float16:
       ops_.template convert_and_copy( this->state_.q,
