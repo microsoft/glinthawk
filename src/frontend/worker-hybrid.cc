@@ -5,6 +5,7 @@
 #include <glog/logging.h>
 
 #include "compute/kernel_hybrid.hh"
+#include "compute/kernel_hybrid_simple.hh"
 #include "models/llama2/model.hh"
 #include "worker/worker.hh"
 
@@ -59,9 +60,9 @@ int main( int argc, char* argv[] )
 
 #define CREATE_AND_RUN_WORKER( MODEL_NAME, CLASS_NAME )                                                                \
   if ( model_name == MODEL_NAME ) {                                                                                    \
-    core::BatchedWorker<                                                                                               \
-      models::llama2::configs::CLASS_NAME,                                                                             \
-      compute::HybridComputeKernel<cuda::CLASS_NAME<_GLINTHAWK_DTYPE_>, amd64::CLASS_NAME<glinthawk::float32_t>>>      \
+    core::BatchedWorker<models::llama2::configs::CLASS_NAME,                                                           \
+                        compute::SimpleHybridComputeKernel<cuda::CLASS_NAME<_GLINTHAWK_DTYPE_>,                        \
+                                                           amd64::CLASS_NAME<glinthawk::float32_t>>>                   \
       worker { listen_addr, coordinator_addr, model_path };                                                            \
     worker.run();                                                                                                      \
   }
