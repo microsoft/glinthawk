@@ -148,7 +148,7 @@ const BIO_METHOD* TCPSocketBIO::Method::method()
 }
 
 TCPSocketBIO::TCPSocketBIO( TCPSocket&& sock )
-  : TCPSocket( move( sock ) )
+  : TCPSocket( std::move( sock ) )
   , bio_( BIO_new( Method::method() ) )
 {
   if ( not bio_ ) {
@@ -163,14 +163,14 @@ TCPSocketBIO::TCPSocketBIO( TCPSocket&& sock )
 }
 
 TCPSocketBIO::TCPSocketBIO( TCPSocketBIO&& other )
-  : TCPSocket( move( other ) )
-  , bio_( move( other.bio_ ) )
+  : TCPSocket( std::move( other ) )
+  , bio_( std::move( other.bio_ ) )
 {
   BIO_set_data( bio_.get(), static_cast<TCPSocket*>( this ) );
 }
 
 MemoryBIO::MemoryBIO( const string_view contents )
-  : contents_( move( contents ) )
+  : contents_( std::move( contents ) )
   , bio_( BIO_new_mem_buf( contents.data(), contents.size() ) )
 {
   if ( not bio_ ) {

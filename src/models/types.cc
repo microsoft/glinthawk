@@ -70,7 +70,7 @@ DataBufferPool::PtrType DataBufferPool::get( const size_t n )
     // return the one from the pool
     reused_bytes_ += n;
     reused_count_++;
-    result = move( it->second.front() );
+    result = std::move( it->second.front() );
     it->second.pop();
   }
 
@@ -83,7 +83,7 @@ void DataBufferPool::release( uint8_t* ptr, const size_t n )
   DCHECK_GE( n, MIN_BUFFER_SIZE_POOLED );
 
   lock_guard<mutex> lock { mutex_ };
-  unused_buffers_[n].push( move( PtrType { ptr, DataBufferDeleter() } ) );
+  unused_buffers_[n].push( PtrType { ptr, DataBufferDeleter() } );
 }
 
 void DataBufferPool::print_stats() const

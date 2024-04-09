@@ -14,7 +14,7 @@ using namespace glinthawk::core;
 constexpr char const* Message::OPCODE_NAMES[static_cast<int>( Message::OpCode::__COUNT )];
 
 Message::Message( const string_view& header, string&& payload )
-  : payload_( move( payload ) )
+  : payload_( std::move( payload ) )
 {
   if ( header.length() != HEADER_LENGTH ) {
     throw out_of_range( "incomplete header" );
@@ -31,7 +31,7 @@ Message::Message( const string_view& header, string&& payload )
 Message::Message( const OpCode opcode, string&& payload )
   : payload_length_( payload.length() )
   , opcode_( opcode )
-  , payload_( move( payload ) )
+  , payload_( std::move( payload ) )
 {
   if ( static_cast<int>( opcode_ ) >= static_cast<int>( OpCode::__COUNT ) ) {
     throw out_of_range( "invalid opcode" );
@@ -58,7 +58,7 @@ string Message::info() const
 
 void MessageParser::complete_message()
 {
-  completed_messages_.emplace( incomplete_header_, move( incomplete_payload_ ) );
+  completed_messages_.emplace( incomplete_header_, std::move( incomplete_payload_ ) );
 
   expected_payload_length_.reset();
   incomplete_header_.clear();
@@ -114,7 +114,7 @@ void MessageHandler<SessionType>::load()
 template<class SessionType>
 void MessageHandler<SessionType>::push_message( Message&& message )
 {
-  outgoing_.push( move( message ) );
+  outgoing_.push( std::move( message ) );
 
   if ( current_outgoing_unsent_header_.empty() and current_outgoing_unsent_payload_.empty() ) {
     load();

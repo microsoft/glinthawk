@@ -22,7 +22,7 @@ template<class SessionType>
 void HTTPClient<SessionType>::push_message( HTTPRequest&& req )
 {
   responses_.new_request_arrived( req );
-  requests_.push( move( req ) );
+  requests_.push( std::move( req ) );
 
   if ( current_request_unsent_headers_.empty() and current_request_unsent_body_.empty() ) {
     load();

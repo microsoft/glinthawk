@@ -101,7 +101,7 @@ public:
     kernel_.event_fd().set_blocking( true );
 
     for ( size_t pos = 0; pos < ModelA::ConfigType::seq_len; pos++ ) {
-      kernel_.push( move( state_ ) );
+      kernel_.push( std::move( state_ ) );
       kernel_.event_fd().read_event(); // blocks until results are ready
       kernel_.pop( state_ );
 

@@ -56,7 +56,7 @@ HTTPRequest BlobStore::make_request( const Op operation, const std::string& key,
   }
 
   first_line << method << " /" << container_uri_.path << "/" << key << "?" << sas_token_ << " HTTP/1.1";
-  return { move( first_line.str() ), move( header ), move( payload ) };
+  return { first_line.str(), std::move( header ), std::move( payload ) };
 }
 
 TCPSocket make_connection( const Address& endpoint )
@@ -70,7 +70,7 @@ TCPSocket make_connection( const Address& endpoint )
 pair<OpResult, string> process_GET_response( HTTPResponse&& response )
 {
   if ( response.status_code() == "200" ) {
-    return make_pair( OpResult::OK, move( response.body() ) );
+    return make_pair( OpResult::OK, std::move( response.body() ) );
   } else if ( response.status_code() == "404" ) {
     return make_pair( OpResult::NotFound, ""s );
   } else {
@@ -172,15 +172,15 @@ void BlobStore::worker_thread( const size_t thread_num,
       response_parser.parse( read_buffer_span.substr( 0, len ) );
 
       while ( not response_parser.empty() ) {
-        auto response = move( response_parser.front() );
+        auto response = std::move( response_parser.front() );
         response_parser.pop();
 
         if constexpr ( operation == Op::Get ) {
-          responses[i + response_count] = process_GET_response( move( response ) );
+          responses[i + response_count] = process_GET_response( std::move( response ) );
         } else if constexpr ( operation == Op::Put ) {
-          responses[i + response_count] = process_PUT_response( move( response ) );
+          responses[i + response_count] = process_PUT_response( std::move( response ) );
         } else if constexpr ( operation == Op::Remove ) {
-          responses[i + response_count] = process_DELETE_response( move( response ) );
+          responses[i + response_count] = process_DELETE_response( std::move( response ) );
         } else {
           []<bool flag = false>() { static_assert( flag, "Invalid operation" ); }
           ();

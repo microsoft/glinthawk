@@ -40,7 +40,7 @@ Prompt::Prompt( const string_view serialized_prompt )
 }
 
 PromptManager::PromptManager( shared_ptr<storage::BlobStore> blobstore )
-  : blobstore_( move( blobstore ) )
+  : blobstore_( std::move( blobstore ) )
 {
 }
 
@@ -93,7 +93,7 @@ string Completion::serialize() const
 }
 
 CompletionManager::CompletionManager( shared_ptr<storage::BlobStore> blobstore )
-  : blobstore_( move( blobstore ) )
+  : blobstore_( std::move( blobstore ) )
 {
 }
 

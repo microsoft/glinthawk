@@ -7,13 +7,13 @@ using namespace glinthawk::net;
 
 template<>
 SessionBase<TCPSocket>::SessionBase( TCPSocket&& socket )
-  : socket_( move( socket ) )
+  : socket_( std::move( socket ) )
 {
 }
 
 template<>
 SessionBase<UnixDomainSocketStream>::SessionBase( UnixDomainSocketStream&& socket )
-  : socket_( move( socket ) )
+  : socket_( std::move( socket ) )
 {
 }
 
@@ -59,8 +59,8 @@ void Session<T>::do_write()
 
 template<>
 SessionBase<TCPSocketBIO>::SessionBase( SSL_handle&& ssl, TCPSocket&& sock )
-  : ssl_( move( ssl ) )
-  , socket_( move( sock ) )
+  : ssl_( std::move( ssl ) )
+  , socket_( std::move( sock ) )
 {
   if ( not ssl_ ) {
     throw runtime_error( "SecureSocket: constructor must be passed valid SSL structure" );
@@ -169,7 +169,7 @@ void Session<TCPSocketBIO>::do_write()
 }
 
 SimpleSSLSession::SimpleSSLSession( SSL_handle&& ssl, TCPSocket&& socket )
-  : SessionBase( move( ssl ), move( socket ) )
+  : SessionBase( std::move( ssl ), std::move( socket ) )
 {
   SSL_clear_mode( ssl_.get(), SSL_MODE_ENABLE_PARTIAL_WRITE );
 }
