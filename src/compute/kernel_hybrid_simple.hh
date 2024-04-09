@@ -259,21 +259,17 @@ void SimpleHybridComputeKernel<ModelA, ModelB>::model_step_forward( StateType& s
 
   auto& model = *a_.model;
 
-  const auto next_stage = state.next_stage();
-  const auto next_layer = state.next_layer();
-  const auto model_end_layer = model.settings().end_layer_num;
-
-  switch ( next_stage ) {
+  switch ( state.next_stage() ) {
     case Stage::PostAttention:
       timeit<IntDistributions::KernelPostAttentionForwardTime>( __stats__,
                                                                 [&] { model.forward_post_attention( state ); } );
 
-      if ( state.next_stage() == Stage::PreAttention and next_layer <= model_end_layer ) {
+      if ( state.next_stage() == Stage::PreAttention and state.next_layer() <= model.settings().end_layer_num ) {
         // since we serve the next layer, let's do pre-attention right here
         timeit<IntDistributions::KernelPreAttentionForwardTime>( __stats__,
                                                                  [&] { model.forward_pre_attention( state ); } );
-      } else if ( state.next_stage() == Stage::Classification and next_layer == ConfigType::n_layers - 1
-                  and next_layer == model_end_layer ) {
+      } else if ( state.next_stage() == Stage::Classification and state.next_layer() == ConfigType::n_layers - 1
+                  and state.next_layer() == model.settings().end_layer_num ) {
         timeit<IntDistributions::KernelClassificationForwardTime>( __stats__,
                                                                    [&] { model.forward_classify( state ); } );
       }
