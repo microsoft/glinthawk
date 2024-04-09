@@ -9,7 +9,7 @@ TelegrafLogger::TelegrafLogger( const filesystem::path& socket_file )
     net::UnixDomainSocketStream socket;
     socket.connect( socket_file );
     socket.set_blocking( false );
-    return net::UDSSession { move( socket ) };
+    return net::UDSSession { std::move( socket ) };
   }() )
 {
 }

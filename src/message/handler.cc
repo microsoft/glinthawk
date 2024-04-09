@@ -12,7 +12,7 @@ using namespace glinthawk::net;
 
 template<class SessionType, class OutgoingMessage, class IncomingMessage>
 MessageHandler<SessionType, OutgoingMessage, IncomingMessage>::MessageHandler( SessionType&& session )
-  : session_( move( session ) )
+  : session_( std::move( session ) )
 {
 }
 
@@ -112,7 +112,7 @@ void MessageHandler<SessionType, OutgoingMessage, IncomingMessage>::install_rule
       while ( not incoming_empty() ) {
         auto& response = incoming_front();
 
-        if ( incoming_callback( move( response ) ) ) {
+        if ( incoming_callback( std::move( response ) ) ) {
           incoming_pop();
         } else {
           // user doesn't want to continue processing messages

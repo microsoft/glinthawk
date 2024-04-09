@@ -25,7 +25,7 @@ Socket::Socket( const int domain, const int type )
 //! is supplied \param[in] type is `fd`'s type; throws std::runtime_error if
 //! wrong value is supplied
 Socket::Socket( FileDescriptor&& fd, const int domain, const int type )
-  : FileDescriptor( move( fd ) )
+  : FileDescriptor( std::move( fd ) )
 {
   int actual_value;
   socklen_t len;

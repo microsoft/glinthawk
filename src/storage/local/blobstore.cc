@@ -53,7 +53,7 @@ pair<OpResult, string> BlobStore::get( const string& key )
   }
 
   string contents { istreambuf_iterator<char>( fin ), istreambuf_iterator<char>() };
-  return { OpResult::OK, move( contents ) };
+  return { OpResult::OK, std::move( contents ) };
 }
 
 OpResult BlobStore::put( const string& key, const string& value )
@@ -101,7 +101,7 @@ vector<pair<OpResult, string>> BlobStore::get( const vector<string>& keys )
 
   for ( const auto& key : keys ) {
     auto [result, value] = get( key );
-    results.emplace_back( result, move( value ) );
+    results.emplace_back( result, std::move( value ) );
   }
 
   return results;

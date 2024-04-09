@@ -37,7 +37,7 @@ EventLoop::FDRule::FDRule( const size_t category_id_,
                            const optional<pair<InterestT, CallbackT>>& out_,
                            const CallbackT& cancel_ )
   : BasicRule( category_id_ )
-  , fd( move( fd_ ) )
+  , fd( std::move( fd_ ) )
   , in( in_.value_or( make_pair( [] { return false; }, [] {} ) ) )
   , out( out_.value_or( make_pair( [] { return false; }, [] {} ) ) )
   , cancel( cancel_ )
@@ -314,8 +314,6 @@ EventLoop::Result EventLoop::wait_next_event( const int timeout_ms )
   return Result::Success;
 }
 
-constexpr double THOUSAND = 1e3;
-constexpr double MILLION = 1e6;
 constexpr double BILLION = 1e9;
 
 template<class T>
