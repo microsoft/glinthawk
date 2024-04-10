@@ -401,9 +401,11 @@ bool BatchedWorker<ModelConfig, ComputeKernel>::handle_coordinator_message( core
     case Message::OpCode::SetRoute: {
       protobuf::SetRoute proto;
       proto.ParseFromString( msg.payload() );
-      LOG( INFO ) << "Setting route: " << proto.ShortDebugString();
+
+      std::ostringstream route_str;
 
       RouteMap new_route {};
+
       for ( int i = 0; i < proto.layer_to_address_size(); i++ ) {
         const auto& route = proto.layer_to_address( i );
         models::InferenceStage next_stage;
@@ -421,13 +423,16 @@ bool BatchedWorker<ModelConfig, ComputeKernel>::handle_coordinator_message( core
             break;
           default: throw std::runtime_error( "invalid stage" );
         }
+
+        route_str << route.layer_num() << "[" << next_stage << "] -> " << route.ip() << ":" << route.port() << "; ";
+
         new_route.emplace( std::make_pair( route.layer_num(), next_stage ),
                            net::Address { route.ip(), static_cast<uint16_t>( route.port() ) } );
       }
 
       route_set_.emplace( proto.route_id(), new_route );
 
-      LOG( INFO ) << "Route set; will be used for future prompts.";
+      LOG( INFO ) << "Route set: " << route_str.str();
       break;
     }
 
@@ -481,7 +486,7 @@ bool BatchedWorker<ModelConfig, ComputeKernel>::handle_coordinator_message( core
           batch_size, DataType::Float16, RouteID {}, ModelID {}, false, false, false
         };
 
-        DLOG( INFO ) << "Pushing dummy prompts: " << i * batch_size << " to " << ( i + 1 ) * batch_size;
+        DLOG( INFO ) << "Pushing dummy prompts: " << i * batch_size << " to " << ( ( i + 1 ) * batch_size - 1 );
 
         for ( size_t j = 0; j < batch_size; j++ ) {
           const auto idx = i * batch_size + j;
