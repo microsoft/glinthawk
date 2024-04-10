@@ -669,6 +669,11 @@ void BatchedWorker<ModelConfig, ComputeKernel>::prompt_preparation_thread_func()
 template<typename ModelConfig, typename ComputeKernel>
 void BatchedWorker<ModelConfig, ComputeKernel>::completion_commit_thread_func()
 {
+  // commit the completed prompts to the blobstore every 5 seconds
+  while ( running_ ) {
+    completion_manager_->commit();
+    std::this_thread::sleep_for( std::chrono::seconds{ 5 } );
+  }
 }
 
 template<typename ModelConfig, typename ComputeKernel>
