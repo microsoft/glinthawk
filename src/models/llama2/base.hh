@@ -127,20 +127,21 @@ struct LayerWeights
   const DType* w3 { nullptr }; // (hidden_dim, dim)
 };
 
-/// @brief This class acts as the scratchpad for the computations
+/// @brief This class acts as the scratchpad for the computations.
+/// None of this data needs to be saved between calls to `forward*()` functions.
 template<typename Config, typename DType, typename ContextType>
 requires ModelConfig<Config>
-struct RunState
+struct ScratchPad
 {
-  RunState() = default;
-  RunState( const Settings<Config>& settings, DType* buffer );
+  ScratchPad() = default;
+  ScratchPad( const Settings<Config>& settings, DType* buffer );
 
-  RunState( const RunState& ) = delete;
-  RunState operator=( const RunState& ) = delete;
-  RunState( RunState&& ) = default;
-  RunState& operator=( RunState&& ) = default;
+  ScratchPad( const ScratchPad& ) = delete;
+  ScratchPad operator=( const ScratchPad& ) = delete;
+  ScratchPad( ScratchPad&& ) = default;
+  ScratchPad& operator=( ScratchPad&& ) = default;
 
-  static size_t state_size( const Settings<Config>& settings );
+  static size_t scratchpad_size( const Settings<Config>& settings );
 
   DType* buffer_ {};      // we use this buffer for everything, including activations
   DType* x {};            // activation at current time stamp (B, dim)
@@ -310,7 +311,7 @@ LayerWeights<Config, DType>::LayerWeights( const DType* model )
 /* RUN STATE */
 
 template<typename Config, typename DType, typename ContextType>
-RunState<Config, DType, ContextType>::RunState( const Settings<Config>& settings, DType* buffer )
+ScratchPad<Config, DType, ContextType>::ScratchPad( const Settings<Config>& settings, DType* buffer )
   : buffer_( buffer )
   , x( buffer_ )
   , xb( buffer_ + Config::dim * settings.concurrency_limit )
@@ -326,7 +327,7 @@ RunState<Config, DType, ContextType>::RunState( const Settings<Config>& settings
 }
 
 template<typename Config, typename DType, typename ContextType>
-size_t RunState<Config, DType, ContextType>::state_size( const Settings<Config>& settings )
+size_t ScratchPad<Config, DType, ContextType>::scratchpad_size( const Settings<Config>& settings )
 {
   return sizeof( DType ) * settings.concurrency_limit
          * ( Config::dim * 4 + Config::kv_dim * 2 + Config::hidden_dim * 2 + Config::n_heads * Config::seq_len

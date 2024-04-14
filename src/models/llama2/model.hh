@@ -80,11 +80,11 @@ protected:
 
   typename Operations::DeviceUniquePtr base_weights_buffer_;
   typename Operations::DeviceUniquePtr layers_buffer_;
-  typename Operations::DeviceUniquePtr run_state_buffer_;
+  typename Operations::DeviceUniquePtr scratchpad_buffer_;
 
   BaseWeights<Config, DType> base_weights_;
   std::array<LayerWeights<Config, DType>, Config::n_layers> layer_weights_;
-  RunState<Config, DType, Context> state_;
+  ScratchPad<Config, DType, Context> scratchpad_;
 
   // Checking if the inference states are safe to pass to the model
   template<StateConcept StateType>
@@ -135,7 +135,7 @@ void CHECK_DTYPE( const DataType dtype )
 
 template<typename Config, typename DType, typename LlamaOperations, typename Context>
 void extract_batch_token( LlamaOperations& ops,
-                          RunState<Config, DType, Context>& state,
+                          ScratchPad<Config, DType, Context>& state,
                           const std::vector<float>& temp )
 {
   ops.soft_sample( state.logits, temp, temp.size() );
@@ -159,7 +159,7 @@ Llama2<Config, DType, LlamaOperations, Context>::Llama2( const std::filesystem::
                randomize_parameters )
   , base_weights_buffer_( ops_.device_allocate( BaseWeights<Config, DType>::base_size() ) )
   , layers_buffer_( ops_.device_allocate( LayerWeights<Config, DType>::layer_size() * settings_.n_layers_loaded() ) )
-  , run_state_buffer_( ops_.device_allocate( RunState<Config, DType, Context>::state_size( settings_ ) ) )
+  , scratchpad_buffer_( ops_.device_allocate( ScratchPad<Config, DType, Context>::scratchpad_size( settings_ ) ) )
   , base_weights_( base_weights_buffer_.get() )
   , layer_weights_( [&] {
     std::array<LayerWeights<Config, DType>, Config::n_layers> layers {};
@@ -172,7 +172,7 @@ Llama2<Config, DType, LlamaOperations, Context>::Llama2( const std::filesystem::
 
     return layers;
   }() )
-  , state_( settings_, run_state_buffer_.get() )
+  , scratchpad_( settings_, scratchpad_buffer_.get() )
 {
   auto copy_file_to_buffer = [this]( const std::filesystem::path& path, DType* buffer, const size_t size ) {
     CHECK_EQ( std::filesystem::file_size( path ), size ) << "File " << path << " is not the expected size.";
@@ -188,7 +188,7 @@ Llama2<Config, DType, LlamaOperations, Context>::Llama2( const std::filesystem::
   const auto layer_size = LayerWeights<Config, DType>::layer_size();
 
   if ( randomize_parameters ) {
-    LOG( WARNING ) << "Randomizing weights and run state...";
+    LOG( WARNING ) << "Randomizing weights and scratchpad...";
 
     ops_.randomize_device_buffer( base_weights_buffer_.get(),
                                   base_size / sizeof( DType ),
@@ -200,8 +200,8 @@ Llama2<Config, DType, LlamaOperations, Context>::Llama2( const std::filesystem::
                                   -10.0 / sqrt( Config::dim ),
                                   10.0 / sqrt( Config::dim ) );
 
-    ops_.randomize_device_buffer( run_state_buffer_.get(),
-                                  RunState<Config, DType, Context>::state_size( settings_ ) / sizeof( DType ),
+    ops_.randomize_device_buffer( scratchpad_buffer_.get(),
+                                  ScratchPad<Config, DType, Context>::scratchpad_size( settings_ ) / sizeof( DType ),
                                   -10.0 / sqrt( Config::dim ),
                                   10.0 / sqrt( Config::dim ) );
 
@@ -262,7 +262,8 @@ void Llama2<Config, DType, LlamaOperations, Context>::load_embedding( const Stat
     CHECK_LT( token, Config::vocab_size );
 
     const DType* content_row = this->base_weights_.token_embedding_table + token * Config::dim;
-    ops_.copy( this->state_.x + i * Config::dim, content_row, Config::dim * sizeof( DType ), CopyType::HostToDevice );
+    ops_.copy(
+      this->scratchpad_.x + i * Config::dim, content_row, Config::dim * sizeof( DType ), CopyType::HostToDevice );
   }
 }
 
@@ -273,22 +274,24 @@ void Llama2<Config, DType, LlamaOperations, Context>::pre_attention_ops( const i
   const auto& layer_weights = this->layer_weights_[layer_num];
 
   // attention rmsnorm
-  ops_.template rmsnorm<Config::dim>( this->state_.xb,
-                                      this->state_.x,
-                                      this->state_.xb2,
+  ops_.template rmsnorm<Config::dim>( this->scratchpad_.xb,
+                                      this->scratchpad_.x,
+                                      this->scratchpad_.xb2,
                                       layer_weights.rms_att_weight,
-                                      this->state_.curr_concurrency_size );
+                                      this->scratchpad_.curr_concurrency_size );
 
   // qkv matmuls for this position
   ops_.template matmul<Config::dim, Config::dim>(
-    this->state_.q, this->state_.xb, layer_weights.wq, this->state_.curr_concurrency_size );
+    this->scratchpad_.q, this->scratchpad_.xb, layer_weights.wq, this->scratchpad_.curr_concurrency_size );
+
   ops_.template matmul<Config::dim, Config::kv_dim * 2>(
-    this->state_.kv, this->state_.xb, layer_weights.wkv, this->state_.curr_concurrency_size );
+    this->scratchpad_.kv, this->scratchpad_.xb, layer_weights.wkv, this->scratchpad_.curr_concurrency_size );
 
   if ( update_kv_cache ) {
     // save key, value at each time step (pos) to our kv cache.
     // only necessary for the end-to-end forward() function.
-    ops_.copy_kv_cache( this->state_.batch_token_contexts, this->state_.kv, this->state_.curr_concurrency_size );
+    ops_.copy_kv_cache(
+      this->scratchpad_.batch_token_contexts, this->scratchpad_.kv, this->scratchpad_.curr_concurrency_size );
   }
 }
 
@@ -298,32 +301,32 @@ void Llama2<Config, DType, LlamaOperations, Context>::attention_ops()
   // TODO: We should either make parallel tokens in one prompt work, or remove the feature altogether (and put
   // protections in place).
   // XXX(sadjad): With HybridKernel, this will run on the CPU; maybe should be moved to pre-attention?
-  ops_.apply_rope( this->state_.curr_concurrency_size,
-                   this->state_.batch_token_positions,
+  ops_.apply_rope( this->scratchpad_.curr_concurrency_size,
+                   this->scratchpad_.batch_token_positions,
                    this->base_weights_.freq_cis_real,
                    this->base_weights_.freq_cis_imag,
-                   this->state_.q,
-                   this->state_.batch_token_contexts );
+                   this->scratchpad_.q,
+                   this->scratchpad_.batch_token_contexts );
 
   // <multihead attention> for each head and for each token up to and including the current one
 
-  ops_.attention_0_gemm( this->state_.q,
-                         this->state_.batch_layer_contexts,
-                         this->state_.att,
-                         this->state_.curr_concurrency_size,
-                         this->state_.batch_token_positions );
+  ops_.attention_0_gemm( this->scratchpad_.q,
+                         this->scratchpad_.batch_layer_contexts,
+                         this->scratchpad_.att,
+                         this->scratchpad_.curr_concurrency_size,
+                         this->scratchpad_.batch_token_positions );
 
   // softmax
-  ops_.attention_softmax( this->state_.att,
-                          this->state_.batch_token_positions,
-                          this->state_.temp_softmax,
-                          this->state_.curr_concurrency_size );
+  ops_.attention_softmax( this->scratchpad_.att,
+                          this->scratchpad_.batch_token_positions,
+                          this->scratchpad_.temp_softmax,
+                          this->scratchpad_.curr_concurrency_size );
 
-  ops_.attention_2_gemm( this->state_.att,
-                         this->state_.batch_layer_contexts,
-                         this->state_.xb,
-                         this->state_.curr_concurrency_size,
-                         this->state_.batch_token_positions );
+  ops_.attention_2_gemm( this->scratchpad_.att,
+                         this->scratchpad_.batch_layer_contexts,
+                         this->scratchpad_.xb,
+                         this->scratchpad_.curr_concurrency_size,
+                         this->scratchpad_.batch_token_positions );
 
   // </multihead attention>
 }
@@ -335,48 +338,52 @@ void Llama2<Config, DType, LlamaOperations, Context>::post_attention_ops( const 
 
   // final matmul to get the output of the attention
   ops_.template matmul<Config::dim, Config::dim>(
-    this->state_.xb2, this->state_.xb, layer_weights.wo, this->state_.curr_concurrency_size );
+    this->scratchpad_.xb2, this->scratchpad_.xb, layer_weights.wo, this->scratchpad_.curr_concurrency_size );
 
   // residual connection back into x
-  ops_.template accum<Config::dim>( this->state_.x, this->state_.xb2, this->state_.curr_concurrency_size );
+  ops_.template accum<Config::dim>(
+    this->scratchpad_.x, this->scratchpad_.xb2, this->scratchpad_.curr_concurrency_size );
 
   // ffn rmsnorm
-  ops_.template rmsnorm<Config::dim>( this->state_.xb,
-                                      this->state_.x,
-                                      this->state_.xb2,
+  ops_.template rmsnorm<Config::dim>( this->scratchpad_.xb,
+                                      this->scratchpad_.x,
+                                      this->scratchpad_.xb2,
                                       layer_weights.rms_ffn_weight,
-                                      this->state_.curr_concurrency_size );
+                                      this->scratchpad_.curr_concurrency_size );
 
   // now for ffn in we have: self.w2(F.silu(self.w1(x)) * self.w3(x))
   // first calculate self.w1(x) and self.w3(x)
   ops_.template matmul<Config::dim, Config::hidden_dim>(
-    this->state_.hb, this->state_.xb, layer_weights.w1, this->state_.curr_concurrency_size );
-  ops_.template matmul<Config::dim, Config::hidden_dim>(
-    this->state_.hb2, this->state_.xb, layer_weights.w3, this->state_.curr_concurrency_size );
+    this->scratchpad_.hb, this->scratchpad_.xb, layer_weights.w1, this->scratchpad_.curr_concurrency_size );
 
-  ops_.template silu<Config::hidden_dim>( this->state_.hb, this->state_.hb2, this->state_.curr_concurrency_size );
+  ops_.template matmul<Config::dim, Config::hidden_dim>(
+    this->scratchpad_.hb2, this->scratchpad_.xb, layer_weights.w3, this->scratchpad_.curr_concurrency_size );
+
+  ops_.template silu<Config::hidden_dim>(
+    this->scratchpad_.hb, this->scratchpad_.hb2, this->scratchpad_.curr_concurrency_size );
 
   // final matmul to get the output of the ffn
   ops_.template matmul<Config::hidden_dim, Config::dim>(
-    this->state_.xb, this->state_.hb, layer_weights.w2, this->state_.curr_concurrency_size );
+    this->scratchpad_.xb, this->scratchpad_.hb, layer_weights.w2, this->scratchpad_.curr_concurrency_size );
 
   // residual connection
-  ops_.template accum<Config::dim>( this->state_.x, this->state_.xb, this->state_.curr_concurrency_size );
+  ops_.template accum<Config::dim>(
+    this->scratchpad_.x, this->scratchpad_.xb, this->scratchpad_.curr_concurrency_size );
 }
 
 template<typename Config, typename DType, typename LlamaOperations, typename Context>
 void Llama2<Config, DType, LlamaOperations, Context>::classify_ops()
 {
   // final rmsnorm
-  ops_.template rmsnorm<Config::dim>( this->state_.x,
-                                      this->state_.x,
-                                      this->state_.xb2,
+  ops_.template rmsnorm<Config::dim>( this->scratchpad_.x,
+                                      this->scratchpad_.x,
+                                      this->scratchpad_.xb2,
                                       this->base_weights_.rms_final_weight,
-                                      this->state_.curr_concurrency_size );
+                                      this->scratchpad_.curr_concurrency_size );
 
   // classifier into logits
   ops_.template matmul<Config::dim, Config::vocab_size>(
-    this->state_.logits, this->state_.x, this->base_weights_.wcls, this->state_.curr_concurrency_size );
+    this->scratchpad_.logits, this->scratchpad_.x, this->base_weights_.wcls, this->scratchpad_.curr_concurrency_size );
 }
 
 template<typename Config, typename DType, typename LlamaOperations, typename Context>
@@ -386,13 +393,13 @@ void Llama2<Config, DType, LlamaOperations, Context>::forward_prelude( StateType
 {
   this->check_batch( states, contexts, InferenceStage::PreAttention );
 
-  this->state_.curr_concurrency_size = states.batch_size();
+  this->scratchpad_.curr_concurrency_size = states.batch_size();
   const uint32_t next_layer_batch = states.next_layer();
 
   for ( size_t i = 0; i < contexts.size(); i++ ) {
-    this->state_.batch_token_positions[i] = states.token_pos( i );
-    this->state_.batch_layer_contexts[i] = contexts[i]->layer( next_layer_batch );
-    this->state_.batch_token_contexts[i] = contexts[i]->layer( next_layer_batch ).token( states.token_pos( i ) );
+    this->scratchpad_.batch_token_positions[i] = states.token_pos( i );
+    this->scratchpad_.batch_layer_contexts[i] = contexts[i]->layer( next_layer_batch );
+    this->scratchpad_.batch_token_contexts[i] = contexts[i]->layer( next_layer_batch ).token( states.token_pos( i ) );
   }
 
   if ( next_layer_batch == 0 ) {
@@ -400,7 +407,7 @@ void Llama2<Config, DType, LlamaOperations, Context>::forward_prelude( StateType
     load_embedding( states );
   } else {
     /* NOT THE FIRST LAYER, load the activations */
-    ops_.copy( this->state_.x,
+    ops_.copy( this->scratchpad_.x,
                reinterpret_cast<DType*>( states.activations().data() ),
                states.activations().len(),
                CopyType::HostToDevice,
@@ -422,7 +429,7 @@ void Llama2<Config, DType, LlamaOperations, Context>::forward_postlude( StateTyp
       batch_temps.push_back( states.temperature( i ) );
     }
 
-    extract_batch_token( this->ops_, this->state_, batch_temps );
+    extract_batch_token( this->ops_, this->scratchpad_, batch_temps );
 
     // we don't need to send the activations (or anything else) to the next worker, just the token
     states.deallocate_activations();
@@ -433,7 +440,7 @@ void Llama2<Config, DType, LlamaOperations, Context>::forward_postlude( StateTyp
     states.set_next_stage( InferenceStage::PreAttention );
 
     for ( size_t i = 0; i < states.batch_size(); i++ ) {
-      states.set_token( i, this->state_.argmax_pos[i] );
+      states.set_token( i, this->scratchpad_.argmax_pos[i] );
       states.set_token_pos( i, states.token_pos( i ) + 1 );
 
       if ( states.token( i ) == TOKEN_EOS or states.token_pos( i ) >= Config::seq_len ) {
@@ -448,7 +455,7 @@ void Llama2<Config, DType, LlamaOperations, Context>::forward_postlude( StateTyp
     states.deallocate_kvs();
 
     ops_.copy( reinterpret_cast<DType*>( states.activations().data() ),
-               this->state_.x,
+               this->scratchpad_.x,
                states.batch_size() * Config::dim * sizeof( DType ),
                CopyType::DeviceToHost );
 
@@ -469,8 +476,8 @@ void Llama2<Config, DType, LlamaOperations, Context>::forward( StateType& states
 
   for ( size_t layer_num = states.next_layer(); layer_num <= this->settings_.end_layer_num; layer_num++ ) {
     for ( size_t i = 0; i < contexts.size(); i++ ) {
-      this->state_.batch_layer_contexts[i] = contexts[i]->layer( layer_num );
-      this->state_.batch_token_contexts[i] = contexts[i]->layer( layer_num ).token( states.token_pos( i ) );
+      this->scratchpad_.batch_layer_contexts[i] = contexts[i]->layer( layer_num );
+      this->scratchpad_.batch_token_contexts[i] = contexts[i]->layer( layer_num ).token( states.token_pos( i ) );
     }
 
     pre_attention_ops( layer_num, true );
@@ -506,18 +513,18 @@ void Llama2<Config, DType, LlamaOperations, Context>::forward_pre_attention( Sta
   }
 
   ops_.copy( reinterpret_cast<DType*>( states.activations().data() ),
-             this->state_.x,
+             this->scratchpad_.x,
              states.activations().len(),
              CopyType::DeviceToHost );
 
   ops_.copy( reinterpret_cast<DType*>( states.queries().data() ),
-             this->state_.q,
+             this->scratchpad_.q,
              states.queries().len(),
              CopyType::DeviceToHost );
 
   // XXX(sadjad): Copying KV is not always necessary (i.e., if context[i]->empty()), but for convenience we always do it
   ops_.copy(
-    reinterpret_cast<DType*>( states.kvs().data() ), this->state_.kv, states.kvs().len(), CopyType::DeviceToHost );
+    reinterpret_cast<DType*>( states.kvs().data() ), this->scratchpad_.kv, states.kvs().len(), CopyType::DeviceToHost );
 
   states.set_next_stage( InferenceStage::Attention );
 }
@@ -528,26 +535,27 @@ void Llama2<Config, DType, LlamaOperations, Context>::forward_attention( StateTy
                                                                          const ContextVector& contexts )
 {
   this->check_batch( states, contexts, InferenceStage::Attention );
-  this->state_.curr_concurrency_size = states.batch_size();
+  this->scratchpad_.curr_concurrency_size = states.batch_size();
 
   for ( size_t i = 0; i < states.batch_size(); i++ ) {
-    this->state_.batch_token_positions[i] = states.token_pos( i );
-    this->state_.batch_layer_contexts[i] = contexts[i]->layer( states.next_layer() );
-    this->state_.batch_token_contexts[i] = contexts[i]->layer( states.next_layer() ).token( states.token_pos( i ) );
+    this->scratchpad_.batch_token_positions[i] = states.token_pos( i );
+    this->scratchpad_.batch_layer_contexts[i] = contexts[i]->layer( states.next_layer() );
+    this->scratchpad_.batch_token_contexts[i]
+      = contexts[i]->layer( states.next_layer() ).token( states.token_pos( i ) );
   }
 
   // NOTE: We allow mixing FP16 in pre-/post-attention with FP32 during attention. Hence, the conversions.
 
   switch ( states.dtype() ) {
     case DataType::Float16:
-      ops_.template convert_and_copy( this->state_.q,
+      ops_.template convert_and_copy( this->scratchpad_.q,
                                       reinterpret_cast<LlamaOperations::Float16*>( states.queries().data() ),
                                       states.queries().len() / sizeof( typename LlamaOperations::Float16 ),
                                       CopyType::HostToDevice );
       break;
 
     case DataType::Float32:
-      ops_.template convert_and_copy( this->state_.q,
+      ops_.template convert_and_copy( this->scratchpad_.q,
                                       reinterpret_cast<LlamaOperations::Float32*>( states.queries().data() ),
                                       states.queries().len() / sizeof( typename LlamaOperations::Float32 ),
                                       CopyType::HostToDevice );
@@ -591,14 +599,14 @@ void Llama2<Config, DType, LlamaOperations, Context>::forward_attention( StateTy
   switch ( states.dtype() ) {
     case DataType::Float16:
       ops_.template convert_and_copy( reinterpret_cast<LlamaOperations::Float16*>( states.queries().data() ),
-                                      this->state_.xb,
+                                      this->scratchpad_.xb,
                                       states.queries().len() / sizeof( typename LlamaOperations::Float16 ),
                                       CopyType::DeviceToHost );
       break;
 
     case DataType::Float32:
       ops_.template convert_and_copy( reinterpret_cast<LlamaOperations::Float32*>( states.queries().data() ),
-                                      this->state_.xb,
+                                      this->scratchpad_.xb,
                                       states.queries().len() / sizeof( typename LlamaOperations::Float32 ),
                                       CopyType::DeviceToHost );
       break;
@@ -614,14 +622,14 @@ template<StateConcept StateType>
 void Llama2<Config, DType, LlamaOperations, Context>::forward_post_attention( StateType& states )
 {
   this->check_batch( states, {}, InferenceStage::PostAttention );
-  this->state_.curr_concurrency_size = states.batch_size();
+  this->scratchpad_.curr_concurrency_size = states.batch_size();
 
-  ops_.copy( this->state_.x,
+  ops_.copy( this->scratchpad_.x,
              reinterpret_cast<DType*>( states.activations().data() ),
              states.activations().len(),
              CopyType::HostToDevice );
 
-  ops_.copy( this->state_.xb,
+  ops_.copy( this->scratchpad_.xb,
              reinterpret_cast<DType*>( states.queries().data() ),
              states.queries().len(),
              CopyType::HostToDevice );
@@ -635,10 +643,10 @@ template<StateConcept StateType>
 void Llama2<Config, DType, LlamaOperations, Context>::forward_classify( StateType& states )
 {
   this->check_batch( states, {}, InferenceStage::Classification );
-  this->state_.curr_concurrency_size = states.batch_size();
+  this->scratchpad_.curr_concurrency_size = states.batch_size();
 
   // load the activations
-  ops_.copy( this->state_.x,
+  ops_.copy( this->scratchpad_.x,
              reinterpret_cast<DType*>( states.activations().data() ),
              states.activations().len(),
              CopyType::HostToDevice );
