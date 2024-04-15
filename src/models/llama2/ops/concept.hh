@@ -12,7 +12,7 @@ namespace glinthawk::models::llama2 {
 namespace {
 constexpr uint64_t UI64 = 1;
 
-template<typename T, typename DType, typename Settings>
+template<typename T, typename DType, typename ConfigRuntime>
 concept AdditionalLlamaOperationsConcept = requires( const T t,
                                                      void* ptr_void,
                                                      DType* ptr,
@@ -22,7 +22,7 @@ concept AdditionalLlamaOperationsConcept = requires( const T t,
                                                      const uint64_t size,
                                                      const uint32_t* int_arr,
                                                      const CopyType cpt,
-                                                     const Settings& s,
+                                                     const ConfigRuntime& s,
                                                      const std::vector<float>& vec,
                                                      typename T::ContextType::LayerContextType lc[],
                                                      typename T::ContextType::TokenContextType tc[] ) {
@@ -38,8 +38,8 @@ concept AdditionalLlamaOperationsConcept = requires( const T t,
 
 }
 
-template<typename T, typename DType, typename Settings>
+template<typename T, typename DType, typename ConfigRuntime>
 concept LlamaOperationsConcept
-  = AdditionalLlamaOperationsConcept<T, DType, Settings> && common::OperationsConcept<T, DType>;
+  = AdditionalLlamaOperationsConcept<T, DType, ConfigRuntime> && common::OperationsConcept<T, DType>;
 
 } // namespace glinthawk::models::common

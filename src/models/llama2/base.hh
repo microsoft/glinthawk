@@ -24,19 +24,16 @@ constexpr size_t MAX_BATCH_SIZE = 1024;
 
 template<typename Config>
 requires ModelConfig<Config>
-struct Settings
+struct ConfigRuntime
 {
-  Settings() {}
+  ConfigRuntime() {}
 
-  Settings( const std::filesystem::path& config_file,
-            const uint32_t start_layer,
-            const uint32_t end_layer,
-            const uint64_t pre_att_concurrency_limit,
-            const uint64_t att_concurrency_limit,
-            const uint64_t post_att_concurrency_limit,
-            const uint64_t cls_concurrency_limit,
-            const uint64_t max_context_count,
-            const bool randomize_parameters );
+  ConfigRuntime( const std::filesystem::path& config_file,
+                 const uint32_t start_layer,
+                 const uint32_t end_layer,
+                 const uint64_t concurrency_limit,
+                 const uint64_t max_context_count,
+                 const bool randomize_parameters );
 
   std::string to_string() const;
 
@@ -74,7 +71,7 @@ requires ModelConfig<Config>
 struct BaseWeights
 {
   BaseWeights() = default;
-  BaseWeights( const DType* base_weights, const Settings<Config>& settings );
+  BaseWeights( const DType* base_weights, const RuntimeConfig<Config>& settings );
 
   BaseWeights( const BaseWeights& ) = delete;
   BaseWeights operator=( const BaseWeights& ) = delete;
@@ -88,7 +85,7 @@ struct BaseWeights
                + ( Config::wcls_present ? ( Config::vocab_size * Config::dim ) : 0 ) );
   }
 
-  static size_t base_size( const Settings<Config>& settings )
+  static size_t base_size( const RuntimeConfig<Config>& settings )
   {
     const bool model_hosts_embedding = ( settings.pre_att_concurrency_limit > 0 and settings.start_layer_num == 0 )
                                        or ( settings.cls_concurrency_limit > 0 and not Config::wcls_present );
@@ -106,7 +103,7 @@ struct BaseWeights
     return sizeof( DType ) * size;
   }
 
-  static std::vector<uint64_t> weight_offset( const Settings<Config>& settings )
+  static std::vector<uint64_t> weight_offset( const RuntimeConfig<Config>& settings )
   {
     const bool model_hosts_embedding = ( settings.pre_att_concurrency_limit > 0 and settings.start_layer_num == 0 )
                                        or ( settings.cls_concurrency_limit > 0 and not Config::wcls_present );
@@ -132,7 +129,7 @@ struct BaseWeights
     return offsets;
   }
 
-  static std::vector<uint64_t> weight_size( const Settings<Config>& settings )
+  static std::vector<uint64_t> weight_size( const RuntimeConfig<Config>& settings )
   {
     const bool model_hosts_embedding = ( settings.pre_att_concurrency_limit > 0 and settings.start_layer_num == 0 )
                                        or ( settings.cls_concurrency_limit > 0 and not Config::wcls_present );
@@ -163,7 +160,7 @@ requires ModelConfig<Config>
 struct LayerWeights
 {
   LayerWeights() = default;
-  LayerWeights( const DType* model, const Settings<Config>& settings );
+  LayerWeights( const DType* model, const RuntimeConfig<Config>& settings );
 
   LayerWeights( const LayerWeights& ) = delete;
   LayerWeights operator=( const LayerWeights& ) = delete;
@@ -177,7 +174,7 @@ struct LayerWeights
                + 3 * Config::dim * Config::hidden_dim );
   }
 
-  static size_t layer_size( const Settings<Config>& settings )
+  static size_t layer_size( const RuntimeConfig<Config>& settings )
   {
     const bool model_hosts_pre_att = settings.pre_att_concurrency_limit > 0;
     const bool model_hosts_post_att = settings.post_att_concurrency_limit > 0;
@@ -189,7 +186,7 @@ struct LayerWeights
     return sizeof( DType ) * size;
   }
 
-  static std::vector<uint64_t> weight_offset( const Settings<Config>& settings )
+  static std::vector<uint64_t> weight_offset( const RuntimeConfig<Config>& settings )
   {
     const bool model_hosts_pre_att = settings.pre_att_concurrency_limit > 0;
     std::vector<uint64_t> offsets {};
@@ -208,7 +205,7 @@ struct LayerWeights
     return offsets;
   }
 
-  static std::vector<uint64_t> weight_size( const Settings<Config>& settings )
+  static std::vector<uint64_t> weight_size( const RuntimeConfig<Config>& settings )
   {
     const bool model_hosts_pre_att = settings.pre_att_concurrency_limit > 0;
     const bool model_hosts_post_att = settings.post_att_concurrency_limit > 0;
@@ -250,14 +247,14 @@ requires ModelConfig<Config>
 struct ScratchPad
 {
   ScratchPad() = default;
-  ScratchPad( const Settings<Config>& settings, DType* buffer );
+  ScratchPad( const ConfigRuntime<Config>& settings, DType* buffer );
 
   ScratchPad( const ScratchPad& ) = delete;
   ScratchPad operator=( const ScratchPad& ) = delete;
   ScratchPad( ScratchPad&& ) = default;
   ScratchPad& operator=( ScratchPad&& ) = default;
 
-  static size_t scratchpad_size( const Settings<Config>& settings );
+  static size_t scratchpad_size( const ConfigRuntime<Config>& settings );
 
   DType* buffer_ {};      // we use this buffer for everything, including activations
   DType* x {};            // activation at current time stamp (B, dim)
@@ -294,21 +291,13 @@ DType* _advance_pointer( DType*& ptr, const size_t size )
 }
 
 template<typename T>
-Settings<T>::Settings( const std::filesystem::path& config_file,
-                       const uint32_t start_layer,
-                       const uint32_t end_layer,
-                       const uint64_t pre_att_concurrency_limit_,
-                       const uint64_t att_concurrency_limit_,
-                       const uint64_t post_att_concurrency_limit_,
-                       const uint64_t cls_concurrency_limit_,
-                       const uint64_t max_context_count_,
-                       const bool randomize_parameters_ )
-  : concurrency_limit( std::max(
-    { pre_att_concurrency_limit_, att_concurrency_limit_, post_att_concurrency_limit_, cls_concurrency_limit_ } ) )
-  , pre_att_concurrency_limit( pre_att_concurrency_limit_ )
-  , att_concurrency_limit( att_concurrency_limit_ )
-  , post_att_concurrency_limit( post_att_concurrency_limit_ )
-  , cls_concurrency_limit( cls_concurrency_limit_ )
+ConfigRuntime<T>::ConfigRuntime( const std::filesystem::path& config_file,
+                                 const uint32_t start_layer,
+                                 const uint32_t end_layer,
+                                 const uint64_t concurrency_limit_,
+                                 const uint64_t max_context_count_,
+                                 const bool randomize_parameters_ )
+  : concurrency_limit( concurrency_limit_ )
   , max_context_count( max_context_count_ )
   , randomize_parameters( randomize_parameters_ )
 {
@@ -376,7 +365,7 @@ Settings<T>::Settings( const std::filesystem::path& config_file,
 }
 
 template<typename T>
-std::string Settings<T>::to_string() const
+std::string ConfigRuntime<T>::to_string() const
 {
   std::ostringstream oss;
   oss << "{ ";
@@ -405,7 +394,7 @@ std::string Settings<T>::to_string() const
 /* BASE WEIGHTS */
 
 template<typename Config, typename DType>
-BaseWeights<Config, DType>::BaseWeights( const DType* model, const Settings<Config>& settings )
+BaseWeights<Config, DType>::BaseWeights( const DType* model, const RuntimeConfig<Config>& settings )
 {
   auto ptr = model;
 
@@ -424,7 +413,7 @@ BaseWeights<Config, DType>::BaseWeights( const DType* model, const Settings<Conf
 /* LAYER WEIGHTS */
 
 template<typename Config, typename DType>
-LayerWeights<Config, DType>::LayerWeights( const DType* model, const Settings<Config>& settings )
+LayerWeights<Config, DType>::LayerWeights( const DType* model, const RuntimeConfig<Config>& settings )
 {
   auto ptr = model;
 
@@ -445,7 +434,7 @@ LayerWeights<Config, DType>::LayerWeights( const DType* model, const Settings<Co
 /* RUN STATE */
 
 template<typename Config, typename DType, typename ContextType>
-ScratchPad<Config, DType, ContextType>::ScratchPad( const Settings<Config>& settings, DType* buffer )
+ScratchPad<Config, DType, ContextType>::ScratchPad( const ConfigRuntime<Config>& settings, DType* buffer )
   : buffer_( buffer )
   , x( buffer_ )
   , xb( buffer_ + Config::dim * settings.concurrency_limit )
@@ -461,7 +450,7 @@ ScratchPad<Config, DType, ContextType>::ScratchPad( const Settings<Config>& sett
 }
 
 template<typename Config, typename DType, typename ContextType>
-size_t ScratchPad<Config, DType, ContextType>::scratchpad_size( const Settings<Config>& settings )
+size_t ScratchPad<Config, DType, ContextType>::scratchpad_size( const ConfigRuntime<Config>& settings )
 {
   return sizeof( DType ) * settings.concurrency_limit
          * ( Config::dim * 4 + Config::kv_dim * 2 + Config::hidden_dim * 2 + Config::n_heads * Config::seq_len

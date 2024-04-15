@@ -24,7 +24,7 @@ public:
   using ContextType = Ctx;
 
 public:
-  LlamaOperations( const Settings<Config>& ) {}
+  LlamaOperations( const ConfigRuntime<Config>& ) {}
   ~LlamaOperations() {}
 
   void attention_0_gemm( const DType* query,
@@ -70,19 +70,19 @@ private:
 
 public:
   using llama2::Context<Config, DType>::Context;
-  Context( const Settings<Config>& settings, const bool make_empty = false );
+  Context( const ConfigRuntime<Config>& settings, const bool make_empty = false );
 };
 
 static_assert( LlamaOperationsConcept<LlamaOperations<configs::Stories_110M, glinthawk::float32_t>,
                                       glinthawk::float32_t,
-                                      Settings<configs::Stories_110M>> );
+                                      ConfigRuntime<configs::Stories_110M>> );
 
 static_assert( LlamaOperationsConcept<LlamaOperations<configs::Stories_110M, glinthawk::float16_t>,
                                       glinthawk::float16_t,
-                                      Settings<configs::Stories_110M>> );
+                                      ConfigRuntime<configs::Stories_110M>> );
 
 template<typename Config, typename DType>
-Context<Config, DType>::Context( const Settings<Config>& settings, const bool make_empty )
+Context<Config, DType>::Context( const ConfigRuntime<Config>& settings, const bool make_empty )
   : llama2::Context<Config, DType>( settings )
   , storage_( [&]() -> decltype( storage_ ) {
     DType* ptr;

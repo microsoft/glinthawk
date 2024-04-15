@@ -26,7 +26,7 @@ private:
   void setup_rng( unsigned long seed, const uint64_t size, const uint64_t batch_size );
 
 public:
-  LlamaOperations( const Settings<Config>& settings );
+  LlamaOperations( const ConfigRuntime<Config>& settings );
   ~LlamaOperations() {}
 
   void attention_0_gemm( const DType* query,
@@ -71,16 +71,16 @@ private:
 
 public:
   using llama2::Context<Config, DType>::Context;
-  Context( const Settings<Config>& settings, const bool make_empty = false );
+  Context( const ConfigRuntime<Config>& settings, const bool make_empty = false );
 };
 
 static_assert( LlamaOperationsConcept<LlamaOperations<configs::Stories_110M, glinthawk::float32_t>,
                                       glinthawk::float32_t,
-                                      Settings<configs::Stories_110M>> );
+                                      ConfigRuntime<configs::Stories_110M>> );
 
 static_assert( LlamaOperationsConcept<LlamaOperations<configs::Stories_110M, glinthawk::float16_t>,
                                       glinthawk::float16_t,
-                                      Settings<configs::Stories_110M>> );
+                                      ConfigRuntime<configs::Stories_110M>> );
 
 namespace {
 
@@ -97,7 +97,7 @@ constexpr size_t AMRBS = 128; /* argmax reduce block size */
 }
 
 template<typename Config, typename DType>
-Context<Config, DType>::Context( const Settings<Config>& settings, const bool make_empty )
+Context<Config, DType>::Context( const ConfigRuntime<Config>& settings, const bool make_empty )
   : llama2::Context<Config, DType>( settings )
   , storage_( [&]() -> decltype( storage_ ) {
     DType* ptr;
@@ -250,7 +250,7 @@ __global__ void setup_rng_kernel( curandState* state, unsigned long seed )
 }
 
 template<typename Config, typename DType, typename ContextType>
-LlamaOperations<Config, DType, ContextType>::LlamaOperations( const Settings<Config>& settings )
+LlamaOperations<Config, DType, ContextType>::LlamaOperations( const ConfigRuntime<Config>& settings )
   : common::cuda::Operations<DType>( settings.concurrency_limit )
 {
   setup_rng( 1234ul, Config::vocab_size, settings.concurrency_limit );

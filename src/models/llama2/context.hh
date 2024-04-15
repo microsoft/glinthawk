@@ -43,7 +43,7 @@ concept ContextConcept = LayerContextConcept<typename T::LayerContextType, DType
 // <forward declarations>
 template<typename Config>
 requires ModelConfig<Config>
-class Settings;
+class ConfigRuntime;
 
 template<typename Config, typename DType>
 requires ModelConfig<Config>
@@ -141,14 +141,14 @@ public:
   using LayerContextType = LayerContext<Config, DType>;
   using TokenContextType = TokenContext<Config, DType>;
 
-  Context( const Settings<Config>& settings, DType* buffer )
+  Context( const ConfigRuntime<Config>& settings, DType* buffer )
     : nlayers_loaded_( settings.n_layers_loaded() )
     , start_layer_num_( settings.start_layer_num )
     , buffer_( buffer )
   {
   }
 
-  Context( const Settings<Config>& settings )
+  Context( const ConfigRuntime<Config>& settings )
     : nlayers_loaded_( settings.n_layers_loaded() )
     , start_layer_num_( settings.start_layer_num )
     , buffer_( nullptr )
