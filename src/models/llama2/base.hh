@@ -24,16 +24,16 @@ constexpr size_t MAX_BATCH_SIZE = 1024;
 
 template<typename Config>
 requires ModelConfig<Config>
-struct Settings
+struct ConfigRuntime
 {
-  Settings() {}
+  ConfigRuntime() {}
 
-  Settings( const std::filesystem::path& config_file,
-            const uint32_t start_layer,
-            const uint32_t end_layer,
-            const uint64_t concurrency_limit,
-            const uint64_t max_context_count,
-            const bool randomize_parameters );
+  ConfigRuntime( const std::filesystem::path& config_file,
+                 const uint32_t start_layer,
+                 const uint32_t end_layer,
+                 const uint64_t concurrency_limit,
+                 const uint64_t max_context_count,
+                 const bool randomize_parameters );
 
   std::string to_string() const;
 
@@ -134,14 +134,14 @@ requires ModelConfig<Config>
 struct ScratchPad
 {
   ScratchPad() = default;
-  ScratchPad( const Settings<Config>& settings, DType* buffer );
+  ScratchPad( const ConfigRuntime<Config>& settings, DType* buffer );
 
   ScratchPad( const ScratchPad& ) = delete;
   ScratchPad operator=( const ScratchPad& ) = delete;
   ScratchPad( ScratchPad&& ) = default;
   ScratchPad& operator=( ScratchPad&& ) = default;
 
-  static size_t scratchpad_size( const Settings<Config>& settings );
+  static size_t scratchpad_size( const ConfigRuntime<Config>& settings );
 
   DType* buffer_ {};      // we use this buffer for everything, including activations
   DType* x {};            // activation at current time stamp (B, dim)
@@ -178,12 +178,12 @@ DType* _advance_pointer( DType*& ptr, const size_t size )
 }
 
 template<typename T>
-Settings<T>::Settings( const std::filesystem::path& config_file,
-                       const uint32_t start_layer,
-                       const uint32_t end_layer,
-                       const uint64_t concurrency_limit_,
-                       const uint64_t max_context_count_,
-                       const bool randomize_parameters_ )
+ConfigRuntime<T>::ConfigRuntime( const std::filesystem::path& config_file,
+                                 const uint32_t start_layer,
+                                 const uint32_t end_layer,
+                                 const uint64_t concurrency_limit_,
+                                 const uint64_t max_context_count_,
+                                 const bool randomize_parameters_ )
   : concurrency_limit( concurrency_limit_ )
   , max_context_count( max_context_count_ )
   , randomize_parameters( randomize_parameters_ )
@@ -252,7 +252,7 @@ Settings<T>::Settings( const std::filesystem::path& config_file,
 }
 
 template<typename T>
-std::string Settings<T>::to_string() const
+std::string ConfigRuntime<T>::to_string() const
 {
   std::ostringstream oss;
   oss << "{ ";
@@ -311,7 +311,7 @@ LayerWeights<Config, DType>::LayerWeights( const DType* model )
 /* RUN STATE */
 
 template<typename Config, typename DType, typename ContextType>
-ScratchPad<Config, DType, ContextType>::ScratchPad( const Settings<Config>& settings, DType* buffer )
+ScratchPad<Config, DType, ContextType>::ScratchPad( const ConfigRuntime<Config>& settings, DType* buffer )
   : buffer_( buffer )
   , x( buffer_ )
   , xb( buffer_ + Config::dim * settings.concurrency_limit )
@@ -327,7 +327,7 @@ ScratchPad<Config, DType, ContextType>::ScratchPad( const Settings<Config>& sett
 }
 
 template<typename Config, typename DType, typename ContextType>
-size_t ScratchPad<Config, DType, ContextType>::scratchpad_size( const Settings<Config>& settings )
+size_t ScratchPad<Config, DType, ContextType>::scratchpad_size( const ConfigRuntime<Config>& settings )
 {
   return sizeof( DType ) * settings.concurrency_limit
          * ( Config::dim * 4 + Config::kv_dim * 2 + Config::hidden_dim * 2 + Config::n_heads * Config::seq_len

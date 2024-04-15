@@ -27,19 +27,19 @@
 namespace glinthawk::models::llama2 {
 
 template<typename Config, typename DType, typename LlamaOperations, typename Context>
-requires ModelConfig<Config> && LlamaOperationsConcept<LlamaOperations, DType, Settings<Config>>
+requires ModelConfig<Config> && LlamaOperationsConcept<LlamaOperations, DType, ConfigRuntime<Config>>
          && ContextConcept<Context, DType>
 class Llama2
 {
 public:
   using ContextPtr = std::shared_ptr<Context>;
-  using ContextVector = std::vector<ContextPtr>;
   using Operations = LlamaOperations;
+  using ContextVector = std::vector<ContextPtr>;
 
   using ModelDataType = DType;
   using ContextType = Context;
   using ConfigType = Config;
-  using SettingsType = Settings<Config>;
+  using SettingsType = ConfigRuntime<Config>;
 
 public:
   Llama2( const std::filesystem::path& model_dir,
@@ -67,7 +67,7 @@ public:
   template<StateConcept StateType>
   void forward_classify( StateType& state );
 
-  Settings<Config> settings() const { return settings_; }
+  ConfigRuntime<Config> settings() const { return instance_config_; }
   Operations& ops() { return ops_; }
 
 private:
@@ -75,8 +75,8 @@ private:
   static constexpr uint32_t TOKEN_EOS = 2; // End-of-sequence token
 
 protected:
-  const Settings<Config> settings_;
-  Operations ops_ { settings_ };
+  const ConfigRuntime<Config> instance_config_;
+  Operations ops_ { instance_config_ };
 
   typename Operations::DeviceUniquePtr base_weights_buffer_;
   typename Operations::DeviceUniquePtr layers_buffer_;
@@ -151,28 +151,30 @@ Llama2<Config, DType, LlamaOperations, Context>::Llama2( const std::filesystem::
                                                          const uint64_t concurrency_limit,
                                                          const uint64_t max_context_count,
                                                          const bool randomize_parameters )
-  : settings_( model_dir / "CONFIG",
-               start_layer,
-               end_layer,
-               concurrency_limit,
-               max_context_count,
-               randomize_parameters )
+  : instance_config_( model_dir / "CONFIG",
+                      start_layer,
+                      end_layer,
+                      concurrency_limit,
+                      max_context_count,
+                      randomize_parameters )
   , base_weights_buffer_( ops_.device_allocate( BaseWeights<Config, DType>::base_size() ) )
-  , layers_buffer_( ops_.device_allocate( LayerWeights<Config, DType>::layer_size() * settings_.n_layers_loaded() ) )
-  , scratchpad_buffer_( ops_.device_allocate( ScratchPad<Config, DType, Context>::scratchpad_size( settings_ ) ) )
+  , layers_buffer_(
+      ops_.device_allocate( LayerWeights<Config, DType>::layer_size() * instance_config_.n_layers_loaded() ) )
+  , scratchpad_buffer_(
+      ops_.device_allocate( ScratchPad<Config, DType, Context>::scratchpad_size( instance_config_ ) ) )
   , base_weights_( base_weights_buffer_.get() )
   , layer_weights_( [&] {
     std::array<LayerWeights<Config, DType>, Config::n_layers> layers {};
     constexpr size_t layer_size = LayerWeights<Config, DType>::layer_size();
     auto ptr = layers_buffer_.get();
-    for ( auto i = settings_.start_layer_num; i <= settings_.end_layer_num; i++ ) {
+    for ( auto i = instance_config_.start_layer_num; i <= instance_config_.end_layer_num; i++ ) {
       layers[i] = LayerWeights<Config, DType> { reinterpret_cast<DType*>(
-        reinterpret_cast<uint8_t*>( ptr ) + ( i - settings_.start_layer_num ) * layer_size ) };
+        reinterpret_cast<uint8_t*>( ptr ) + ( i - instance_config_.start_layer_num ) * layer_size ) };
     }
 
     return layers;
   }() )
-  , scratchpad_( settings_, scratchpad_buffer_.get() )
+  , scratchpad_( instance_config_, scratchpad_buffer_.get() )
 {
   auto copy_file_to_buffer = [this]( const std::filesystem::path& path, DType* buffer, const size_t size ) {
     CHECK_EQ( std::filesystem::file_size( path ), size ) << "File " << path << " is not the expected size.";
@@ -196,12 +198,13 @@ Llama2<Config, DType, LlamaOperations, Context>::Llama2( const std::filesystem::
                                   10.0 / sqrt( Config::dim ) );
 
     ops_.randomize_device_buffer( layers_buffer_.get(),
-                                  layer_size * settings_.n_layers_loaded() / sizeof( DType ),
+                                  layer_size * instance_config_.n_layers_loaded() / sizeof( DType ),
                                   -10.0 / sqrt( Config::dim ),
                                   10.0 / sqrt( Config::dim ) );
 
     ops_.randomize_device_buffer( scratchpad_buffer_.get(),
-                                  ScratchPad<Config, DType, Context>::scratchpad_size( settings_ ) / sizeof( DType ),
+                                  ScratchPad<Config, DType, Context>::scratchpad_size( instance_config_ )
+                                    / sizeof( DType ),
                                   -10.0 / sqrt( Config::dim ),
                                   10.0 / sqrt( Config::dim ) );
 
@@ -212,16 +215,17 @@ Llama2<Config, DType, LlamaOperations, Context>::Llama2( const std::filesystem::
     LOG( INFO ) << "Loaded base weights (" << base_size << " bytes).";
 
     // Load LAYER(i)
-    for ( auto i = settings_.start_layer_num; i <= settings_.end_layer_num; i++ ) {
+    for ( auto i = instance_config_.start_layer_num; i <= instance_config_.end_layer_num; i++ ) {
       const auto filename = model_dir / ( "LAYER" + std::to_string( i ) + filename_suffix );
       DType* ptr = reinterpret_cast<DType*>( reinterpret_cast<uint8_t*>( layers_buffer_.get() )
-                                             + ( i - settings_.start_layer_num ) * layer_size );
+                                             + ( i - instance_config_.start_layer_num ) * layer_size );
 
       copy_file_to_buffer( filename, ptr, layer_size );
     }
 
-    LOG( INFO ) << "Loaded layer weights (" << settings_.start_layer_num << " to " << settings_.end_layer_num << ", "
-                << ( layer_size * settings_.n_layers_loaded() ) << " bytes).";
+    LOG( INFO ) << "Loaded layer weights (" << instance_config_.start_layer_num << " to "
+                << instance_config_.end_layer_num << ", " << ( layer_size * instance_config_.n_layers_loaded() )
+                << " bytes).";
   }
 
   LOG( INFO ) << "Model " << typeid( decltype( this ) ).name() << " instantiated.";
@@ -234,7 +238,7 @@ void Llama2<Config, DType, LlamaOperations, Context>::check_batch(
   const InferenceStage stage ) const
 {
   CHECK_GT( states.batch_size(), 0 );
-  CHECK_LE( states.batch_size(), settings_.concurrency_limit );
+  CHECK_LE( states.batch_size(), instance_config_.concurrency_limit );
 
   if ( stage == InferenceStage::Attention ) {
     CHECK_EQ( states.batch_size(), contexts.size() );
@@ -242,8 +246,8 @@ void Llama2<Config, DType, LlamaOperations, Context>::check_batch(
 
   const uint32_t next_layer_batch = states.next_layer();
 
-  CHECK_LE( settings_.start_layer_num, next_layer_batch );
-  CHECK_LE( next_layer_batch, settings_.end_layer_num );
+  CHECK_LE( instance_config_.start_layer_num, next_layer_batch );
+  CHECK_LE( next_layer_batch, instance_config_.end_layer_num );
 
   CHECK( states.next_stage() == stage );
 
@@ -474,7 +478,7 @@ void Llama2<Config, DType, LlamaOperations, Context>::forward( StateType& states
 {
   forward_prelude( states, contexts );
 
-  for ( size_t layer_num = states.next_layer(); layer_num <= this->settings_.end_layer_num; layer_num++ ) {
+  for ( size_t layer_num = states.next_layer(); layer_num <= this->instance_config_.end_layer_num; layer_num++ ) {
     for ( size_t i = 0; i < contexts.size(); i++ ) {
       this->scratchpad_.batch_layer_contexts[i] = contexts[i]->layer( layer_num );
       this->scratchpad_.batch_token_contexts[i] = contexts[i]->layer( layer_num ).token( states.token_pos( i ) );
@@ -485,11 +489,11 @@ void Llama2<Config, DType, LlamaOperations, Context>::forward( StateType& states
     post_attention_ops( layer_num );
   }
 
-  if ( this->settings_.end_layer_num == Config::n_layers - 1 ) {
+  if ( this->instance_config_.end_layer_num == Config::n_layers - 1 ) {
     classify_ops();
-    return forward_postlude( states, this->settings_.end_layer_num, true );
+    return forward_postlude( states, this->instance_config_.end_layer_num, true );
   } else {
-    return forward_postlude( states, this->settings_.end_layer_num, false );
+    return forward_postlude( states, this->instance_config_.end_layer_num, false );
   }
 }
 
