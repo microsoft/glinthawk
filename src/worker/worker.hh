@@ -88,21 +88,21 @@ private:
   net::Address listen_address_;
   net::TCPSocket listen_socket_;
 
+  std::map<net::Address, Peer> peers_ {};
+
   net::Address coordinator_address_;
   Peer coordinator_;
 
-  uint64_t msg_counter_ { 0 };
-  uint64_t past_msg_time_ {};
-
-  std::map<net::Address, Peer> peers_ {};
   std::filesystem::path model_root_;
   std::unique_ptr<ComputeKernel> compute_kernel_ { nullptr };
 
-  std::shared_ptr<glinthawk::storage::BlobStore> blobstore_ { nullptr };
-  std::unique_ptr<glinthawk::prompt::PromptManager> prompt_manager_ { nullptr };
-  std::unique_ptr<glinthawk::prompt::CompletionManager> completion_manager_ { nullptr };
+  std::unique_ptr<glinthawk::storage::BlobStore> blobstore_ { nullptr };
+  glinthawk::prompt::PromptStore prompt_store_ {};
 
   std::unordered_map<RouteID, RouteMap> route_set_ {};
+
+  std::thread prompt_preparation_thread_ {};
+  std::thread completion_commit_thread_ {};
 
   core::MessageHandler<net::TCPSession>::RuleCategories rule_categories_ {
     .session = event_loop_.add_category( "Worker session" ),
@@ -110,10 +110,6 @@ private:
     .endpoint_write = event_loop_.add_category( "Worker endpoint write" ),
     .response = event_loop_.add_category( "Worker response" ),
   };
-
-  moodycamel::BlockingConcurrentQueue<glinthawk::PromptID> prompt_queue_ {};
-  std::thread prompt_preparation_thread_ {};
-  std::thread completion_commit_thread_ {};
 
   monitoring::TelegrafLogger::RuleCategories telegraf_rule_categories_ {
     .session = event_loop_.add_category( "Telegraf session" ),
@@ -225,8 +221,6 @@ void BatchedWorker<ModelConfig, ComputeKernel>::setup_blobstore( const std::stri
   CHECK( blobstore ) << "Could not create blobstore: " << blobstore_uri;
 
   blobstore_ = std::move( blobstore );
-  prompt_manager_ = std::make_unique<prompt::PromptManager>( blobstore_ );
-  completion_manager_ = std::make_unique<prompt::CompletionManager>( blobstore_ );
   LOG( INFO ) << "Blobstore setup complete: " << blobstore_->to_string();
 }
 
@@ -512,43 +506,6 @@ bool BatchedWorker<ModelConfig, ComputeKernel>::handle_coordinator_message( core
     }
 
     case Message::OpCode::ProcessPrompts: {
-      // TODO: this path is broken since we are not setting any route ids for prompts
-      LOG( FATAL ) << "FIX ME FIRST!";
-
-      if ( not this->prompt_manager_ ) {
-        // XXX(sadjad): should do something better here
-        LOG( ERROR ) << "Got prompts, but prompt manager not initialized.";
-        break;
-      }
-
-      protobuf::ProcessPrompts proto;
-      proto.ParseFromString( msg.payload() );
-      LOG( INFO ) << "Got prompts from the coordinator: " << proto.prompt_ids_size() << " prompt(s)";
-
-      std::vector<PromptID> prompt_ids;
-      for ( int i = 0; i < proto.prompt_ids_size(); i++ ) {
-        prompt_ids.push_back( PromptID::from_base58digest( proto.prompt_ids( i ) ) );
-      }
-
-      this->prompt_manager_->fetch( prompt_ids );
-      LOG( INFO ) << "Fetched prompts from blobstore.";
-
-      for ( auto& pid : prompt_ids ) {
-        prompt_queue_.enqueue( pid );
-      }
-
-      // make sure the prompt preparation thread is running
-      if ( not prompt_preparation_thread_.joinable() ) {
-        prompt_preparation_thread_ = std::thread(
-          std::bind( &BatchedWorker<ModelConfig, ComputeKernel>::prompt_preparation_thread_func, this ) );
-      }
-
-      // also run the completion commiting thread
-      if ( not completion_commit_thread_.joinable() ) {
-        completion_commit_thread_
-          = std::thread( std::bind( &BatchedWorker<ModelConfig, ComputeKernel>::completion_commit_thread_func, this ) );
-      }
-
       break;
     }
 
@@ -611,15 +568,28 @@ bool BatchedWorker<ModelConfig, ComputeKernel>::handle_peer_message( core::Messa
       if ( state.next_layer() == 0 and state.next_stage() == models::InferenceStage::PreAttention ) {
         /* first worker in the chain */
         for ( size_t i = 0; i < state.batch_size(); i++ ) {
-          __stats__.increment<Counters::TokensGenerated>();
+          const auto& prompt_id = state.prompt_id( i );
+          auto& prompt = prompt_store_.get( prompt_id );
+
+          // Have we finished processing the prompt?
+          if ( state.token_pos( i ) >= state.prompt_length( i ) ) {
+            // prompt processing has already finished, and this is a generated token
+            __stats__.increment<Counters::TokensGenerated>();
+            prompt.completion().append( state.token( i ) );
+          } else {
+            __stats__.increment<Counters::TokensProcessed>();
+            // we are still processing the prompt tokens; the next token comes directly from the prompt
+            const auto next_token = prompt.prompt().at( state.token_pos( i ) );
+            state.set_token( i, next_token );
+          }
 
           if ( state.finished( i ) ) {
-            const auto& prompt_id = state.prompt_id( i );
-            auto& completion = this->completion_manager_->get( prompt_id );
-            completion.add_token( state.token( i ) );
+            prompt_store_.terminate( prompt_id );
+
             __stats__.increment<Counters::PromptsCompleted>();
+
+            // XXX(sadjad): this is actually the length of the prompt+completion; will adjust later.
             __stats__.add_point<IntDistributions::PromptLength>( state.token_pos( i ) );
-            completion_manager_->terminate( prompt_id );
 
             state.discard( i );
           }
@@ -669,10 +639,9 @@ void BatchedWorker<ModelConfig, ComputeKernel>::prompt_preparation_thread_func()
 template<typename ModelConfig, typename ComputeKernel>
 void BatchedWorker<ModelConfig, ComputeKernel>::completion_commit_thread_func()
 {
-  // commit the completed prompts to the blobstore every 5 seconds
   while ( running_ ) {
-    completion_manager_->commit();
-    std::this_thread::sleep_for( std::chrono::seconds{ 5 } );
+    prompt_store_.commit();
+    std::this_thread::sleep_for( std::chrono::seconds { 5 } );
   }
 }
 

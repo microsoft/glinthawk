@@ -10,7 +10,7 @@
   "prompts": [
     {
       "id": "unique_id", // optional, auto-generated if not provided
-      "temprature": 0.5, // optional, default is 0
+      "temprature": 0, // optional, the range is [0..255]
       "output_len": 1024,
 
       // at least one of the following must be provided
