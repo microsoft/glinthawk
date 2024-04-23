@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <memory>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -13,80 +14,67 @@
 
 namespace glinthawk::prompt {
 
-class Prompt
+class TokenSequence
 {
-protected:
-  std::vector<uint32_t> tokens_ {};
-
-  Prompt() = default;
-
 public:
-  Prompt( const std::string_view serialized_prompt );
-  uint32_t token( const uint32_t token_pos ) const { return tokens_.at( token_pos ); }
-  uint32_t token_count() const { return tokens_.size(); }
+  TokenSequence() = default;
 
-  const std::vector<uint32_t>& tokens() const { return tokens_; }
-};
-
-class Completion : public Prompt
-{
-private:
-  bool is_terminated_ { false };
-
-public:
-  Completion() {}
-
-  void add_token( const uint32_t token ) { tokens_.push_back( token ); }
-  size_t token_count() { return tokens_.size(); }
-  std::string serialize() const;
-
-  void terminate() { is_terminated_ = true; }
-  bool is_terminated() const { return is_terminated_; }
-};
-
-class PromptManager
-{
-private:
-  std::shared_ptr<storage::BlobStore> blobstore_ {};
-  std::unordered_map<PromptID, Prompt> prompts_ {};
-
-public:
-  PromptManager( std::shared_ptr<storage::BlobStore> blobstore );
-
-  const Prompt& get( const PromptID& prompt_id );
-
-  /// @brief Fetch the given prompts from the blobstore
-  void fetch( const std::vector<PromptID>& prompt_ids );
-};
-
-class CompletionManager
-{
-private:
-  std::shared_ptr<storage::BlobStore> blobstore_ {};
-  std::unordered_map<PromptID, Completion> completions_ {};
-  std::unordered_map<PromptID, Completion> terminated_completions_ {};
-
-  std::mutex terminated_mutex_ {};
-
-public:
-  CompletionManager( std::shared_ptr<storage::BlobStore> blobstore );
-
-  Completion& get( const PromptID& prompt_id );
-
-  void terminate( const PromptID& prompt_id )
+  TokenSequence( const std::vector<uint32_t>& tokens )
+    : tokens_( tokens )
   {
-    completions_.at( prompt_id ).terminate();
-
-    {
-      std::lock_guard<std::mutex> lock { terminated_mutex_ };
-      terminated_completions_.emplace( prompt_id, std::move( completions_.at( prompt_id ) ) );
-    }
-
-    completions_.erase( prompt_id );
   }
 
-  /// @brief Upload the completed terminated completions to the blobstore
+  uint32_t at( const uint32_t token_pos ) const { return tokens_.at( token_pos ); }
+  uint32_t count() const { return tokens_.size(); }
+  void append( const uint32_t token ) { tokens_.push_back( token ); }
+  const std::vector<uint32_t>& tokens() const { return tokens_; }
+
+private:
+  std::vector<uint32_t> tokens_ {};
+};
+
+class Prompt
+{
+public:
+  Prompt( const PromptID& id,
+          const uint8_t temperature,
+          const size_t max_completion_length,
+          const TokenSequence& prompt )
+    : id_( id )
+    , temperature_( temperature )
+    , max_completion_length_( max_completion_length )
+    , prompt_tokens_( prompt )
+  {
+  }
+
+  PromptID id() const { return id_; }
+  float temperature() const { return temperature_ / 255.0; }
+  size_t max_completion_length() const { return max_completion_length_; }
+  const TokenSequence& prompt() const { return prompt_tokens_; }
+  TokenSequence& completion() { return completion_tokens_; }
+
+private:
+  PromptID id_ {};
+  uint8_t temperature_ { 0 };
+  size_t max_completion_length_ { 0 };
+  const TokenSequence prompt_tokens_ {};
+  TokenSequence completion_tokens_ {};
+};
+
+class PromptStore
+{
+public:
+  PromptStore() = default;
+  ~PromptStore();
+
+  void add( const PromptID& id, const Prompt& prompt );
+  Prompt& get( const PromptID& id ) { return prompts_.at( id ); }
+  void terminate( const PromptID& id );
   void commit();
+
+private:
+  std::unordered_map<PromptID, Prompt> prompts_ {};
+  std::unordered_map<PromptID, Prompt> completed_prompts_ {};
 };
 
 } // namespace glinthawk::prompt
