@@ -1,4 +1,4 @@
-list ( APPEND GLINTHAWK_TARGETS worker infer-batch )
+list ( APPEND GLINTHAWK_TARGETS worker infer )
 list ( APPEND GLINTHAWK_DTYPES FLOAT16 FLOAT32 )
 
 foreach ( TARGET ${GLINTHAWK_TARGETS} )
