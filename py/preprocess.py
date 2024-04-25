@@ -2,21 +2,34 @@
 
 import os
 import sys
+import json
 import logging
 import multiprocessing as mp
 
 from common.tokenizer import Tokenizer
 from common.serdes import serialize
 
+from google.protobuf.json_format import MessageToDict
+from protobuf import glinthawk_pb2 as pb
+
 logging.basicConfig(level=logging.INFO)
 
+PROMPTS_PER_FILE = 2 ** 16
 
-def preprocess_file(tokenizer, input_file, output_dir):
-    with open(input_file, "r") as f:
-        text = f.read()
+def preprocess_slice(tokenizer, files, output_name):
+    with open(output_name, "w") as fout:
+        for f in files:
+            with open(f, "r") as g:
+                text = g.read()
 
-    tokens = tokenizer.encode(text, prepend_bos=True, append_eos=False)
-    serialize(tokens, output_dir)
+            entry = pb.Prompt()
+            entry.prompt.extend(tokenizer.encode(text, prepend_bos=True, append_eos=False))
+
+            entry.user_data = f
+            entry.temperature = 0
+            entry.prompt_text = text
+
+            fout.write(json.dumps(MessageToDict(entry)) + "\n")
 
 
 def main(tokenizer_path, input_dir, output_dir):
@@ -30,13 +43,12 @@ def main(tokenizer_path, input_dir, output_dir):
 
     os.makedirs(output_dir, exist_ok=True)
 
-    with mp.Pool() as pool:
-        pool.starmap(
-            preprocess_file,
-            [(tokenizer, x, output_dir) for x in files],
-            chunksize=1,
-        )
+    f_idx = 0
 
+    for i in range(0, len(files), PROMPTS_PER_FILE):
+        files_slice = files[i:i + PROMPTS_PER_FILE]
+        preprocess_slice(tokenizer, files_slice, os.path.join(output_dir, f"prompts_{f_idx}.jsonl"))
+        f_idx += 1
 
 if __name__ == "__main__":
     if len(sys.argv) != 4:
