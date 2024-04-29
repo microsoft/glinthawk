@@ -4,6 +4,8 @@ import os
 import sys
 import json
 import logging
+import hashlib
+import base58
 import click
 
 from common.tokenizer import Tokenizer
@@ -26,7 +28,10 @@ def create_chat_prompt(tokenizer, user_message, system_message, temperature):
     else:
         prompt_text = f"{B_INST} {user_message.strip()} {E_INST}"
 
+    prompt_id = base58.b58encode(hashlib.sha256(prompt_text.encode()).digest()).decode()
+
     entry = pb.Prompt()
+    entry.id = prompt_id
     entry.prompt.extend(tokenizer.encode(prompt_text, prepend_bos=True, append_eos=False))
     entry.temperature = int(255 * temperature)
     entry.prompt_text = prompt_text
