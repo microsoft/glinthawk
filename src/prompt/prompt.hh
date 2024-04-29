@@ -47,6 +47,8 @@ public:
   {
   }
 
+  static Prompt from_json( const std::string_view json );
+
   PromptID id() const { return id_; }
   float temperature() const { return temperature_ / 255.0; }
   size_t max_completion_length() const { return max_completion_length_; }

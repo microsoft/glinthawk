@@ -3,9 +3,25 @@
 #include <endian.h>
 #include <fstream>
 #include <glog/logging.h>
+#include <google/protobuf/util/json_util.h>
+
+#include "util/digest.hh"
+
+#include "glinthawk.pb.h"
 
 using namespace std;
 using namespace glinthawk::prompt;
+
+Prompt Prompt::from_json( const string_view json )
+{
+  protobuf::Prompt pb_prompt;
+  google::protobuf::util::JsonStringToMessage( json, &pb_prompt );
+  TokenSequence tokens { vector<uint32_t> { pb_prompt.prompt().begin(), pb_prompt.prompt().end() } };
+  return { util::digest::SHA256Hash::from_base58digest( pb_prompt.id() ),
+           static_cast<uint8_t>( pb_prompt.temperature() ),
+           1024,
+           tokens };
+}
 
 PromptStore::~PromptStore()
 {
