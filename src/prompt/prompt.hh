@@ -19,8 +19,8 @@ class TokenSequence
 public:
   TokenSequence() = default;
 
-  TokenSequence( const std::vector<uint32_t>& tokens )
-    : tokens_( tokens )
+  TokenSequence( const std::vector<uint32_t>&& tokens )
+    : tokens_( std::move( tokens ) )
   {
   }
 
@@ -39,11 +39,11 @@ public:
   Prompt( const PromptID& id,
           const uint8_t temperature,
           const size_t max_completion_length,
-          const TokenSequence& prompt )
+          std::vector<uint32_t>&& prompt_tokens )
     : id_( id )
     , temperature_( temperature )
     , max_completion_length_( max_completion_length )
-    , prompt_tokens_( prompt )
+    , prompt_tokens_( std::move( prompt_tokens ) )
   {
   }
 
@@ -59,7 +59,7 @@ private:
   PromptID id_ {};
   uint8_t temperature_ { 0 };
   size_t max_completion_length_ { 0 };
-  const TokenSequence prompt_tokens_ {};
+  TokenSequence prompt_tokens_ {};
   TokenSequence completion_tokens_ {};
 };
 

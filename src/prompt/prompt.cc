@@ -15,12 +15,12 @@ using namespace glinthawk::prompt;
 Prompt Prompt::from_json( const string_view json )
 {
   protobuf::Prompt pb_prompt;
-  google::protobuf::util::JsonStringToMessage( json, &pb_prompt );
-  TokenSequence tokens { vector<uint32_t> { pb_prompt.prompt().begin(), pb_prompt.prompt().end() } };
+  CHECK( google::protobuf::util::JsonStringToMessage( json, &pb_prompt ).ok() ) << "Failed to parse JSON.";
+
   return { util::digest::SHA256Hash::from_base58digest( pb_prompt.id() ),
            static_cast<uint8_t>( pb_prompt.temperature() ),
            1024,
-           tokens };
+           vector<uint32_t> { pb_prompt.prompt().begin(), pb_prompt.prompt().end() } };
 }
 
 PromptStore::~PromptStore()

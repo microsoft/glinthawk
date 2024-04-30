@@ -1,17 +1,20 @@
 #include <filesystem>
 #include <iostream>
+#include <queue>
+#include <unordered_map>
 #include <vector>
 
 #include <glog/logging.h>
 
-#define OOF_IMPL
-#include "oof/oof.hh"
-
 #include "models/common/state.hh"
 #include "models/llama2/model.hh"
+#include "prompt/prompt.hh"
 #include "util/timer.hh"
 
 #include "arch/platform_macros.hh"
+
+#define OOF_IMPL
+#include "oof/oof.hh"
 
 using namespace std;
 using namespace glinthawk;
@@ -29,18 +32,11 @@ private:
   Model model_;
   llama2::Vocabulary vocabulary_;
   StateType state_;
-  vector<typename Model::ContextPtr> contexts_ {};
 
-  std::vector<uint32_t> tokens_ { 1 /* BOS */ };
-
-  size_t auto_id_ { 0 };
-
-  PromptID next_prompt_id()
-  {
-    PromptID id;
-    util::digest::sha256( to_string( auto_id_++ ), id );
-    return id;
-  }
+  queue<prompt::Prompt> prompt_queue_ {};
+  vector<prompt::Prompt> active_prompts_ {};
+  vector<typename Model::ContextPtr> active_contexts_ {};
+  vector<prompt::Prompt> finished_prompts_ {};
 
   StateType ser_des( StateType&& state )
   {
@@ -50,19 +46,10 @@ private:
     return StateType { ser };
   }
 
-  StateType make_state()
-  {
-    StateType st { batch_size_, DataType::_GLINTHAWK_DTYPE_NAME_, {}, {}, false, false, false };
-    for ( size_t i = 0; i < batch_size_; ++i ) {
-      st.set_prompt( i, next_prompt_id(), 1 /* BOS */, 0, temp_, 1 );
-    }
-
-    return st;
-  }
-
 public:
   BatchInference( const filesystem::path& model_path,
                   const filesystem::path& tokenizer_path,
+                  const filesystem::path& prompts_path,
                   const size_t batch_size,
                   const float temp )
     : batch_size_( batch_size )
@@ -71,28 +58,36 @@ public:
     , vocabulary_( tokenizer_path )
     , state_( batch_size, DataType::_GLINTHAWK_DTYPE_NAME_, {}, {}, false, false, false )
   {
+    ifstream prompts_file { prompts_path }; // JSONL file of prompts
+    CHECK( prompts_file.is_open() ) << "Failed to open prompts file: " << prompts_path;
+
+    string line;
+    while ( getline( prompts_file, line ) ) {
+      prompt_queue_.push( prompt::Prompt::from_json( line ) );
+    }
+
+    LOG( INFO ) << "Loaded " << prompt_queue_.size() << " prompts.";
+
     state_.set_next_layer( 0 );
     state_.set_next_stage( InferenceStage::PreAttention );
 
     for ( size_t i = 0; i < batch_size_; ++i ) {
-      state_.set_prompt( i, next_prompt_id(), 1 /* BOS */, 0, temp_, 1 );
-      contexts_.push_back( make_shared<typename Model::ContextType>( model_.settings() ) );
+      auto& entry = active_prompts_.emplace_back( std::move( prompt_queue_.front() ) );
+      prompt_queue_.pop();
+      active_contexts_.push_back( make_shared<typename Model::ContextType>( model_.settings() ) );
+      state_.set_prompt( i, entry.id(), entry.prompt().at( 0 ), 0, temp_, entry.prompt().count() );
     }
   }
 
   void run()
   {
-    std::random_device rd;
-    std::mt19937 gen { rd() };
-    std::uniform_real_distribution<float> dis { 0.0, 1.0 };
-
     for ( size_t pos = 0; pos < Model::ConfigType::seq_len; pos++ ) {
       for ( size_t layer = 0; layer < Model::ConfigType::n_layers; layer++ ) {
         state_ = ser_des( move( state_ ) );
         model_.forward_pre_attention( state_ );
 
         state_ = ser_des( std::move( state_ ) );
-        model_.forward_attention( state_, contexts_ );
+        model_.forward_attention( state_, active_contexts_ );
 
         state_ = ser_des( std::move( state_ ) );
         model_.forward_post_attention( state_ );
@@ -103,37 +98,24 @@ public:
         }
       }
 
-      if ( not temp_ ) {
-        // if temperature is 0, we expect all prompts in the batch to have the same output; the following checks this.
-        for ( size_t i = 0; i < state_.batch_size(); ++i ) {
-          if ( state_.token_pos( i ) < tokens_.size() ) {
-            CHECK_EQ( state_.token( i ), tokens_[state_.token_pos( i )] );
-          } else if ( state_.token_pos( i ) == tokens_.size() ) {
-            tokens_.push_back( state_.token( i ) );
-          } else {
-            LOG( FATAL ) << "Unexpected token pos: " << state_.token_pos( i ) << " vs " << tokens_.size();
+      for ( size_t i = 0; i < batch_size_; i++ ) {
+        if ( state_.finished( i ) ) {
+          finished_prompts_.push_back( std::move( active_prompts_[i] ) );
+
+          // do we have a prompt in the queue to replace this one?
+          if ( !prompt_queue_.empty() ) {
+            active_prompts_[i] = std::move( prompt_queue_.front() );
+            prompt_queue_.pop();
+
+            auto& entry = active_prompts_[i];
+            state_.set_prompt( i, entry.id(), entry.prompt().at( 0 ), 0, temp_, entry.prompt().count() );
           }
         }
 
-        // random chance to terminate a prompt early (otherwise they will all have the same length)
-        for ( size_t i = 0; i < state_.batch_size(); ++i ) {
-          if ( state_.token_pos( i ) >= 128 and dis( gen ) < 0.05 ) {
-            state_.set_finished( i );
-          }
-        }
-
-        bool any_finished = false;
-        for ( size_t i = 0; i < state_.batch_size(); ++i ) {
-          if ( state_.finished( i ) ) {
-            state_.discard( i );
-            any_finished = true;
-          }
-        }
-
-        if ( any_finished ) {
-          auto new_state = make_state();
-          state_.replenish_from( new_state );
-          CHECK_EQ( state_.free_slots(), 0 );
+        if ( state_.token_pos( i ) < state_.prompt_length( i ) ) {
+          state_.set_token( i, active_prompts_[i].prompt().at( state_.token_pos( i ) ) );
+        } else {
+          active_prompts_[i].completion().append( state_.token( i ) );
         }
       }
 
@@ -144,7 +126,8 @@ public:
 
 void usage( const char* argv0 )
 {
-  cout << "Usage: " << argv0 << " <model_dir> <model_name> <tokenizer_path> <batch_size> <temperature>" << endl;
+  cout << "Usage: " << argv0 << " <model_dir> <model_name> <tokenizer_path> <batch_size> <temperature> <prompts.jsonl>"
+       << endl;
 }
 
 int main( int argc, char* argv[] )
@@ -153,7 +136,7 @@ int main( int argc, char* argv[] )
     abort();
   }
 
-  if ( argc != 6 ) {
+  if ( argc != 7 ) {
     usage( argv[0] );
     return EXIT_FAILURE;
   }
@@ -168,9 +151,10 @@ int main( int argc, char* argv[] )
     const filesystem::path tokenizer_path { argv[3] };
     const size_t batch_size = atoi( argv[4] );
     const float temp = atof( argv[5] );
+    const filesystem::path prompts_path { argv[6] };
 
     using ModelType = llama2::_GLINTHAWK_ARCH_NS_::Stories_110M<_GLINTHAWK_DTYPE_>;
-    BatchInference<ModelType> inference { model_dir_path, tokenizer_path, batch_size, temp };
+    BatchInference<ModelType> inference { model_dir_path, tokenizer_path, prompts_path, batch_size, temp };
     inference.run();
 
     cerr << endl << global_timer().summary() << endl;
