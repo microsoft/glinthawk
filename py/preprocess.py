@@ -10,7 +10,7 @@ import click
 
 from common.tokenizer import Tokenizer
 
-from google.protobuf.json_format import MessageToDict
+from google.protobuf.json_format import MessageToDict, MessageToJson
 from protobuf import glinthawk_pb2 as pb
 
 logging.basicConfig(level=logging.INFO)
@@ -28,13 +28,13 @@ def create_chat_prompt(tokenizer, user_message, system_message, temperature):
     else:
         prompt_text = f"{B_INST} {user_message.strip()} {E_INST}"
 
-    prompt_id = base58.b58encode(hashlib.sha256(prompt_text.encode()).digest()).decode()
-
     entry = pb.Prompt()
-    entry.id = prompt_id
+    entry.id = ""
     entry.prompt.extend(tokenizer.encode(prompt_text, prepend_bos=True, append_eos=False))
     entry.temperature = int(255 * temperature)
     entry.prompt_text = prompt_text
+
+    entry.id = base58.b58encode(hashlib.sha256(MessageToJson(entry).encode()).digest()).decode()
     return entry
 
 
