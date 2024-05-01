@@ -1,49 +1,30 @@
 # Understanding Glinthawk input/output
 
-## Input JSON Schema
+Glinthawk uses [JSONL](https://jsonlines.org/) to store input and output data.
+JSONL is a format that stores JSON objects in a file, one object per line.
 
-```json
-{
-  "metadata": {
-    // Metadata about the input
-  },
-  "prompts": [
-    {
-      "id": "unique_id", // optional, auto-generated if not provided
-      "temprature": 0, // optional, the range is [0..255]
-      "output_len": 1024,
+As the user, you usually don't have to write your own input files; simply put
+all the prompts in individual text files (`.txt`) in a directory, and use
+`preprocess.py` to generate the input JSONL file.
 
-      // at least one of the following must be provided
-      "prompt": "What is your name?",
-      "prompt_tokens": [1, 2, 3, 4, 5],
-    },
-    { // bare minimum
-      "text": "What is your favorite color?",
-    }
-  ],
-}
-```
+## Input
 
-## Output JSON Schema
+Each prompt is stored as a JSON object with the following fields:
 
-```json
-{
-  "metadata": {
-    // Metadata about the output
-  },
-  "completed_prompts": [
-    {
-      "id": "unique_id",
-      "temprature": 0.5,
-      "output_len": 1024,
+Field | Type | Values | Description
+--- | --- | --- | ---
+`temperature` | float | [0..255] | Temperature, will be divided by 255.f
+`max_tokens` | int | [1..4096] | Maximum number of tokens to generate
+`prompt_text` | string | | Prompt text
+`user_data` | string | | Arbitrary string carried through to the output
 
-      "prompt": "What is your name?",
-      "prompt_tokens": [1, 2, 3, 4, 5],
+Only `prompt_text` is required. The other fields are optional.
 
-      "completion": "My name is John Doe.",
-      "completion_tokens": [6, 7, 8, 9, 10],
-    },
-    ...
-  ],
-}
-```
+## Output
+
+Each response includes all the input fields, plus the following:
+
+Field | Type | Description
+--- | --- | ---
+`completion` | int[] | Token IDs of the generated text
+`completion_text` | string | Generated text, detokenized by `postprocess.py`
