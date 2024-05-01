@@ -559,6 +559,7 @@ void BatchedInferenceState<Config>::set_prompt( const size_t i,
   prompts_[i].token_pos = token_pos;
   prompts_[i].temperature = static_cast<uint8_t>( temperature * 255.0f );
   prompts_[i].prompt_length = prompt_length;
+  prompts_[i].finished = false;
   prompts_[i].active = true;
 }
 
