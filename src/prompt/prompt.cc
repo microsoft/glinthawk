@@ -23,6 +23,24 @@ Prompt Prompt::from_json( const string_view json )
            vector<uint32_t> { pb_prompt.prompt().begin(), pb_prompt.prompt().end() } };
 }
 
+string Prompt::to_json() const
+{
+  auto& prompt_tokens = prompt_tokens_.tokens();
+  auto& completion_tokens = completion_tokens_.tokens();
+
+  protobuf::Prompt pb_prompt;
+
+  pb_prompt.set_id( id_.base58digest() );
+  pb_prompt.set_temperature( temperature_ );
+  *pb_prompt.mutable_prompt() = { prompt_tokens.begin(), prompt_tokens.end() };
+  *pb_prompt.mutable_completion() = { completion_tokens.begin(), completion_tokens.end() };
+
+  string json;
+  CHECK( google::protobuf::util::MessageToJsonString( pb_prompt, &json ).ok() ) << "Failed to serialize to JSON.";
+
+  return json;
+}
+
 PromptStore::~PromptStore()
 {
   if ( !completed_prompts_.empty() ) {
