@@ -80,10 +80,14 @@ message Prompt
 {
   string id = 1;
   uint32 temperature = 2;
-  uint32 max_tokens = 3 [json_name = "max_tokens"];
-  repeated uint32 prompt = 4 [json_name = "prompt"];
-  repeated uint32 completion = 5 [json_name = "completion"];
-  string prompt_text = 6 [json_name = "prompt_text"];
-  string completion_text = 7 [json_name = "completion_text"];
-  string user_data = 8 [json_name = "user_data"];
+  uint32 max_tokens = 3 [ json_name = "max_tokens" ];
+  repeated uint32 prompt = 4 [ json_name = "prompt" ];
+  repeated uint32 completion = 5 [ json_name = "completion" ];
+  string prompt_text = 6 [ json_name = "prompt_text" ];
+  string completion_text = 7 [ json_name = "completion_text" ];
+  string user_data = 8 [ json_name = "user_data" ];
 }
+
+message PushPrompts { repeated Prompt prompts = 1; }
+
+message PushCompletions { repeated Prompt completions = 1; }
