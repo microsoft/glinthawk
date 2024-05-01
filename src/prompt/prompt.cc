@@ -10,34 +10,42 @@
 #include "glinthawk.pb.h"
 
 using namespace std;
+using namespace glinthawk;
 using namespace glinthawk::prompt;
 
-Prompt Prompt::from_json( const string_view json )
+Prompt Prompt::from_protobuf( const protobuf::Prompt& message )
 {
-  protobuf::Prompt pb_prompt;
-  CHECK( google::protobuf::util::JsonStringToMessage( json, &pb_prompt ).ok() ) << "Failed to parse JSON.";
-
-  return { util::digest::SHA256Hash::from_base58digest( pb_prompt.id() ),
-           static_cast<uint8_t>( pb_prompt.temperature() ),
+  return { util::digest::SHA256Hash::from_base58digest( message.id() ),
+           static_cast<uint8_t>( message.temperature() ),
            1024,
-           vector<uint32_t> { pb_prompt.prompt().begin(), pb_prompt.prompt().end() } };
+           vector<uint32_t> { message.prompt().begin(), message.prompt().end() } };
 }
 
-string Prompt::to_json() const
+protobuf::Prompt Prompt::to_protobuf() const
 {
   auto& prompt_tokens = prompt_tokens_.tokens();
   auto& completion_tokens = completion_tokens_.tokens();
 
   protobuf::Prompt pb_prompt;
-
   pb_prompt.set_id( id_.base58digest() );
   pb_prompt.set_temperature( temperature_ );
   *pb_prompt.mutable_prompt() = { prompt_tokens.begin(), prompt_tokens.end() };
   *pb_prompt.mutable_completion() = { completion_tokens.begin(), completion_tokens.end() };
 
-  string json;
-  CHECK( google::protobuf::util::MessageToJsonString( pb_prompt, &json ).ok() ) << "Failed to serialize to JSON.";
+  return pb_prompt;
+}
 
+Prompt Prompt::from_json( const string_view json )
+{
+  protobuf::Prompt pb_prompt;
+  CHECK( google::protobuf::util::JsonStringToMessage( json, &pb_prompt ).ok() ) << "Failed to parse JSON.";
+  return from_protobuf( pb_prompt );
+}
+
+string Prompt::to_json() const
+{
+  string json;
+  CHECK( google::protobuf::util::MessageToJsonString( to_protobuf(), &json ).ok() ) << "Failed to serialize to JSON.";
   return json;
 }
 

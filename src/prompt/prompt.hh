@@ -12,6 +12,8 @@
 #include "models/types.hh"
 #include "storage/blobstore.hh"
 
+#include "glinthawk.pb.h"
+
 namespace glinthawk::prompt {
 
 class TokenSequence
@@ -49,6 +51,9 @@ public:
 
   static Prompt from_json( const std::string_view json );
   std::string to_json() const;
+
+  static Prompt from_protobuf( const protobuf::Prompt& message );
+  protobuf::Prompt to_protobuf() const;
 
   PromptID id() const { return id_; }
   float temperature() const { return temperature_ / 255.0; }
