@@ -51,7 +51,7 @@ def preprocess_slice(tokenizer, files, output_name, system_message, temperature,
                 continue
 
             entry.user_data = f
-            fout.write(json.dumps(MessageToDict(entry)) + "\n")
+            fout.write(json.dumps(MessageToDict(entry), indent=None, separators=(",", ":")) + "\n")
 
 
 @click.command()
@@ -95,7 +95,6 @@ def main(
     if system_message is not None:
         with open(system_message, "r") as f:
             system_message_str = f.read().strip()
-
 
     os.makedirs(output_dir, exist_ok=True)
 
