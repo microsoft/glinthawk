@@ -170,10 +170,22 @@ int main( int argc, char* argv[] )
     const filesystem::path prompts_path { argv[6] };
     const filesystem::path completions_path { argv[7] };
 
-    using ModelType = llama2::_GLINTHAWK_ARCH_NS_::Stories_110M<_GLINTHAWK_DTYPE_>;
-    BatchInference<ModelType> inference(
-      model_dir_path, tokenizer_path, prompts_path, completions_path, batch_size, temp );
-    inference.run();
+#define CREATE_AND_RUN( MODEL_NAME, CLASS_NAME )                                                                       \
+  if ( model_name == MODEL_NAME ) {                                                                                    \
+    using ModelType = llama2::_GLINTHAWK_ARCH_NS_::CLASS_NAME<_GLINTHAWK_DTYPE_>;                                      \
+    BatchInference<ModelType> inference(                                                                               \
+      model_dir_path, tokenizer_path, prompts_path, completions_path, batch_size, temp );                              \
+    inference.run();                                                                                                   \
+  }
+
+    // XXX(sadjad): ugly af
+    // clang-format off
+    CREATE_AND_RUN( "stories-110m", Stories_110M )
+    else CREATE_AND_RUN( "llama2-7b-chat", Llama2_7B_Chat )
+    else CREATE_AND_RUN( "llama2-13b-chat", Llama2_13B_Chat )
+    else CREATE_AND_RUN( "llama2-70b-chat", Llama2_70B_Chat )
+    else LOG( FATAL ) << "Unknown model name: " << model_name;
+    // clang-format on
 
     cerr << endl << global_timer().summary() << endl;
   } catch ( const exception& e ) {
