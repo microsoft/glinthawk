@@ -7,8 +7,8 @@
 #include <map>
 #include <memory>
 #include <optional>
+#include <queue>
 #include <random>
-#include <thread>
 
 #include "compute/kernel.hh"
 #include "compute/kernel_hybrid.hh"
@@ -31,8 +31,6 @@
 #include "models/llama2/variants.hh"
 
 #include "glinthawk.pb.h"
-
-#include "concurrentqueue/blockingconcurrentqueue.h"
 
 namespace glinthawk::core {
 
@@ -85,24 +83,23 @@ private:
   std::atomic_bool running_ { true };
 
   EventLoop event_loop_ {};
+
   net::Address listen_address_;
-  net::TCPSocket listen_socket_;
-
-  std::map<net::Address, Peer> peers_ {};
-
   net::Address coordinator_address_;
+  net::TCPSocket listen_socket_;
   Peer coordinator_;
+  std::map<net::Address, Peer> peers_ {};
 
   std::filesystem::path model_root_;
   std::unique_ptr<ComputeKernel> compute_kernel_ { nullptr };
 
   std::unique_ptr<glinthawk::storage::BlobStore> blobstore_ { nullptr };
+  std::unordered_map<RouteID, RouteMap> route_set_ {};
   glinthawk::prompt::PromptStore prompt_store_ {};
 
-  std::unordered_map<RouteID, RouteMap> route_set_ {};
+  std::queue<PromptID> prompt_queue_ {};
 
-  std::thread prompt_preparation_thread_ {};
-  std::thread completion_commit_thread_ {};
+  TimerFD completion_commit_timer_ { std::chrono::seconds { 5 } };
 
   core::MessageHandler<net::TCPSession>::RuleCategories rule_categories_ {
     .session = event_loop_.add_category( "Worker session" ),
@@ -117,6 +114,8 @@ private:
     .endpoint_write = event_loop_.add_category( "Telegraf endpoint write" ),
     .response = event_loop_.add_category( "Telegraf response" ),
   };
+
+  uint32_t concurrency_size_pre_attention_ { 0 };
 
   Measurement& __stats__ { global_measurement() };
   std::unique_ptr<monitoring::TelegrafLogger> telegraf_logger_ { nullptr };
@@ -141,9 +140,6 @@ private:
   bool handle_coordinator_message( core::Message&& msg );
   bool handle_peer_message( core::Message&& msg );
   void handle_stats();
-
-  void prompt_preparation_thread_func();
-  void completion_commit_thread_func();
 
   net::Address find_next_worker( const RouteMap& route, const BatchedState& state )
   {
@@ -242,6 +238,8 @@ void BatchedWorker<ModelConfig, ComputeKernel>::setup_compute_kernel( const std:
                                                concurrency_size_post_attention,
                                                concurrency_size_classification } );
 
+  concurrency_size_pre_attention_ = concurrency_size_pre_attention;
+
   if constexpr ( ComputeKernel::Type == compute::KernelType::Batched ) {
     compute_kernel_ = std::make_unique<ComputeKernel>(
       max_concurrency_size, model_root, start_layer, end_layer, max_concurrency_size, max_context_count, randomize );
@@ -274,6 +272,21 @@ void BatchedWorker<ModelConfig, ComputeKernel>::setup_compute_kernel( const std:
                         compute_kernel_->event_fd(),
                         std::bind( &BatchedWorker<ModelConfig, ComputeKernel>::handle_compute_kernel_event, this ),
                         [this] { return this->compute_kernel_ != nullptr; } );
+
+  event_loop_.add_rule(
+    "Commit completions",
+    Direction::In,
+    completion_commit_timer_,
+    [this] {
+      completion_commit_timer_.read_event();
+      const auto completed_count = prompt_store_.completed_count();
+      const auto proto = prompt_store_.completed_to_protobuf();
+      prompt_store_.cleanup_completed();
+      coordinator_.message_handler.push_message( { Message::OpCode::PushCompletions, proto.SerializeAsString() } );
+      LOG( INFO ) << "Pushed " << completed_count << " completions to coordinator.";
+    },
+    [this] { return prompt_store_.completed_count() > 0; },
+    [] { LOG( ERROR ) << "Completion commit timer stopped."; } );
 }
 
 template<typename ModelConfig, typename ComputeKernel>
@@ -496,18 +509,40 @@ bool BatchedWorker<ModelConfig, ComputeKernel>::handle_coordinator_message( core
         this->compute_kernel_->push( std::move( state ) );
       }
 
-      // also run the completion commiting thread
-      if ( not completion_commit_thread_.joinable() ) {
-        completion_commit_thread_
-          = std::thread( std::bind( &BatchedWorker<ModelConfig, ComputeKernel>::completion_commit_thread_func, this ) );
+      break;
+    }
+
+    case Message::OpCode::PushPrompts: {
+      protobuf::PushPrompts proto;
+      proto.ParseFromString( msg.payload() );
+
+      for ( auto& prompt : proto.prompts() ) {
+        auto prompt_obj = prompt::Prompt::from_protobuf( prompt );
+        prompt_queue_.push( prompt_obj.id() );
+        prompt_store_.add( prompt_obj.id(), std::move( prompt_obj ) );
       }
 
-      break;
-    }
+      size_t added_prompt_count = 0;
+      while ( prompt_queue_.size() >= concurrency_size_pre_attention_ ) {
+        BatchedState state {
+          concurrency_size_pre_attention_, DataType::Float16, RouteID {}, ModelID {}, false, false, false
+        };
 
-    case Message::OpCode::ProcessPrompts: {
-      break;
-    }
+        for ( size_t i = 0; i < concurrency_size_pre_attention_; i++ ) {
+          PromptID prompt_id = prompt_queue_.front();
+          prompt_queue_.pop();
+          auto& prompt = prompt_store_.get( prompt_id );
+          state.set_prompt( i, prompt_id, prompt.prompt().at( 0 ), 0, prompt.temperature(), prompt.prompt().count() );
+        }
+
+        this->compute_kernel_->push( std::move( state ) );
+        added_prompt_count += concurrency_size_pre_attention_;
+      }
+
+      if ( added_prompt_count > 0 ) {
+        LOG( INFO ) << "Added " << added_prompt_count << " prompts to the compute kernel.";
+      }
+    } break;
 
     default: {
       LOG( WARNING ) << "[Coordinator] Message not handled.";
@@ -584,14 +619,27 @@ bool BatchedWorker<ModelConfig, ComputeKernel>::handle_peer_message( core::Messa
           }
 
           if ( state.finished( i ) ) {
-            prompt_store_.terminate( prompt_id );
-
-            __stats__.increment<Counters::PromptsCompleted>();
+            prompt_store_.complete( prompt_id );
 
             // XXX(sadjad): this is actually the length of the prompt+completion; will adjust later.
             __stats__.add_point<IntDistributions::PromptLength>( state.token_pos( i ) );
+            __stats__.increment<Counters::PromptsCompleted>();
 
             state.discard( i );
+
+            // let's replace this with the next prompt, if one is available
+            // TODO(sadjad): remove the "incomplete state" functionality from the kernels
+            if ( not prompt_queue_.empty() ) {
+              auto next_prompt_id = prompt_queue_.front();
+              prompt_queue_.pop();
+              auto& next_prompt = prompt_store_.get( next_prompt_id );
+              state.set_prompt( i,
+                                next_prompt_id,
+                                next_prompt.prompt().at( 0 ),
+                                0,
+                                next_prompt.temperature(),
+                                next_prompt.prompt().count() );
+            }
           }
         }
       }
@@ -617,10 +665,7 @@ void BatchedWorker<ModelConfig, ComputeKernel>::handle_stats()
     telegraf_logger_->push_measurement( __stats__ );
   }
 
-  if ( const auto completed_prompts = __stats__.get<Counters::PromptsCompleted>(); completed_prompts > 0 ) {
-    core::Message msg { core::Message::OpCode::PromptCompleted, std::to_string( completed_prompts ) };
-    this->coordinator_.message_handler.push_message( std::move( msg ) );
-  }
+  // TODO(sadjad): allow pluggable stats handlers
 
   __stats__.zero_out();
 }
@@ -632,32 +677,10 @@ void BatchedWorker<ModelConfig, ComputeKernel>::run()
 }
 
 template<typename ModelConfig, typename ComputeKernel>
-void BatchedWorker<ModelConfig, ComputeKernel>::prompt_preparation_thread_func()
-{
-}
-
-template<typename ModelConfig, typename ComputeKernel>
-void BatchedWorker<ModelConfig, ComputeKernel>::completion_commit_thread_func()
-{
-  while ( running_ ) {
-    prompt_store_.commit();
-    std::this_thread::sleep_for( std::chrono::seconds { 5 } );
-  }
-}
-
-template<typename ModelConfig, typename ComputeKernel>
 BatchedWorker<ModelConfig, ComputeKernel>::~BatchedWorker()
 {
   LOG( INFO ) << "BatchedWorker shutting down.";
   running_ = false;
-
-  if ( prompt_preparation_thread_.joinable() ) {
-    prompt_preparation_thread_.join();
-  }
-
-  if ( completion_commit_thread_.joinable() ) {
-    completion_commit_thread_.join();
-  }
 }
 
 } // namespace glinthawk::core
