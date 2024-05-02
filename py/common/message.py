@@ -14,14 +14,11 @@ class Message:
         Ping = enum.auto()
         Bye = enum.auto()
 
-        WorkerStats = enum.auto()
-
         InitializeWorker = enum.auto()
-        InferenceState = enum.auto()
-        ProcessPrompts = enum.auto()
         SetRoute = enum.auto()
-        PromptCompleted = enum.auto()
         PushDummyPrompts = enum.auto()
+        PushPrompts = enum.auto()
+        PushCompletions = enum.auto()
         BatchedInferenceState = enum.auto()
 
     def __init__(self, opcode: Union[OpCode, int], payload: bytes):

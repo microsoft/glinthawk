@@ -19,13 +19,11 @@ public:
     Ping,
     Bye,
 
-    WorkerStats [[deprecated]],
     InitializeWorker,
-    InferenceState [[deprecated]],
-    ProcessPrompts,
     SetRoute,
-    PromptCompleted,
     PushDummyPrompts,
+    PushPrompts,
+    PushCompletions,
     BatchedInferenceState,
 
     __COUNT
@@ -38,13 +36,11 @@ public:
     "Ping",
     "Bye",
 
-    "WorkerStats",
     "InitializeWorker",
-    "InferenceState",
-    "ProcessPrompts",
     "SetRoute",
-    "PromptCompleted",
     "PushDummyPrompts",
+    "PushPrompts",
+    "PushCompletions",
     "BatchedInferenceState",
   };
 
