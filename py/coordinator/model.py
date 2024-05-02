@@ -7,10 +7,9 @@ from .worker import Worker
 
 
 class Model:
-    def __init__(self, name, n_layers, layers_per_worker, separate_cls):
+    def __init__(self, n_layers, layers_per_worker, separate_cls):
         assert n_layers % layers_per_worker == 0, "Number of layers must be divisible by layers per worker"
 
-        self.name = name
         self.n_layers = n_layers
         self.layers_per_worker = layers_per_worker
         self.separate_cls = separate_cls
