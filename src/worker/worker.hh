@@ -23,7 +23,6 @@
 #include "net/session.hh"
 #include "net/socket.hh"
 #include "prompt/prompt.hh"
-#include "storage/blobstore.hh"
 #include "util/digest.hh"
 #include "util/eventloop.hh"
 #include "util/timerfd.hh"
@@ -93,7 +92,6 @@ private:
   std::filesystem::path model_root_;
   std::unique_ptr<ComputeKernel> compute_kernel_ { nullptr };
 
-  std::unique_ptr<glinthawk::storage::BlobStore> blobstore_ { nullptr };
   std::unordered_map<RouteID, RouteMap> route_set_ {};
   glinthawk::prompt::PromptStore prompt_store_ {};
 
@@ -123,7 +121,6 @@ private:
   uint64_t dummy_prompt_current_id_ { 0 };
 
   void setup_peer( std::map<net::Address, Peer>::iterator peer_it );
-  void setup_blobstore( const std::string& blobstore_uri );
   void setup_compute_kernel( const std::filesystem::path& model_root,
                              const uint32_t start_layer,
                              const uint32_t end_layer,
@@ -211,16 +208,6 @@ void BatchedWorker<ModelConfig, ComputeKernel>::setup_peer( std::map<net::Addres
 }
 
 template<typename ModelConfig, typename ComputeKernel>
-void BatchedWorker<ModelConfig, ComputeKernel>::setup_blobstore( const std::string& blobstore_uri )
-{
-  auto blobstore = storage::BlobStore::create( blobstore_uri );
-  CHECK( blobstore ) << "Could not create blobstore: " << blobstore_uri;
-
-  blobstore_ = std::move( blobstore );
-  LOG( INFO ) << "Blobstore setup complete: " << blobstore_->to_string();
-}
-
-template<typename ModelConfig, typename ComputeKernel>
 void BatchedWorker<ModelConfig, ComputeKernel>::setup_compute_kernel( const std::filesystem::path& model_root,
                                                                       const uint32_t start_layer,
                                                                       const uint32_t end_layer,
@@ -294,6 +281,7 @@ BatchedWorker<ModelConfig, ComputeKernel>::BatchedWorker( const net::Address& wo
                                                           const net::Address& coordinator_address,
                                                           const std::filesystem::path& model_root )
   : listen_address_( worker_address )
+  , coordinator_address_( coordinator_address )
   , listen_socket_( [this]() -> net::TCPSocket {
     net::TCPSocket socket;
     socket.set_reuseaddr();
@@ -303,7 +291,6 @@ BatchedWorker<ModelConfig, ComputeKernel>::BatchedWorker( const net::Address& wo
     LOG( INFO ) << "Listening on " << this->listen_address_.to_string();
     return socket;
   }() )
-  , coordinator_address_( coordinator_address )
   , coordinator_( coordinator_address,
                   [this]() -> net::TCPSocket {
                     net::TCPSocket socket;
@@ -391,8 +378,6 @@ bool BatchedWorker<ModelConfig, ComputeKernel>::handle_coordinator_message( core
                             proto.concurrency_cls_size(),
                             proto.max_context_count(),
                             proto.randomize() );
-
-      setup_blobstore( proto.blobstore_uri() );
 
       LOG( INFO ) << "Worker initialized.";
       break;

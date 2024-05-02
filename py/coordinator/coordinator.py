@@ -195,7 +195,6 @@ class Coordinator:
                         concurrency_cls_size=worker.concurrency_size_cls,
                         max_context_count=context_count,
                         randomize=False,
-                        blobstore_uri=settings.GLINTHAWK_PROMPT_BLOBSTORE,
                     ),
                 )
 
@@ -295,10 +294,10 @@ class Coordinator:
     async def dump_completions(self):
         with open(os.path.join(self.output_dir, f"completions.json"), "w") as f:
             while True:
-                    completion = await self.completion_queue.get()
-                    f.write(json.dumps(MessageToDict(completion), indent=None, separators=(",", ":")))
-                    f.write("\n")
-                    f.flush()
+                completion = await self.completion_queue.get()
+                f.write(json.dumps(MessageToDict(completion), indent=None, separators=(",", ":")))
+                f.write("\n")
+                f.flush()
 
     async def main(self, listen_address, listen_port):
         server = await asyncio.start_server(self.handle_worker, listen_address, listen_port)
