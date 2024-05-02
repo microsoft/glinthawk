@@ -75,10 +75,15 @@ public:
   PromptStore() = default;
   ~PromptStore();
 
-  void add( const PromptID& id, const Prompt& prompt );
+  void add( const PromptID& id, Prompt&& prompt );
   Prompt& get( const PromptID& id ) { return prompts_.at( id ); }
-  void terminate( const PromptID& id );
-  void commit();
+  void complete( const PromptID& id );
+
+  size_t prompt_count() const { return prompts_.size(); }
+  size_t completed_count() const { return completed_prompts_.size(); }
+
+  protobuf::PushCompletions completed_to_protobuf();
+  void cleanup_completed();
 
 private:
   std::unordered_map<PromptID, Prompt> prompts_ {};

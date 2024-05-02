@@ -56,9 +56,9 @@ PromptStore::~PromptStore()
   }
 }
 
-void PromptStore::add( const PromptID& id, const Prompt& prompt ) { prompts_.emplace( id, prompt ); }
+void PromptStore::add( const PromptID& id, Prompt&& prompt ) { prompts_.emplace( id, std::move( prompt ) ); }
 
-void PromptStore::terminate( const PromptID& id )
+void PromptStore::complete( const PromptID& id )
 {
   auto it = prompts_.find( id );
   if ( it == prompts_.end() ) {
@@ -70,4 +70,14 @@ void PromptStore::terminate( const PromptID& id )
   prompts_.erase( it );
 }
 
-void PromptStore::commit() { return; }
+void PromptStore::cleanup_completed() { completed_prompts_.clear(); }
+
+protobuf::PushCompletions PromptStore::completed_to_protobuf()
+{
+  protobuf::PushCompletions message;
+  for ( auto& [id, prompt] : completed_prompts_ ) {
+    *message.add_completions() = prompt.to_protobuf();
+  }
+
+  return message;
+}
