@@ -40,7 +40,7 @@ private:
   const bool is_serving_last_layer_ { model_->settings().end_layer_num == ModelConfig::n_layers - 1 };
 
   const uint64_t target_conc_size_;
-  uint64_t released_;
+  uint64_t released_ { 0 };
 
   // a state with some empty slots
   std::optional<BatchedState> incomplete_state_ {};
@@ -49,20 +49,19 @@ private:
   std::queue<std::pair<BatchedState, std::vector<ContextPtr>>> processing_ {};
 
   std::mutex incoming_mutex_ {}, waiting_mutex_ {}, ctx_mgr_mutex_ {}, processing_mutex_ {}, outgoing_mutex_ {};
-  std::condition_variable incoming_cv_ {}, waiting_cv_ {}, processing_cv_ {};
+  std::condition_variable_any incoming_cv_ {}, waiting_cv_ {}, processing_cv_ {};
 
   EventFD event_fd_ {};
-  std::atomic<bool> running_ { true };
   Measurement& __stats__ { global_measurement() };
 
   // <threads>
-  void execution_thread_func();
-  void bookkeeping_thread_func();
-  void backlog_thread_func();
+  void execution_thread_func( std::stop_token stoken );
+  void bookkeeping_thread_func( std::stop_token stoken );
+  void backlog_thread_func( std::stop_token stoken );
 
-  std::thread execution_thread_;
-  std::thread bookkeeping_thread_;
-  std::thread backlog_thread_;
+  std::jthread execution_thread_;
+  std::jthread bookkeeping_thread_;
+  std::jthread backlog_thread_;
   // </threads>
 
   void push_to_incoming( BatchedState&& state )
@@ -119,11 +118,9 @@ public:
     : model_( std::make_unique<Model>( std::forward<Args>( args )... ) )
     , context_manager_( std::make_unique<ContextManager<Model>>( model_->settings() ) )
     , target_conc_size_( target_conc_size )
-    , released_( 0 )
-    , running_( true )
-    , execution_thread_( &BatchedComputeKernel::execution_thread_func, this )
-    , bookkeeping_thread_( &BatchedComputeKernel::bookkeeping_thread_func, this )
-    , backlog_thread_( &BatchedComputeKernel::backlog_thread_func, this )
+    , execution_thread_( std::bind( &BatchedComputeKernel::execution_thread_func, this, std::placeholders::_1 ) )
+    , bookkeeping_thread_( std::bind( &BatchedComputeKernel::bookkeeping_thread_func, this, std::placeholders::_1 ) )
+    , backlog_thread_( std::bind( &BatchedComputeKernel::backlog_thread_func, this, std::placeholders::_1 ) )
   {
   }
 
@@ -175,17 +172,11 @@ public:
 
   EventFD& event_fd() { return event_fd_; }
 
-  ~BatchedComputeKernel()
-  {
-    running_ = false;
-    execution_thread_.join();
-    bookkeeping_thread_.join();
-    backlog_thread_.join();
-  }
+  ~BatchedComputeKernel() {}
 };
 
 template<typename Model>
-void BatchedComputeKernel<Model>::execution_thread_func()
+void BatchedComputeKernel<Model>::execution_thread_func( std::stop_token stoken )
 {
   LOG( INFO ) << "BatchedComputeKernel execution thread started.";
 
@@ -194,10 +185,12 @@ void BatchedComputeKernel<Model>::execution_thread_func()
   BatchedState state;
   std::vector<ContextPtr> contexts;
 
-  while ( running_ ) {
+  while ( not stoken.stop_requested() ) {
     {
       std::unique_lock lock( processing_mutex_ );
-      processing_cv_.wait( lock, [this] { return !processing_.empty(); } );
+      if ( not processing_cv_.wait( lock, stoken, [this] { return not processing_.empty(); } ) ) {
+        continue; // we were woken up by the stop token
+      }
 
       state = std::move( processing_.front().first );
       contexts = std::move( processing_.front().second );
@@ -217,10 +210,12 @@ void BatchedComputeKernel<Model>::execution_thread_func()
 
     event_fd_.write_event();
   }
+
+  LOG( INFO ) << "BatchedComputeKernel execution thread exiting.";
 }
 
 template<typename Model>
-void BatchedComputeKernel<Model>::bookkeeping_thread_func()
+void BatchedComputeKernel<Model>::bookkeeping_thread_func( std::stop_token stoken )
 {
   LOG( INFO ) << "BatchedComputeKernel bookkeeping thread started.";
 
@@ -228,11 +223,14 @@ void BatchedComputeKernel<Model>::bookkeeping_thread_func()
   std::vector<ContextPtr> contexts;
   bool all_contexts_assigned = false;
 
-  while ( running_ ) {
+  while ( not stoken.stop_requested() ) {
     // let's get an action from the incoming_
     {
       std::unique_lock lock( incoming_mutex_ );
-      incoming_cv_.wait( lock, [this] { return !incoming_.empty(); } );
+      if ( not incoming_cv_.wait( lock, stoken, [this] { return not incoming_.empty(); } ) ) {
+        continue;
+      }
+
       state = std::move( incoming_.front() );
       incoming_.pop();
     }
@@ -265,10 +263,12 @@ void BatchedComputeKernel<Model>::bookkeeping_thread_func()
       waiting_cv_.notify_one();
     }
   }
+
+  LOG( INFO ) << "BatchedComputeKernel bookkeeping thread exiting.";
 }
 
 template<typename Model>
-void BatchedComputeKernel<Model>::backlog_thread_func()
+void BatchedComputeKernel<Model>::backlog_thread_func( std::stop_token stoken )
 {
   LOG( INFO ) << "BatchedComputeKernel backlog thread started.";
 
@@ -276,11 +276,15 @@ void BatchedComputeKernel<Model>::backlog_thread_func()
   std::vector<ContextPtr> contexts;
   bool all_contexts_assigned = false;
 
-  while ( running_ ) {
+  while ( not stoken.stop_requested() ) {
     // let's get an action from the waiting_
     {
       std::unique_lock lock { waiting_mutex_ };
-      waiting_cv_.wait( lock, [this] { return !waiting_.empty() && released_ >= waiting_.front().batch_size(); } );
+      if ( not waiting_cv_.wait(
+             lock, stoken, [this] { return not waiting_.empty() and released_ >= waiting_.front().batch_size(); } ) ) {
+        continue;
+      }
+
       state = std::move( waiting_.front() );
       waiting_.pop();
 
@@ -307,6 +311,8 @@ void BatchedComputeKernel<Model>::backlog_thread_func()
       }
     }
   }
+
+  LOG( INFO ) << "BatchedComputeKernel backlog thread exiting.";
 }
 
 } // namespace glinthawk::compute
