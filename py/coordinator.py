@@ -19,7 +19,7 @@ logging.basicConfig(
     level=logging.NOTSET,
     format="%(message)s",
     datefmt="[%X]",
-    handlers=[RichHandler(rich_tracebacks=True, highlighter=rich.highlighter.NullHighlighter())],
+    handlers=[RichHandler(rich_tracebacks=True, highlighter=rich.highlighter.NullHighlighter(), show_path=False)],
 )
 
 logo = rich.align.Align.center(
@@ -63,7 +63,6 @@ def main(listen_address, listen_port, **kwargs):
 
     coordinator = Coordinator(**kwargs)
     asyncio.run(coordinator.main(listen_address, listen_port))
-
 
 if __name__ == "__main__":
     main()

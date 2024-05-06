@@ -2,12 +2,12 @@ import settings
 
 import os
 import sys
+import enum
 import json
 import socket
 import asyncio
 import logging
 
-from enum import Enum
 from typing import List, Dict, Tuple
 from dataclasses import dataclass, field
 from signal import SIGINT, SIGTERM
@@ -27,7 +27,15 @@ Stage = protobuf.SetRoute.LayerToAddress.Stage
 
 
 class Coordinator:
+    class State(enum.Enum):
+        Starting = enum.auto()
+        Running = enum.auto()
+        Stopping = enum.auto()
+        Stopped = enum.auto()
+
     def __init__(self, **kwargs):
+        self.state = Coordinator.State.Starting
+
         # Logging
         self.logger = logging.getLogger("coordinator")
         self.logger.setLevel(logging.INFO)
@@ -76,6 +84,11 @@ class Coordinator:
         self.output_dir = kwargs.get("output_dir")
         os.makedirs(self.output_dir, exist_ok=True)
 
+        self.state = Coordinator.State.Running
+
+    def is_running(self):
+        return self.state == Coordinator.State.Running
+
     def create_routing_message(self):
         message = self.model.route_message(self.workers)
         message.route_id = 0
@@ -114,24 +127,6 @@ class Coordinator:
 
         return prompt
 
-    async def handle_worker(self, reader, writer):
-        addr = writer.get_extra_info("peername")
-        self.logger.info(f"New connection from {addr!r}.")
-
-        worker = Worker(reader=reader, writer=writer)
-        self.workers += [worker]
-
-        while True:
-            try:
-                message_header = await reader.readexactly(5)
-                payload_length, opcode = Message.parse_header(message_header)
-                message_payload = await reader.readexactly(payload_length)
-                message = Message(opcode=opcode, payload=message_payload)
-                await self.incoming_messages.put([worker, message])
-            except:
-                worker.state = Worker.State.Disconnected
-                return
-
     def push_message(self, worker, opcode, payload):
         if isinstance(payload, ProtoMessage):
             payload = payload.SerializeToString()
@@ -142,18 +137,42 @@ class Coordinator:
 
         self.outgoing_messages.put_nowait([worker, Message(opcode, payload)])
 
+    async def handle_worker(self, reader, writer):
+        addr = writer.get_extra_info("peername")
+        self.logger.info(f"New connection from {addr!r}.")
+
+        worker = Worker(reader=reader, writer=writer)
+        self.workers += [worker]
+
+        while self.state != Coordinator.State.Stopped:
+            try:
+                message_header = await reader.readexactly(5)
+                payload_length, opcode = Message.parse_header(message_header)
+                message_payload = await reader.readexactly(payload_length)
+                message = Message(opcode=opcode, payload=message_payload)
+                await self.incoming_messages.put([worker, message])
+            except:
+                break
+
+        worker.state = Worker.State.Disconnected
+
+        if self.state not in [Coordinator.State.Stopping, Coordinator.State.Stopped]:
+            asyncio.create_task(self.request_shutdown(None))
+
+        self.logger.info(f"Connection from {addr!r} closed.")
+
     async def handle_outgoing_messages(self):
         async def send_message(worker, message):
             worker.writer.write(message.serialize())
             await worker.writer.drain()
 
-        while True:
+        while self.state != Coordinator.State.Stopped:
             worker, message = await self.outgoing_messages.get()
             self.logger.info(f'Sending "{message!r}" to {worker.id}.')
             await send_message(worker, message)
 
     async def message_processor(self):
-        while True:
+        while self.state != Coordinator.State.Stopped:
             worker, message = await self.incoming_messages.get()
 
             if message.opcode == Message.OpCode.Hey:
@@ -229,11 +248,6 @@ class Coordinator:
 
                         self.generated_dummies += self.initial_dummy_count
 
-                        # Periodically check if we need to generate more dummy prompts to keep the workers busy
-                        asyncio.create_task(self.maybe_generate_dummies())
-                    else:
-                        asyncio.create_task(self.maybe_send_prompts())
-
             elif message.opcode == Message.OpCode.PushCompletions:
                 proto = protobuf.PushCompletions()
                 proto.ParseFromString(message.payload)
@@ -247,12 +261,19 @@ class Coordinator:
                 for completion in proto.completions:
                     self.completion_queue.put_nowait(completion)
 
+            elif message.opcode == Message.OpCode.Bye:
+                worker.state = Worker.State.Disconnected
+                self.logger.info(f"Worker {worker.id} said goodbye.")
+
             else:
                 self.logger.error(f"Unexpected message {message.opcode} from {worker.id}.")
 
     async def maybe_generate_dummies(self):
-        while True:
-            await asyncio.sleep(30)
+        while self.initial_dummy_count > 0:
+            await asyncio.sleep(10)
+
+            if not self.is_running():
+                break
 
             count = (self.initial_dummy_count // 2) - (self.generated_dummies - self.completed_dummies)
             if count <= 0:
@@ -273,13 +294,18 @@ class Coordinator:
 
     async def maybe_send_prompts(self):
         while True:
+            await asyncio.sleep(10)
+
+            if not self.is_running() or not self.model.all_assigned():
+                continue
+
             if not self.prompt_queue:
                 self.logger.info("All prompts have been submitted for processing.")
-                return
+                break
 
             proto = protobuf.PushPrompts()
 
-            while self.assigned_prompts - self.completed_prompts < self.prompt_batch_size and self.prompt_queue:
+            while self.assigned_prompts - self.completed_prompts < self.prompt_batch_size:
                 proto.prompts.append(self.prompt_queue.pop(0))
                 self.assigned_prompts += 1
 
@@ -289,21 +315,72 @@ class Coordinator:
             self.logger.info(f"Sending {len(proto.prompts)} prompts to the first worker.")
             self.push_message(self.first_worker, Message.OpCode.PushPrompts, proto)
 
-            await asyncio.sleep(30)
-
     async def dump_completions(self):
         with open(os.path.join(self.output_dir, f"completions.json"), "w") as f:
-            while True:
+            while self.state != Coordinator.State.Stopped:
                 completion = await self.completion_queue.get()
                 f.write(json.dumps(MessageToDict(completion), indent=None, separators=(",", ":")))
                 f.write("\n")
                 f.flush()
 
-    async def main(self, listen_address, listen_port):
-        server = await asyncio.start_server(self.handle_worker, listen_address, listen_port)
+    async def request_shutdown(self, sig):
+        if self.state == Coordinator.State.Stopping:
+            self.logger.warning(f"Shutdown was already in progress; force quitting.")
+            return
+        else:
+            if sig is not None:
+                self.logger.warning(f"Received signal {sig!r}; shutting down gracefully...")
+            else:
+                self.logger.warning(f"Shutting down gracefully...")
 
-        async with server:
+            self.state = Coordinator.State.Stopping
+
+        loop = asyncio.get_running_loop()
+        loop.remove_signal_handler(SIGINT)
+        loop.remove_signal_handler(SIGTERM)
+
+        # Send a bye message to all workers, asking them to finish up
+        for worker in self.workers:
+            if worker.state == Worker.State.Connected:
+                self.push_message(worker, Message.OpCode.Bye, b"")
+
+        # Wait for all workers to finish up
+        while any(worker.state != Worker.State.Disconnected for worker in self.workers):
+            await asyncio.sleep(1)
+
+        for worker in self.workers:
+            worker.reader.feed_eof()
+            worker.writer.close()
+            await worker.writer.wait_closed()
+
+        if len(self.workers) > 0:
+            self.logger.info("All workers have disconnected; shutting down...")
+
+        self.state = Coordinator.State.Stopped
+        self.server.close()
+        await self.server.wait_closed()
+
+        for task in asyncio.all_tasks():
+            if task is not asyncio.current_task():
+                task.cancel()
+                await task
+
+    async def main(self, listen_address, listen_port):
+        self.server = await asyncio.start_server(self.handle_worker, listen_address, listen_port)
+        self.logger.info(f"Listening on {listen_address}:{listen_port}.")
+
+        async with self.server:
+            loop = asyncio.get_running_loop()
+            for sig in (SIGINT, SIGTERM):
+                loop.add_signal_handler(sig, lambda sig=sig: asyncio.create_task(self.request_shutdown(sig)))
+
             asyncio.create_task(self.message_processor())
             asyncio.create_task(self.handle_outgoing_messages())
             asyncio.create_task(self.dump_completions())
-            await server.serve_forever()
+            asyncio.create_task(self.maybe_generate_dummies())
+            asyncio.create_task(self.maybe_send_prompts())
+
+            try:
+                await self.server.serve_forever()
+            except asyncio.CancelledError:
+                pass
