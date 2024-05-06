@@ -79,8 +79,7 @@ private:
   using BatchedState = glinthawk::models::BatchedInferenceState<ModelConfig>;
   using RouteMap = std::map<std::pair<uint32_t, typename models::InferenceStage>, net::Address>;
 
-  std::atomic_bool running_ { true };
-
+  bool running_ { true };
   EventLoop event_loop_ {};
 
   net::Address listen_address_;
@@ -137,6 +136,7 @@ private:
   bool handle_coordinator_message( core::Message&& msg );
   bool handle_peer_message( core::Message&& msg );
   void handle_stats();
+  void handle_completions( const bool reset_timer );
 
   net::Address find_next_worker( const RouteMap& route, const BatchedState& state )
   {
@@ -264,16 +264,26 @@ void BatchedWorker<ModelConfig, ComputeKernel>::setup_compute_kernel( const std:
     "Commit completions",
     Direction::In,
     completion_commit_timer_,
-    [this] {
-      completion_commit_timer_.read_event();
-      const auto completed_count = prompt_store_.completed_count();
-      const auto proto = prompt_store_.completed_to_protobuf();
-      prompt_store_.cleanup_completed();
-      coordinator_.message_handler.push_message( { Message::OpCode::PushCompletions, proto.SerializeAsString() } );
-      LOG( INFO ) << "Pushed " << completed_count << " completions to coordinator.";
-    },
+    std::bind( &BatchedWorker<ModelConfig, ComputeKernel>::handle_completions, this, true ),
     [this] { return prompt_store_.completed_count() > 0; },
     [] { LOG( ERROR ) << "Completion commit timer stopped."; } );
+}
+
+template<typename ModelConfig, typename ComputeKernel>
+void BatchedWorker<ModelConfig, ComputeKernel>::handle_completions( const bool reset_timer )
+{
+  // commit all completions
+  if ( prompt_store_.completed_count() > 0 ) {
+    if ( reset_timer ) {
+      completion_commit_timer_.read_event();
+    }
+
+    const auto completed_count = prompt_store_.completed_count();
+    const auto proto = prompt_store_.completed_to_protobuf();
+    prompt_store_.cleanup_completed();
+    coordinator_.message_handler.push_message( { Message::OpCode::PushCompletions, proto.SerializeAsString() } );
+    LOG( INFO ) << "Pushed " << completed_count << " completions to coordinator.";
+  }
 }
 
 template<typename ModelConfig, typename ComputeKernel>
@@ -308,7 +318,10 @@ BatchedWorker<ModelConfig, ComputeKernel>::BatchedWorker( const net::Address& wo
     this->event_loop_,
     this->rule_categories_,
     std::bind( &BatchedWorker<ModelConfig, ComputeKernel>::handle_coordinator_message, this, std::placeholders::_1 ),
-    [] { LOG( FATAL ) << "Connection to coordinator closed."; },
+    [this] {
+      running_ = false;
+      LOG( WARNING ) << "The connection to coordinator closed.";
+    },
     [] { LOG( FATAL ) << "Exception in coordinator message handler."; } );
 
   event_loop_.add_rule(
@@ -381,6 +394,35 @@ bool BatchedWorker<ModelConfig, ComputeKernel>::handle_coordinator_message( core
 
       LOG( INFO ) << "Worker initialized.";
       break;
+    }
+
+    case Message::OpCode::Bye: {
+      LOG( INFO ) << "Received Bye message; shutting down.";
+
+      // things to do when shutting down:
+      // (1) stop the compute kernel right away
+      LOG( INFO ) << "Stopping compute kernel...";
+      this->compute_kernel_ = nullptr;
+
+      // (2) commit all finished completions
+      handle_completions( false );
+
+      // (3) send a Bye back to the coordinator
+      this->coordinator_.message_handler.push_message( { Message::OpCode::Bye, "" } );
+
+      // (4) wait for the coordinator to close the connection, otherwise exit in 10 seconds
+      event_loop_.add_rule(
+        "Shutdown timer",
+        Direction::In,
+        TimerFD( std::chrono::seconds { 10 } ),
+        [this] {
+          LOG( WARNING ) << "Shutdown timer expired; exiting.";
+          running_ = false;
+        },
+        [] { return true; },
+        [] { LOG( ERROR ) << "Shutdown timer stopped."; } );
+
+      return false;
     }
 
     case Message::OpCode::BatchedInferenceState: {
@@ -658,14 +700,17 @@ void BatchedWorker<ModelConfig, ComputeKernel>::handle_stats()
 template<typename ModelConfig, typename ComputeKernel>
 void BatchedWorker<ModelConfig, ComputeKernel>::run()
 {
-  while ( event_loop_.wait_next_event( -1 ) != EventLoop::Result::Exit ) {}
+  while ( event_loop_.wait_next_event( 1'000 ) != EventLoop::Result::Exit ) {
+    if ( not running_ ) {
+      return;
+    }
+  }
 }
 
 template<typename ModelConfig, typename ComputeKernel>
 BatchedWorker<ModelConfig, ComputeKernel>::~BatchedWorker()
 {
-  LOG( INFO ) << "BatchedWorker shutting down.";
-  running_ = false;
+  LOG( INFO ) << "BatchedWorker shutting down...";
 }
 
 } // namespace glinthawk::core
