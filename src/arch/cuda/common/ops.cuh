@@ -86,14 +86,6 @@ public:
              const uint64_t batch_size,
              const CopyType type,
              const bool async = false ) const;
-
-  void copy_table( DType* dst,
-                   const DType* src,
-                   const std::vector<uint64_t>& dst_offset,
-                   const std::vector<uint64_t>& src_offset,
-                   const std::vector<uint64_t>& len_bytes,
-                   const CopyType type,
-                   const bool async = false );
 };
 
 static_assert( OperationsConcept<Operations<glinthawk::float32_t>, glinthawk::float32_t> );
@@ -611,41 +603,6 @@ void Operations<DType>::copy( DType* dst,
     CHECK_CUDA( cudaMemcpyAsync( dst, l, size_bytes, convert_to_cuda( type ) ) );
   } else {
     CHECK_CUDA( cudaMemcpy( dst, l, size_bytes, convert_to_cuda( type ) ) );
-  }
-}
-
-template<typename DType>
-void Operations<DType>::copy_table( DType* dst,
-                                    const DType* src,
-                                    const std::vector<uint64_t>& dst_offset,
-                                    const std::vector<uint64_t>& src_offset,
-                                    const std::vector<uint64_t>& len_bytes,
-                                    const CopyType type,
-                                    const bool async )
-{
-  auto convert_to_cuda = []( const CopyType type ) {
-    switch ( type ) {
-      case CopyType::HostToHost: return cudaMemcpyHostToHost;
-      case CopyType::HostToDevice: return cudaMemcpyHostToDevice;
-      case CopyType::DeviceToHost: return cudaMemcpyDeviceToHost;
-      case CopyType::DeviceToDevice: return cudaMemcpyDeviceToDevice;
-      default: return cudaMemcpyDefault;
-    }
-  };
-
-  if ( async ) {
-    for ( size_t i = 0; i < dst_offset.size(); i++ ) {
-      if ( len_bytes[i] > 0 )
-        CHECK_CUDA(
-          cudaMemcpyAsync( dst + dst_offset[i], src + src_offset[i], len_bytes[i], convert_to_cuda( type ) ) );
-    }
-
-  } else {
-    for ( size_t i = 0; i < dst_offset.size(); i++ ) {
-      LOG( INFO ) << src_offset[i] << " -> " << dst_offset[i] << " for " << len_bytes[i] << " bytes";
-      if ( len_bytes[i] > 0 )
-        CHECK_CUDA( cudaMemcpy( dst + dst_offset[i], src + src_offset[i], len_bytes[i], convert_to_cuda( type ) ) );
-    }
   }
 }
 

@@ -19,7 +19,6 @@ concept OperationsConcept = requires( const T t,
                                       const DType* ptr2,
                                       uint32_t* ptr_uint32,
                                       const uint64_t size,
-                                      const std::vector<uint64_t> size_table,
                                       const glinthawk::float32_t val_f,
                                       const bool flag,
                                       const CopyType cpt ) {
@@ -32,7 +31,6 @@ concept OperationsConcept = requires( const T t,
   { t.template silu<UI64>( ptr1, ptr1, size ) } -> std::same_as<void>;
   { t.template matmul<UI64, UI64>( ptr1, ptr2, ptr2, size ) } -> std::same_as<void>;
   { t.copy( ptr1, ptr2, size, cpt, flag ) } -> std::same_as<void>;
-  { t.copy_table( ptr1, ptr2, size_table, size_table, size_table, cpt, flag ) } -> std::same_as<void>;
   { t.device_allocate( size ) } -> std::same_as<typename T::DeviceUniquePtr>;
   { t.randomize_device_buffer( ptr1, size, val_f, val_f ) } -> std::same_as<void>;
 };

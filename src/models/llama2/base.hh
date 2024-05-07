@@ -43,12 +43,8 @@ struct ConfigRuntime
 
   uint64_t start_layer_num {};
   uint64_t end_layer_num {};
-  uint64_t concurrency_limit { 1 };          // max concurrent inference size
-  uint64_t pre_att_concurrency_limit { 1 };  // max concurrent inference size
-  uint64_t att_concurrency_limit { 1 };      // max concurrent inference size
-  uint64_t post_att_concurrency_limit { 1 }; // max concurrent inference size
-  uint64_t cls_concurrency_limit { 1 };      // max concurrent inference size
-  uint64_t max_context_count { 1 };          // max number of contexts
+  uint64_t concurrency_limit { 1 }; // max concurrent inference size
+  uint64_t max_context_count { 1 }; // max number of contexts
   bool randomize_parameters { false };
 };
 
@@ -70,78 +66,20 @@ template<typename Config, typename DType>
 requires ModelConfig<Config>
 struct BaseWeights
 {
+  // TODO: We should have partial model loading
   BaseWeights() = default;
-  BaseWeights( const DType* base_weights, const RuntimeConfig<Config>& settings );
+  BaseWeights( const DType* base_weights );
 
   BaseWeights( const BaseWeights& ) = delete;
   BaseWeights operator=( const BaseWeights& ) = delete;
   BaseWeights( BaseWeights&& ) = default;
   BaseWeights& operator=( BaseWeights&& ) = default;
 
-  static consteval size_t read_size()
+  static consteval size_t base_size()
   {
     return sizeof( DType )
-           * ( Config::vocab_size * Config::dim + Config::dim + Config::seq_len * Config::head_size
+           * ( Config::vocab_size * Config::dim + Config::dim + Config::seq_len * Config::dim / Config::n_heads
                + ( Config::wcls_present ? ( Config::vocab_size * Config::dim ) : 0 ) );
-  }
-
-  static size_t base_size( const RuntimeConfig<Config>& settings )
-  {
-    const bool model_hosts_embedding = ( settings.pre_att_concurrency_limit > 0 and settings.start_layer_num == 0 )
-                                       or ( settings.cls_concurrency_limit > 0 and not Config::wcls_present );
-    const bool model_hosts_att = settings.att_concurrency_limit > 0;
-    const bool model_hosts_cls = settings.cls_concurrency_limit > 0;
-    size_t size = 0;
-    if ( model_hosts_embedding )
-      size += Config::vocab_size * Config::dim;
-    if ( model_hosts_att )
-      size += Config::seq_len * Config::head_size;
-    if ( model_hosts_cls and Config::wcls_present )
-      size += Config::dim + Config::vocab_size * Config::dim;
-    if ( model_hosts_cls and not Config::wcls_present )
-      size += Config::dim;
-    return sizeof( DType ) * size;
-  }
-
-  static std::vector<uint64_t> weight_offset( const RuntimeConfig<Config>& settings )
-  {
-    const bool model_hosts_embedding = ( settings.pre_att_concurrency_limit > 0 and settings.start_layer_num == 0 )
-                                       or ( settings.cls_concurrency_limit > 0 and not Config::wcls_present );
-    const bool model_hosts_att = settings.att_concurrency_limit > 0;
-    const bool model_hosts_cls = settings.cls_concurrency_limit > 0;
-    std::vector<uint64_t> offsets {};
-    offsets.push_back( 0 );
-    offsets.push_back( offsets.back() + ( model_hosts_embedding ? Config::vocab_size * Config::dim : 0 ) );
-    offsets.push_back( offsets.back() + ( model_hosts_cls ? Config::dim : 0 ) );
-    if ( Config::wcls_present and model_hosts_cls )
-      offsets.push_back( offsets.back() + ( model_hosts_att ? Config::seq_len * Config::head_size : 0 ) );
-    return offsets;
-  }
-
-  static std::vector<uint64_t> read_offset()
-  {
-    std::vector<uint64_t> offsets {};
-    offsets.push_back( 0 );
-    offsets.push_back( offsets.back() + Config::vocab_size * Config::dim );
-    offsets.push_back( offsets.back() + Config::dim );
-    if ( Config::wcls_present )
-      offsets.push_back( offsets.back() + Config::seq_len * Config::head_size );
-    return offsets;
-  }
-
-  static std::vector<uint64_t> weight_size( const RuntimeConfig<Config>& settings )
-  {
-    const bool model_hosts_embedding = ( settings.pre_att_concurrency_limit > 0 and settings.start_layer_num == 0 )
-                                       or ( settings.cls_concurrency_limit > 0 and not Config::wcls_present );
-    const bool model_hosts_att = settings.att_concurrency_limit > 0;
-    const bool model_hosts_cls = settings.cls_concurrency_limit > 0;
-    std::vector<uint64_t> offsets {};
-    offsets.push_back( sizeof( DType ) * ( model_hosts_embedding ? Config::vocab_size * Config::dim : 0 ) );
-    offsets.push_back( sizeof( DType ) * ( model_hosts_cls ? Config::dim : 0 ) );
-    offsets.push_back( sizeof( DType ) * ( model_hosts_att ? Config::seq_len * Config::head_size : 0 ) );
-    if ( Config::wcls_present and model_hosts_cls )
-      offsets.push_back( sizeof( DType ) * Config::vocab_size * Config::dim );
-    return offsets;
   }
 
   const DType* token_embedding_table {}; // (vocab_size, dim)
@@ -160,79 +98,28 @@ requires ModelConfig<Config>
 struct LayerWeights
 {
   LayerWeights() = default;
-  LayerWeights( const DType* model, const RuntimeConfig<Config>& settings );
+  LayerWeights( const DType* model );
 
   LayerWeights( const LayerWeights& ) = delete;
   LayerWeights operator=( const LayerWeights& ) = delete;
   LayerWeights( LayerWeights&& ) = default;
   LayerWeights& operator=( LayerWeights&& ) = default;
 
-  static consteval size_t read_size()
+  static consteval size_t layer_size()
   {
     return sizeof( DType )
            * ( 2 * Config::dim + 2 * Config::dim * Config::dim + 2 * Config::dim * Config::kv_dim
                + 3 * Config::dim * Config::hidden_dim );
   }
 
-  static size_t layer_size( const RuntimeConfig<Config>& settings )
-  {
-    const bool model_hosts_pre_att = settings.pre_att_concurrency_limit > 0;
-    const bool model_hosts_post_att = settings.post_att_concurrency_limit > 0;
-    size_t size = 0;
-    if ( model_hosts_pre_att )
-      size += Config::dim * Config::dim + 2 * Config::dim * Config::kv_dim + Config::dim;
-    if ( model_hosts_post_att )
-      size += 3 * Config::dim * Config::hidden_dim + Config::dim * Config::dim + Config::dim;
-    return sizeof( DType ) * size;
-  }
-
-  static std::vector<uint64_t> weight_offset( const RuntimeConfig<Config>& settings )
-  {
-    const bool model_hosts_pre_att = settings.pre_att_concurrency_limit > 0;
-    std::vector<uint64_t> offsets {};
-    offsets.push_back( 0 );
-    offsets.push_back(
-      offsets.back()
-      + ( model_hosts_pre_att ? Config::dim + Config::dim * Config::dim + 2 * Config::dim * Config::kv_dim : 0 ) );
-    return offsets;
-  }
-
-  static std::vector<uint64_t> read_offset()
-  {
-    std::vector<uint64_t> offsets {};
-    offsets.push_back( 0 );
-    offsets.push_back( offsets.back() + Config::dim + Config::dim * Config::dim + 2 * Config::dim * Config::kv_dim );
-    return offsets;
-  }
-
-  static std::vector<uint64_t> weight_size( const RuntimeConfig<Config>& settings )
-  {
-    const bool model_hosts_pre_att = settings.pre_att_concurrency_limit > 0;
-    const bool model_hosts_post_att = settings.post_att_concurrency_limit > 0;
-    std::vector<uint64_t> offsets {};
-    offsets.push_back(
-      sizeof( DType )
-      * ( model_hosts_pre_att ? Config::dim + Config::dim * Config::dim + 2 * Config::dim * Config::kv_dim : 0 ) );
-    offsets.push_back(
-      sizeof( DType )
-      * ( model_hosts_post_att ? Config::dim + Config::dim * Config::dim + 3 * Config::dim * Config::hidden_dim : 0 ) );
-    return offsets;
-  }
-
-  // PreAttention
   // weights for rmsnorms
   const DType* rms_att_weight { nullptr }; // (dim) rmsnorm weights
+  const DType* rms_ffn_weight { nullptr }; // (dim)
 
   // weights for matmuls
   const DType* wq { nullptr };  // (dim, dim)
   const DType* wkv { nullptr }; // (dim, 2*kv_dim)
-
-  // PostAttention
-  // weights for rmsnorms
-  const DType* rms_ffn_weight { nullptr }; // (dim)
-
-  // weights for matmuls
-  const DType* wo { nullptr }; // (dim, dim)
+  const DType* wo { nullptr };  // (dim, dim)
 
   // weights for ffn
   const DType* w1 { nullptr }; // (hidden_dim, dim)
@@ -380,10 +267,7 @@ std::string ConfigRuntime<T>::to_string() const
   oss << "vocab_size: " << T::vocab_size << ", ";
   oss << "seq_len: " << T::seq_len << ", ";
   oss << "wcls_present: " << T::wcls_present << ", ";
-  oss << "pre_att_concurrency_limit: " << pre_att_concurrency_limit << ", ";
-  oss << "att_concurrency_limit: " << att_concurrency_limit << ", ";
-  oss << "post_att_concurrency_limit: " << post_att_concurrency_limit << ", ";
-  oss << "cls_concurrency_limit: " << cls_concurrency_limit << ", ";
+  oss << "concurrency_limit: " << concurrency_limit << ", ";
   oss << "max_context_count: " << max_context_count << ", ";
   oss << "start_layer_num: " << start_layer_num << ", ";
   oss << "end_layer_num: " << end_layer_num;
@@ -394,41 +278,34 @@ std::string ConfigRuntime<T>::to_string() const
 /* BASE WEIGHTS */
 
 template<typename Config, typename DType>
-BaseWeights<Config, DType>::BaseWeights( const DType* model, const RuntimeConfig<Config>& settings )
+BaseWeights<Config, DType>::BaseWeights( const DType* model )
 {
+  const int head_size = Config::dim / Config::n_heads;
+
   auto ptr = model;
-
-  const bool model_hosts_embedding = ( settings.pre_att_concurrency_limit > 0 and settings.start_layer_num == 0 )
-                                     or ( settings.cls_concurrency_limit > 0 and not Config::wcls_present );
-  const bool model_hosts_att = settings.att_concurrency_limit > 0;
-  const bool model_hosts_cls = settings.cls_concurrency_limit > 0;
-
-  token_embedding_table = _advance_pointer( ptr, model_hosts_embedding ? Config::vocab_size * Config::dim : 0 );
-  rms_final_weight = _advance_pointer( ptr, model_hosts_cls ? Config::dim : 0 );
-  freq_cis_real = _advance_pointer( ptr, model_hosts_att ? Config::seq_len * Config::head_size / 2 : 0 );
-  freq_cis_imag = _advance_pointer( ptr, model_hosts_att ? Config::seq_len * Config::head_size / 2 : 0 );
+  token_embedding_table = _advance_pointer( ptr, Config::vocab_size * Config::dim );
+  rms_final_weight = _advance_pointer( ptr, Config::dim );
+  freq_cis_real = _advance_pointer( ptr, Config::seq_len * head_size / 2 );
+  freq_cis_imag = _advance_pointer( ptr, Config::seq_len * head_size / 2 );
   wcls = Config::wcls_present ? ptr : token_embedding_table;
 }
 
 /* LAYER WEIGHTS */
 
 template<typename Config, typename DType>
-LayerWeights<Config, DType>::LayerWeights( const DType* model, const RuntimeConfig<Config>& settings )
+LayerWeights<Config, DType>::LayerWeights( const DType* model )
 {
   auto ptr = model;
 
-  const bool model_hosts_pre_att = settings.pre_att_concurrency_limit > 0;
-  const bool model_hosts_post_att = settings.post_att_concurrency_limit > 0;
-
   // base pointers
-  this->rms_att_weight = _advance_pointer( ptr, model_hosts_pre_att ? Config::dim : 0 );
-  this->wq = _advance_pointer( ptr, model_hosts_pre_att ? Config::dim * Config::dim : 0 );
-  this->wkv = _advance_pointer( ptr, model_hosts_pre_att ? Config::dim * Config::kv_dim * 2 : 0 );
-  this->wo = _advance_pointer( ptr, model_hosts_post_att ? Config::dim * Config::dim : 0 );
-  this->rms_ffn_weight = _advance_pointer( ptr, model_hosts_post_att ? Config::dim : 0 );
-  this->w1 = _advance_pointer( ptr, model_hosts_post_att ? Config::dim * Config::hidden_dim : 0 );
-  this->w2 = _advance_pointer( ptr, model_hosts_post_att ? Config::dim * Config::hidden_dim : 0 );
-  this->w3 = _advance_pointer( ptr, model_hosts_post_att ? Config::dim * Config::hidden_dim : 0 );
+  this->rms_att_weight = _advance_pointer( ptr, Config::dim );
+  this->wq = _advance_pointer( ptr, Config::dim * Config::dim );
+  this->wkv = _advance_pointer( ptr, Config::dim * Config::kv_dim * 2 );
+  this->wo = _advance_pointer( ptr, Config::dim * Config::dim );
+  this->rms_ffn_weight = _advance_pointer( ptr, Config::dim );
+  this->w1 = _advance_pointer( ptr, Config::dim * Config::hidden_dim );
+  this->w2 = _advance_pointer( ptr, Config::dim * Config::hidden_dim );
+  this->w3 = _advance_pointer( ptr, Config::dim * Config::hidden_dim );
 }
 
 /* RUN STATE */
