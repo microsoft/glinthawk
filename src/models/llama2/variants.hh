@@ -8,40 +8,17 @@ namespace glinthawk::models::llama2 {
 
 template<class T>
 concept ModelConfig = requires( T t ) {
-  T::dim;
   requires std::is_unsigned_v<decltype( T::dim )>;
-
-  T::kv_dim;
   requires std::is_unsigned_v<decltype( T::kv_dim )>;
-
-  T::hidden_dim;
   requires std::is_unsigned_v<decltype( T::hidden_dim )>;
-
-  T::n_layers;
   requires std::is_unsigned_v<decltype( T::n_layers )>;
-
-  T::head_size;
   requires std::is_unsigned_v<decltype( T::head_size )>;
-
-  T::n_heads;
   requires std::is_unsigned_v<decltype( T::n_heads )>;
-
-  T::n_kv_heads;
   requires std::is_unsigned_v<decltype( T::n_kv_heads )>;
-
-  T::gqa_size;
   requires std::is_unsigned_v<decltype( T::gqa_size )>;
-
-  T::vocab_size;
   requires std::is_unsigned_v<decltype( T::vocab_size )>;
-
-  T::seq_len;
   requires std::is_unsigned_v<decltype( T::seq_len )>;
-
-  T::wcls_present;
   requires std::is_convertible_v<decltype( T::wcls_present ), bool>;
-
-  T::attention_rounds;
   requires std::is_unsigned_v<decltype( T::attention_rounds )>;
 };
 
