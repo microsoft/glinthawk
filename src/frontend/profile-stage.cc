@@ -47,6 +47,7 @@ int main( int argc, char* argv[] )
     const filesystem::path log_path { argv[6] };
 
     using ModelType = models::llama2::_GLINTHAWK_ARCH_NS_::Llama2_70B_Chat<_GLINTHAWK_DTYPE_>;
+    CHECK_LT( token_pos, ModelType::ConfigType::seq_len ) << "Token position out of range";
 
     models::InferenceStage stage;
     if ( stage_str == "pre" ) {
