@@ -6,6 +6,7 @@
 #include <fstream>
 #include <memory>
 #include <thread>
+#include <typeinfo>
 #include <vector>
 
 #include "models/common/state.hh"
@@ -70,8 +71,9 @@ public:
 
     prepare_states( true );
 
-    lout_ << "# " << " stage=" << stage << " " << " batch_size=" << batch_size << " token_pos=" << token_pos
-          << " duration_s=" << duration_s << '\n';
+    lout_ << "# "
+          << "model='" << typeid( typename Model::ConfigType ).name() << "', stage=" << stage
+          << ", batch_size=" << batch_size << ", token_pos=" << token_pos << ", duration_s=" << duration_s << '\n';
 
     lout_ << "repeat,timestamp_ms,duration_us\n";
   }
