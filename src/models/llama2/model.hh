@@ -86,6 +86,8 @@ protected:
   std::array<LayerWeights<Config, DType>, Config::n_layers> layer_weights_;
   ScratchPad<Config, DType, Context> scratchpad_;
 
+  size_t batch_id_ { 0 };
+
   // Checking if the inference states are safe to pass to the model
   template<StateConcept StateType>
   void check_batch( const StateType& inference_states,
@@ -142,7 +144,27 @@ void extract_batch_token( LlamaOperations& ops,
   ops.template argmax<Config::vocab_size>( state.argmax_pos, state.logits, state.x, temp.size() );
 }
 
+template<typename DType, typename LlamaOperations>
+void _dump_matrix( const LlamaOperations& ops,
+                   const size_t batch_id,
+                   const size_t layer_num,
+                   const std::string& mat_name,
+                   DType* data,
+                   size_t size )
+{
+  const std::filesystem::path _DUMP_DIR { "/dev/shm/model_activations" };
+  const auto output_name
+    = _DUMP_DIR / ( std::to_string( batch_id ) + "-" + std::to_string( layer_num ) + "-" + mat_name );
+
+  // let's create a buffer and copy things into it
+  std::vector<DType> buffer( size );
+  ops.copy( buffer.data(), data, size * sizeof( DType ), CopyType::DeviceToHost );
+
+  std::ofstream file { output_name, std::ios::binary };
+  file.write( reinterpret_cast<char*>( buffer.data() ), size * sizeof( DType ) );
 }
+
+} // namespace
 
 template<typename Config, typename DType, typename LlamaOperations, typename Context>
 Llama2<Config, DType, LlamaOperations, Context>::Llama2( const std::filesystem::path& model_dir,
@@ -230,6 +252,7 @@ Llama2<Config, DType, LlamaOperations, Context>::Llama2( const std::filesystem::
 
   LOG( INFO ) << "Model " << typeid( decltype( this ) ).name() << " instantiated.";
 }
+
 template<typename Config, typename DType, typename LlamaOperations, typename Context>
 template<StateConcept StateType>
 void Llama2<Config, DType, LlamaOperations, Context>::check_batch(
@@ -288,8 +311,21 @@ void Llama2<Config, DType, LlamaOperations, Context>::pre_attention_ops( const i
   ops_.template matmul<Config::dim, Config::dim>(
     this->scratchpad_.q, this->scratchpad_.xb, layer_weights.wq, this->scratchpad_.curr_concurrency_size );
 
+  _dump_matrix(
+    ops_, batch_id_, layer_num, "wq", this->scratchpad_.q, this->scratchpad_.curr_concurrency_size * Config::dim );
+
   ops_.template matmul<Config::dim, Config::kv_dim * 2>(
     this->scratchpad_.kv, this->scratchpad_.xb, layer_weights.wkv, this->scratchpad_.curr_concurrency_size );
+
+  _dump_matrix(
+    ops_, batch_id_, layer_num, "wk", this->scratchpad_.kv, this->scratchpad_.curr_concurrency_size * Config::kv_dim );
+
+  _dump_matrix( ops_,
+                batch_id_,
+                layer_num,
+                "wv",
+                this->scratchpad_.kv + this->scratchpad_.curr_concurrency_size * Config::kv_dim,
+                this->scratchpad_.curr_concurrency_size * Config::kv_dim );
 
   if ( update_kv_cache ) {
     // save key, value at each time step (pos) to our kv cache.
@@ -344,6 +380,9 @@ void Llama2<Config, DType, LlamaOperations, Context>::post_attention_ops( const 
   ops_.template matmul<Config::dim, Config::dim>(
     this->scratchpad_.xb2, this->scratchpad_.xb, layer_weights.wo, this->scratchpad_.curr_concurrency_size );
 
+  _dump_matrix(
+    ops_, batch_id_, layer_num, "wo", this->scratchpad_.xb2, this->scratchpad_.curr_concurrency_size * Config::dim );
+
   // residual connection back into x
   ops_.template accum<Config::dim>(
     this->scratchpad_.x, this->scratchpad_.xb2, this->scratchpad_.curr_concurrency_size );
@@ -360,8 +399,22 @@ void Llama2<Config, DType, LlamaOperations, Context>::post_attention_ops( const 
   ops_.template matmul<Config::dim, Config::hidden_dim>(
     this->scratchpad_.hb, this->scratchpad_.xb, layer_weights.w1, this->scratchpad_.curr_concurrency_size );
 
+  _dump_matrix( ops_,
+                batch_id_,
+                layer_num,
+                "w1",
+                this->scratchpad_.hb,
+                this->scratchpad_.curr_concurrency_size * Config::hidden_dim );
+
   ops_.template matmul<Config::dim, Config::hidden_dim>(
     this->scratchpad_.hb2, this->scratchpad_.xb, layer_weights.w3, this->scratchpad_.curr_concurrency_size );
+
+  _dump_matrix( ops_,
+                batch_id_,
+                layer_num,
+                "w3",
+                this->scratchpad_.hb2,
+                this->scratchpad_.curr_concurrency_size * Config::hidden_dim );
 
   ops_.template silu<Config::hidden_dim>(
     this->scratchpad_.hb, this->scratchpad_.hb2, this->scratchpad_.curr_concurrency_size );
@@ -370,9 +423,16 @@ void Llama2<Config, DType, LlamaOperations, Context>::post_attention_ops( const 
   ops_.template matmul<Config::hidden_dim, Config::dim>(
     this->scratchpad_.xb, this->scratchpad_.hb, layer_weights.w2, this->scratchpad_.curr_concurrency_size );
 
+  _dump_matrix(
+    ops_, batch_id_, layer_num, "w2", this->scratchpad_.xb, this->scratchpad_.curr_concurrency_size * Config::dim );
+
   // residual connection
   ops_.template accum<Config::dim>(
     this->scratchpad_.x, this->scratchpad_.xb, this->scratchpad_.curr_concurrency_size );
+
+  if ( static_cast<size_t>( layer_num ) == static_cast<size_t>( instance_config_.end_layer_num ) ) {
+    batch_id_++;
+  }
 }
 
 template<typename Config, typename DType, typename LlamaOperations, typename Context>
