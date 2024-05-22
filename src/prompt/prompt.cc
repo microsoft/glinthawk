@@ -35,17 +35,19 @@ protobuf::Prompt Prompt::to_protobuf() const
   return pb_prompt;
 }
 
-Prompt Prompt::from_json( const string_view json )
+Prompt Prompt::from_json( const string& json )
 {
   protobuf::Prompt pb_prompt;
-  CHECK( google::protobuf::util::JsonStringToMessage( json, &pb_prompt ).ok() ) << "Failed to parse JSON.";
+  CHECK( google::protobuf::util::JsonStringToMessage( json, &pb_prompt, {} ).ok() )
+    << "Failed to parse JSON.";
   return from_protobuf( pb_prompt );
 }
 
 string Prompt::to_json() const
 {
   string json;
-  CHECK( google::protobuf::util::MessageToJsonString( to_protobuf(), &json ).ok() ) << "Failed to serialize to JSON.";
+  CHECK( google::protobuf::util::MessageToJsonString( to_protobuf(), &json, {} ).ok() )
+    << "Failed to serialize to JSON.";
   return json;
 }
 

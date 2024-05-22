@@ -49,7 +49,7 @@ public:
   {
   }
 
-  static Prompt from_json( const std::string_view json );
+  static Prompt from_json( const std::string& json );
   std::string to_json() const;
 
   static Prompt from_protobuf( const protobuf::Prompt& message );
