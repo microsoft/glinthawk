@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 
-import os
-import sys
+import re
 import asyncio
 import logging
 import signal
+import hashlib
 
 import click
 import rich
@@ -36,7 +36,7 @@ def get_worker_command(
         "run",
         "-t",
         "--rm",
-        "--name=glinthawk-worker",
+        f"--name=glinthawk-worker-{hashlib.md5((worker_address + str(worker_port)).encode()).hexdigest()[:8]}",
         "--runtime=nvidia",
         "--gpus=all",
         "--network=host",
@@ -78,30 +78,19 @@ def get_worker_command(
     return ssh_command
 
 
+ansi_escape = re.compile(r"\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])")
+
+
 async def run_command(command, addr, port):
     try:
-        process = await asyncio.create_subprocess_exec(
-            *command,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-
-        stdout, stderr = await process.communicate()
-
-        if stdout:
-            print(f"[stdout {addr}:{port}]\n{stdout.decode()}")
-
-        if stderr:
-            print(f"[stderr {addr}:{port}]\n{stderr.decode()}")
-
-        if not process.returncode:
-            logging.info(f"Process {addr}:{port} exited successfully.")
-        else:
-            logging.error(f"Process {addr}:{port} exited with code {process.returncode}.")
+        process = await asyncio.create_subprocess_exec(*command, stdout=None, stderr=None)
+        await process.communicate()
+        logging.warning(f"Process {addr}:{port} exited with code {process.returncode}.")
 
     except asyncio.CancelledError:
         if process and process.returncode is None:
             process.terminate()
+            await process.wait()
 
         logging.warning(f"Process {addr}:{port} was cancelled.")
 
