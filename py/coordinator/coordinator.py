@@ -305,7 +305,9 @@ class Coordinator:
 
             proto = protobuf.PushPrompts()
 
-            while self.assigned_prompts - self.completed_prompts < self.prompt_batch_size:
+            while (
+                len(self.prompt_queue) > 0 and self.assigned_prompts - self.completed_prompts < self.prompt_batch_size
+            ):
                 proto.prompts.append(self.prompt_queue.pop(0))
                 self.assigned_prompts += 1
 
