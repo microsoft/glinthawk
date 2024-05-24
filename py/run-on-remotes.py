@@ -21,6 +21,35 @@ logging.basicConfig(
 )
 
 
+def get_ssh_command(
+    command: str,
+    worker_address: str,
+    ssh_user: str,
+    ssh_port: int = None,
+    ssh_key: str = None,
+):
+    ssh_command = [
+        "ssh",
+    ]
+
+    if ssh_key:
+        ssh_command += ["-i", shlex.quote(ssh_key)]
+
+    if ssh_port:
+        ssh_command += ["-p", f"{ssh_port}"]
+
+    ssh_command += [
+        f"{ssh_user}@{worker_address}",
+        "/bin/bash",
+        "-O",
+        "huponexit",
+        "-c",
+        f"{shlex.quote(command)}",
+    ]
+
+    return ssh_command
+
+
 def get_worker_command(
     worker_address: str,
     worker_port: int,
@@ -31,16 +60,19 @@ def get_worker_command(
     ssh_key: str = None,
     **kwargs,
 ):
-    container_name = hashlib.sha256(
-        (image_name + " ".join(image_args) + worker_address + str(worker_port)).encode()
-    ).hexdigest()[:12]
+    container_name = (
+        "glinthawk-"
+        + hashlib.sha256((image_name + " ".join(image_args) + worker_address + str(worker_port)).encode()).hexdigest()[
+            :12
+        ]
+    )
 
     docker_command = [
         "docker",
         "run",
         "-t",
         "--rm",
-        f"--name=glinthawk-{container_name}",
+        f"--name={container_name}",
         "--network=host",
         "--no-healthcheck",
         "--read-only",
@@ -51,10 +83,10 @@ def get_worker_command(
         docker_command += shlex.split(option)
 
     for src, dst in kwargs.get("mount_ro", []):
-        docker_command += [f"--mount=type=bind,src={src},dst={dst},readonly"]
+        docker_command += [f"--mount=type=bind,src={shlex.quote(src)},dst={shlex.quote(dst)},readonly"]
 
     for src, dst in kwargs.get("mount_rw", []):
-        docker_command += [f"--mount=type=bind,src={src},dst={dst}"]
+        docker_command += [f"--mount=type=bind,src={shlex.quote(src)},dst={shlex.quote(dst)}"]
 
     image_instance_args = list(image_args[:])
 
@@ -69,37 +101,26 @@ def get_worker_command(
         *image_instance_args,
     ]
 
-    ssh_command = [
-        "ssh",
-        "-t",
-        "-t",
-    ]
-
-    if ssh_key:
-        ssh_command += ["-i", ssh_key]
-
-    if ssh_port:
-        ssh_command += ["-p", f"{ssh_port}"]
-
-    ssh_command += [
-        f"{ssh_user}@{worker_address}",
-        "/bin/bash",
-        "-O",
-        "huponexit",
-        "-c",
-        f'"{" ".join(docker_command)}"',
-    ]
-
-    return ssh_command
+    return (
+        get_ssh_command(
+            shlex.join(docker_command),
+            worker_address,
+            ssh_user,
+            ssh_port,
+            ssh_key,
+        ),
+        container_name,
+    )
 
 
-async def run_command(command, addr, port, log_stdout_dir=None, log_stderr_dir=None):
+async def run_command(command, container_name, addr, port, log_stdout_dir=None, log_stderr_dir=None, **kwargs):
     try:
         process = await asyncio.create_subprocess_exec(
             *command,
             stdin=asyncio.subprocess.DEVNULL,
             stdout=asyncio.subprocess.DEVNULL if log_stdout_dir is None else asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.DEVNULL if log_stderr_dir is None else asyncio.subprocess.PIPE,
+            start_new_session=True,
         )
 
         stdout, stderr = await process.communicate()
@@ -114,11 +135,30 @@ async def run_command(command, addr, port, log_stdout_dir=None, log_stderr_dir=N
                 f.write(stderr)
 
     except asyncio.CancelledError:
+        logging.warning(f"Process {addr}:{port} was cancelled.")
+    finally:
         if process and process.returncode is None:
-            process.terminate()
+            os.killpg(os.getpgid(process.pid), signal.SIGHUP)
             await process.wait()
 
-        logging.warning(f"Process {addr}:{port} was cancelled.")
+        logging.info(f"Stopping container {container_name} on {addr}:{port}...")
+        process = await asyncio.create_subprocess_exec(
+            *get_ssh_command(
+                f"docker container kill --signal=SIGINT {container_name}",
+                addr,
+                kwargs["ssh_user"],
+                kwargs.get("ssh_port"),
+                kwargs.get("ssh_key"),
+            ),
+            stdin=asyncio.subprocess.DEVNULL,
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.DEVNULL,
+            start_new_session=True,
+        )
+
+        await process.communicate()
+
+        logging.info(f"Cleaned up {addr}:{port}.")
 
 
 def shutdown():
@@ -143,17 +183,22 @@ async def main(**kwargs):
 
             worker_address = line[0]
             worker_port = int(line[1])
+
+            command, container_name = get_worker_command(
+                worker_address,
+                worker_port,
+                **kwargs,
+            )
+
             tasks += [
                 run_command(
-                    get_worker_command(
-                        worker_address,
-                        worker_port,
-                        **kwargs,
-                    ),
+                    command,
+                    container_name,
                     worker_address,
                     worker_port,
-                    kwargs.get("log_stdout"),
-                    kwargs.get("log_stderr"),
+                    log_stdout_dir=kwargs.get("log_stdout"),
+                    log_stderr_dir=kwargs.get("log_stderr"),
+                    **kwargs,
                 )
             ]
 
