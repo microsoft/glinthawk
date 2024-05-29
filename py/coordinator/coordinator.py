@@ -79,10 +79,12 @@ class Coordinator:
         # Prompts and completions
         self.prompt_queue = []
         self.completion_queue = asyncio.Queue()
-        self.load_prompts(kwargs.get("prompt_dir"))
 
+        self.prompt_dir = kwargs.get("prompt_dir")
         self.output_dir = kwargs.get("output_dir")
         os.makedirs(self.output_dir, exist_ok=True)
+
+        self.load_prompts(self.prompt_dir, self.output_dir)
 
         self.state = Coordinator.State.Running
 
@@ -94,22 +96,49 @@ class Coordinator:
         message.route_id = 0
         return message
 
-    def load_prompts(self, prompt_dir: str):
-        if not prompt_dir:
+    def load_prompts(self, prompt_dir: str, output_dir: str) -> None:
+        if not prompt_dir or not output_dir:
             return
 
         size_bytes = 0
+        skipped_count = 0
+        loaded_count = 0
+
+        # (1) let's see what prompts have already been processed
+        completed_prompts = set([])
+
+        for filename in os.listdir(output_dir):
+            path = os.path.join(output_dir, filename)
+            if filename.endswith(".jsonl") and os.path.isfile(path):
+                with open(path, "r") as f:
+                    for line in f:
+                        p = self.make_prompt_from_json(line)
+                        completed_prompts.add(p.id)
 
         for filename in os.listdir(prompt_dir):
             path = os.path.join(prompt_dir, filename)
             if filename.endswith(".jsonl") and os.path.isfile(path):
                 with open(path, "r") as f:
                     for line in f:
-                        size_bytes += len(line)
                         p = self.make_prompt_from_json(line)
+
+                        if p.id in completed_prompts:
+                            skipped_count += 1
+                            continue
+                        else:
+                            loaded_count += 1
+                            size_bytes += len(line)
+
                         self.prompt_queue.append(p)
 
-        self.logger.info(f"Loaded {len(self.prompt_queue)} prompts ({size_bytes} bytes).")
+        if skipped_count > 0:
+            self.logger.info(
+                f"Skipped {skipped_count} prompt{'s' if skipped_count != 1 else ''} that have already been processed."
+            )
+
+        self.logger.info(
+            f"Loaded {loaded_count} prompt{'s' if loaded_count != 1 else ''} from {prompt_dir} ({size_bytes / 1024 / 1024:.2f} MiB)."
+        )
 
     def make_prompt_from_json(self, jsondata: str) -> protobuf.Prompt:
         data = json.loads(jsondata)
@@ -318,7 +347,7 @@ class Coordinator:
             self.push_message(self.first_worker, Message.OpCode.PushPrompts, proto)
 
     async def dump_completions(self):
-        with open(os.path.join(self.output_dir, f"completions.json"), "w") as f:
+        with open(os.path.join(self.output_dir, f"completions.jsonl"), "a") as f:
             while self.state != Coordinator.State.Stopped:
                 completion = await self.completion_queue.get()
                 f.write(json.dumps(MessageToDict(completion), indent=None, separators=(",", ":")))
