@@ -51,7 +51,7 @@ public:
             const uint64_t token_pos,
             const size_t duration_s,
             const bool run_serialization )
-    : model_( model_root, 1, 1, batch_size, batch_size, true )
+    : model_( model_root, ConfigType::n_layers - 1, ConfigType::n_layers - 1, batch_size, batch_size, true )
     , stage_( stage )
     , batch_size_( batch_size )
     , token_pos_( token_pos )
@@ -62,7 +62,7 @@ public:
     for ( size_t i = 0; i < batch_size; i++ ) {
       contexts_[i] = std::make_shared<ContextType>( model_.settings() );
 
-      model_.ops().randomize_device_buffer( contexts_[i]->layer( 1 ).token( 0 ).key(),
+      model_.ops().randomize_device_buffer( contexts_[i]->layer( ConfigType::n_layers - 1 ).token( 0 ).key(),
                                             contexts_[i]->max_size( model_.settings().n_layers_loaded() )
                                               / sizeof( ModelDataType ),
                                             -10.0 / sqrtf( ConfigType::dim ),
@@ -87,7 +87,7 @@ public:
                           true,        true,
                           true };
 
-      state.set_next_layer( 1 );
+      state.set_next_layer( ConfigType::n_layers - 1 );
       state.set_next_stage( stage_ );
 
       if ( first_time ) {
@@ -150,6 +150,8 @@ public:
         model_.forward_attention( states, contexts_ );
       } else if ( stage_ == Stage::PostAttention ) {
         model_.forward_post_attention( states );
+      } else if ( stage_ == Stage::Classification ) {
+          model_.forward_classify( states );
       } else {
         LOG( FATAL ) << "Unknown stage";
       }
