@@ -259,21 +259,21 @@ LlamaOperations<Config, DType, ContextType>::LlamaOperations( const ConfigRuntim
   // (a) TPB must not exceed 1024. Threads per block cannot surpass 1024.
   // (b) Config::n_heads must not exceed 1024.
   // (c) Config::dim / Config::n_heads / 2 must not exceed 1024.
-  // (d) Config::n_heads must not exceed (1 << 16) - 1. RoPE has n_heads blocks, which cannot surpass 2^16.
-  // (e) Config::seq_len must not exceed (1 << 16) - 1. Attention softmax has seq_len blocks, which cannot surpass
-  // 2^16. (f) Accum blocks must not exceed (1 << 16) - 1. (g) Silu blocks must not exceed (1 << 16) - 1. (h) CuRAND
-  // blocks must not exceed (1 << 16) - 1. (i) RMS Norm blocks must not exceed (1 << 16) - 1. (j) RMS Norm scratch pad
+  // (d) Config::n_heads must not exceed (1 << 31) - 1. RoPE has n_heads blocks, which cannot surpass 2^31.
+  // (e) Config::seq_len must not exceed (1 << 31) - 1. Attention softmax has seq_len blocks, which cannot surpass
+  // 2^31. (f) Accum blocks must not exceed (1 << 31) - 1. (g) Silu blocks must not exceed (1 << 31) - 1. (h) CuRAND
+  // blocks must not exceed (1 << 31) - 1. (i) RMS Norm blocks must not exceed (1 << 31) - 1. (j) RMS Norm scratch pad
   // must have enough space for calculations. (k) Argmax scratch pad must have enough space.
 
   static_assert( 1024 >= TPB );                                                                  // (a)
   static_assert( 1024 >= Config::n_heads );                                                      // (b)
   static_assert( 1024 >= Config::dim / Config::n_heads / 2 );                                    // (c)
-  static_assert( ( 1 << 16 ) - 1 >= Config::n_heads );                                           // (d)
-  static_assert( ( 1 << 16 ) - 1 >= Config::seq_len );                                           // (e)
-  CHECK_GE( ( 1 << 16 ) - 1, div_ceil( Config::dim * settings.concurrency_limit, TPB ) );        // (f)
-  CHECK_GE( ( 1 << 16 ) - 1, div_ceil( Config::hidden_dim * settings.concurrency_limit, TPB ) ); // (g)
-  static_assert( ( 1 << 16 ) - 1 >= div_ceil( Config::vocab_size, TPB ) );                       // (h)
-  static_assert( ( 1 << 16 ) - 1 >= div_ceil( Config::dim, NRBS ) );                             // (i)
+  static_assert( ( 1l << 31 ) - 1 >= Config::n_heads );                                           // (d)
+  static_assert( ( 1l << 31 ) - 1 >= Config::seq_len );                                           // (e)
+  CHECK_GE( ( 1l << 31 ) - 1, div_ceil( Config::dim * settings.concurrency_limit, TPB ) );        // (f)
+  CHECK_GE( ( 1l << 31 ) - 1, div_ceil( Config::hidden_dim * settings.concurrency_limit, TPB ) ); // (g)
+  static_assert( ( 1l << 31 ) - 1 >= div_ceil( Config::vocab_size, TPB ) );                       // (h)
+  static_assert( ( 1l << 31 ) - 1 >= div_ceil( Config::dim, NRBS ) );                             // (i)
 
   static_assert(
     sizeof( DType ) * Config::dim
