@@ -144,7 +144,7 @@ async def run_command(command, container_name, addr, port, log_stdout_dir=None, 
         logging.info(f"Stopping container {container_name} on {addr}:{port}...")
         process = await asyncio.create_subprocess_exec(
             *get_ssh_command(
-                f"docker container kill --signal=SIGINT {container_name}",
+                f"docker container kill --signal=SIGTERM {container_name}",
                 addr,
                 kwargs["ssh_user"],
                 kwargs.get("ssh_port"),

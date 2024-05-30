@@ -152,7 +152,7 @@ void _dump_matrix( const LlamaOperations& ops,
                    DType* data,
                    size_t size )
 {
-  const std::filesystem::path _DUMP_DIR { "/dev/shm/model_activations" };
+  const std::filesystem::path _DUMP_DIR { "/app/activations" };
   const auto output_name
     = _DUMP_DIR / ( std::to_string( batch_id ) + "-" + std::to_string( layer_num ) + "-" + mat_name );
 
