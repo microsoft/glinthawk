@@ -71,8 +71,7 @@ public:
 
     prepare_states( true );
 
-    lout_ << "# "
-          << "model='" << typeid( typename Model::ConfigType ).name() << "', stage=" << stage
+    lout_ << "# " << "model='" << typeid( typename Model::ConfigType ).name() << "', stage=" << stage
           << ", batch_size=" << batch_size << ", token_pos=" << token_pos << ", duration_s=" << duration_s << '\n';
 
     lout_ << "repeat,timestamp_ms,duration_us\n";
@@ -151,7 +150,7 @@ public:
       } else if ( stage_ == Stage::PostAttention ) {
         model_.forward_post_attention( states );
       } else if ( stage_ == Stage::Classification ) {
-          model_.forward_classify( states );
+        model_.forward_classify( states );
       } else {
         LOG( FATAL ) << "Unknown stage";
       }

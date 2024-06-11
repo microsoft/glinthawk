@@ -559,7 +559,8 @@ bool BatchedWorker<ModelConfig, ComputeKernel>::handle_coordinator_message( core
           PromptID prompt_id = prompt_queue_.front();
           prompt_queue_.pop();
           auto& prompt = prompt_store_.get( prompt_id );
-          state.set_prompt( i, prompt_id, prompt.prompt().at( 0 ), 0, prompt.temperature(), prompt.prompt().count(), -1, -1 );
+          state.set_prompt(
+            i, prompt_id, prompt.prompt().at( 0 ), 0, prompt.temperature(), prompt.prompt().count(), -1, -1 );
         }
 
         this->compute_kernel_->push( std::move( state ) );
