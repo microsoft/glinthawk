@@ -46,8 +46,8 @@ struct __attribute__( ( packed ) ) PromptData
   uint8_t temperature {}; // compact temprature, between [0, 255]; has to be divided by 255.0f before use.
   uint32_t prompt_length {};
   bool finished { false };
-  uint8_t tier_1_routing_group {};  // Denotes which group in tier 1 this prompt needs to be forwarded to, 0-indexed, -1 means it belongs in tier 2
-  uint8_t tier_2_routing_group {};  // Denotes which group in tier 2 this prompt needs to be forwarded to, 0-indexed, -1 means it belongs in tier 1
+  uint8_t tier_1_routing_group {};  // Denotes which group in tier 1 this prompt needs to be forwarded to, 0-indexed, -1 means it belongs in tier 2, if both are -1 this prompt has not been routed yet
+  uint8_t tier_2_routing_group {};  // Denotes which group in tier 2 this prompt needs to be forwarded to, 0-indexed, -1 means it belongs in tier 1, if both are -1 this prompt has not been routed yet
 };
 
 template<typename T>
@@ -91,6 +91,7 @@ concept StateConcept = requires( T state, const T cstate, const std::string cstr
   { state.finished( 0 ) } -> std::same_as<bool>;
   { state.tier_1_routing_group( 0 ) } -> std::same_as<uint8_t>;
   { state.tier_2_routing_group( 0 ) } -> std::same_as<uint8_t>;
+  { state.tier_routed( 0 ) } -> std::same_as<bool>;
   { state.active( 0 ) } -> std::same_as<bool>;
 
   { state.set_prompt_id( 0, {} ) };
@@ -241,6 +242,7 @@ public:
   bool finished( const size_t i ) const { return prompts_[i].finished; }
   uint8_t tier_1_routing_group( const size_t i ) const { return prompts_[i].tier_1_routing_group; }
   uint8_t tier_2_routing_group( const size_t i ) const { return prompts_[i].tier_2_routing_group; }
+  bool tier_routed( const size_t i ) const { return prompts_[i].tier_1_routing_group != -1 or prompts_[i].tier_2_routing_group != -1; }
   bool active( const size_t i ) const { return prompts_[i].active; }
 
   // prompt setters
@@ -367,9 +369,11 @@ public:
                    uint32_t token,
                    uint32_t token_pos,
                    float temperature,
-                   uint32_t prompt_length )
+                   uint32_t prompt_length,
+                   uint8_t tier_1_routing_group,
+                   uint8_t tier_2_routing_group )
   {
-    state_.set_prompt( off_ + i, prompt_id, token, token_pos, temperature, prompt_length );
+    state_.set_prompt( off_ + i, prompt_id, token, token_pos, temperature, prompt_length, tier_1_routing_group, tier_2_routing_group );
   }
 
   PromptID prompt_id( const size_t i ) const { return state_.prompt_id( off_ + i ); }
@@ -381,6 +385,7 @@ public:
   bool active( const size_t i ) const { return state_.active( off_ + i ); }
   uint8_t tier_1_routing_group( const size_t i ) const { return state_.tier_1_routing_group( off_ + i ); }
   uint8_t tier_2_routing_group( const size_t i ) const { return state_.tier_2_routing_group( off_ + i ); }
+  bool tier_routed( const size_t i ) const { return state_.tier_routed( off_ + i ); }
 
   void set_prompt_id( const size_t i, PromptID prompt_id ) { state_.set_prompt_id( off_ + i, prompt_id ); }
   void set_token( const size_t i, uint32_t token ) { state_.set_token( off_ + i, token ); }
