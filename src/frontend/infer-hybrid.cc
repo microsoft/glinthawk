@@ -55,7 +55,7 @@ private:
     StateType st { batch_size_, DataType::_GLINTHAWK_DTYPE_NAME_, {}, {}, false, false, false };
 
     for ( size_t i = 0; i < batch_size_; ++i ) {
-      st.set_prompt( i, next_prompt_id(), 1 /* BOS */, 0, temp_, 1 );
+      st.set_prompt( i, next_prompt_id(), 1 /* BOS */, 0, temp_, 1, 0, -1 );
     }
 
     st.set_next_layer( 0 );

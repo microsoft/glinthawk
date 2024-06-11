@@ -529,7 +529,7 @@ bool BatchedWorker<ModelConfig, ComputeKernel>::handle_coordinator_message( core
             break;
           }
 
-          state.set_prompt( j, generate_next_prompt_id(), 1 /* TOKEN_BOS */, 0, temp_dist( temp_gen ), 1 );
+          state.set_prompt( j, generate_next_prompt_id(), 1 /* TOKEN_BOS */, 0, temp_dist( temp_gen ), 1, -1, -1 );
         }
 
         DLOG( INFO ) << "Generated state: " << state.debug_string( true );
@@ -559,7 +559,7 @@ bool BatchedWorker<ModelConfig, ComputeKernel>::handle_coordinator_message( core
           PromptID prompt_id = prompt_queue_.front();
           prompt_queue_.pop();
           auto& prompt = prompt_store_.get( prompt_id );
-          state.set_prompt( i, prompt_id, prompt.prompt().at( 0 ), 0, prompt.temperature(), prompt.prompt().count() );
+          state.set_prompt( i, prompt_id, prompt.prompt().at( 0 ), 0, prompt.temperature(), prompt.prompt().count(), -1, -1 );
         }
 
         this->compute_kernel_->push( std::move( state ) );
@@ -665,7 +665,9 @@ bool BatchedWorker<ModelConfig, ComputeKernel>::handle_peer_message( core::Messa
                                 next_prompt.prompt().at( 0 ),
                                 0,
                                 next_prompt.temperature(),
-                                next_prompt.prompt().count() );
+                                next_prompt.prompt().count(),
+                                state.get_tier_2_routing_group(),
+                                state.get_tier_1_routing_group() );
             }
           }
         }
