@@ -46,6 +46,8 @@ struct __attribute__( ( packed ) ) PromptData
   uint8_t temperature {}; // compact temprature, between [0, 255]; has to be divided by 255.0f before use.
   uint32_t prompt_length {};
   bool finished { false };
+  uint8_t tier_1_routing_group {};  // Denotes which group in tier 1 this prompt needs to be forwarded to, 0-indexed, -1 means it belongs in tier 2
+  uint8_t tier_2_routing_group {};  // Denotes which group in tier 2 this prompt needs to be forwarded to, 0-indexed, -1 means it belongs in tier 1
 };
 
 template<typename T>
@@ -80,13 +82,15 @@ concept StateConcept = requires( T state, const T cstate, const std::string cstr
 
   { state.discarded_prompt_id( 0 ) } -> std::same_as<const PromptID&>;
 
-  { state.set_prompt( 0, {}, 0, 0, 0.0f, 0 ) };
+  { state.set_prompt( 0, {}, 0, 0, 0.0f, 0, 0, 0 ) };
   { state.prompt_id( 0 ) } -> std::same_as<PromptID>;
   { state.token( 0 ) } -> std::same_as<uint32_t>;
   { state.token_pos( 0 ) } -> std::same_as<uint32_t>;
   { state.prompt_length( 0 ) } -> std::same_as<uint32_t>;
   { state.temperature( 0 ) } -> std::same_as<float>;
   { state.finished( 0 ) } -> std::same_as<bool>;
+  { state.tier_1_routing_group( 0 ) } -> std::same_as<uint8_t>;
+  { state.tier_2_routing_group( 0 ) } -> std::same_as<uint8_t>;
   { state.active( 0 ) } -> std::same_as<bool>;
 
   { state.set_prompt_id( 0, {} ) };
@@ -95,6 +99,8 @@ concept StateConcept = requires( T state, const T cstate, const std::string cstr
   { state.set_prompt_length( 0, 0 ) };
   { state.set_temperature( 0, 0.0f ) };
   { state.set_finished( 0 ) };
+  { state.set_tier_1_routing_group( 0 ) };
+  { state.set_tier_2_routing_group( 0 ) };
 
   { state.discard( 0 ) };
 
@@ -222,7 +228,9 @@ public:
                    uint32_t token,
                    uint32_t token_pos,
                    float temperature,
-                   uint32_t prompt_length );
+                   uint32_t prompt_length,
+                   uint8_t tier_1_routing_group,
+                   uint8_t tier_2_routing_group );
 
   // prompt getters
   PromptID prompt_id( const size_t i ) const { return prompts_[i].prompt_id; }
@@ -231,6 +239,8 @@ public:
   uint32_t prompt_length( const size_t i ) const { return prompts_[i].prompt_length; }
   float temperature( const size_t i ) const { return prompts_[i].temperature / 255.0f; }
   bool finished( const size_t i ) const { return prompts_[i].finished; }
+  uint8_t tier_1_routing_group( const size_t i ) const { return prompts_[i].tier_1_routing_group; }
+  uint8_t tier_2_routing_group( const size_t i ) const { return prompts_[i].tier_2_routing_group; }
   bool active( const size_t i ) const { return prompts_[i].active; }
 
   // prompt setters
@@ -240,6 +250,8 @@ public:
   void set_prompt_length( const size_t i, uint32_t prompt_length ) { prompts_[i].prompt_length = prompt_length; }
   void set_temperature( const size_t i, float t ) { prompts_[i].temperature = static_cast<uint8_t>( t * 255.0f ); }
   void set_finished( const size_t i ) { prompts_[i].finished = true; }
+  void set_tier_1_routing_group( const size_t i, uint8_t tier_1_routing_group ) { prompts_[i].tier_1_routing_group = tier_1_routing_group; }
+  void set_tier_2_routing_group( const size_t i, uint8_t tier_2_routing_group ) { prompts_[i].tier_2_routing_group = tier_2_routing_group; }
 
   void discard( const size_t i );
 
@@ -367,6 +379,8 @@ public:
   float temperature( const size_t i ) const { return state_.temperature( off_ + i ); }
   bool finished( const size_t i ) const { return state_.finished( off_ + i ); }
   bool active( const size_t i ) const { return state_.active( off_ + i ); }
+  uint8_t tier_1_routing_group( const size_t i ) const { return state_.tier_1_routing_group( off_ + i ); }
+  uint8_t tier_2_routing_group( const size_t i ) const { return state_.tier_2_routing_group( off_ + i ); }
 
   void set_prompt_id( const size_t i, PromptID prompt_id ) { state_.set_prompt_id( off_ + i, prompt_id ); }
   void set_token( const size_t i, uint32_t token ) { state_.set_token( off_ + i, token ); }
@@ -374,6 +388,8 @@ public:
   void set_prompt_length( const size_t i, uint32_t len ) { state_.set_prompt_length( off_ + i, len ); }
   void set_temperature( const size_t i, float t ) { state_.set_temperature( off_ + i, t ); }
   void set_finished( const size_t i ) { state_.set_finished( off_ + i ); }
+  void set_tier_1_routing_group( const size_t i, uint8_t tier_1_routing_group ) { state_.set_tier_1_routing_group( off_ + i, tier_1_routing_group); }
+  void set_tier_2_routing_group( const size_t i, uint8_t tier_2_routing_group ) { state_.set_tier_2_routing_group( off_ + i, tier_2_routing_group); }
 
   void discard( const size_t i ) { state_.discard( off_ + i ); }
 
@@ -552,7 +568,9 @@ void BatchedInferenceState<Config>::set_prompt( const size_t i,
                                                 uint32_t token,
                                                 uint32_t token_pos,
                                                 float temperature,
-                                                uint32_t prompt_length )
+                                                uint32_t prompt_length,
+                                                uint8_t tier_1_routing_group,
+                                                uint8_t tier_2_routing_group )
 {
   prompts_[i].prompt_id = prompt_id;
   prompts_[i].token = token;
@@ -561,6 +579,8 @@ void BatchedInferenceState<Config>::set_prompt( const size_t i,
   prompts_[i].prompt_length = prompt_length;
   prompts_[i].finished = false;
   prompts_[i].active = true;
+  prompts_[i].tier_1_routing_group = tier_1_routing_group;
+  prompts_[i].tier_2_routing_group = tier_2_routing_group;
 }
 
 template<typename Config>
@@ -870,7 +890,7 @@ std::string BatchedInferenceState<Config>::debug_string( const bool prompt_detai
 
     for ( const auto& p : prompts_ ) {
       oss << " (" << p.prompt_id.base58digest().substr( 0, 8 ) << ", " << p.token << ", " << p.token_pos << ", "
-          << ( p.temperature / 255.0f ) << ", " << p.prompt_length << ", " << p.finished << ") ";
+          << ( p.temperature / 255.0f ) << ", " << p.prompt_length << ", " << p.finished << ", {" << p.tier_1_routing_group << ", " << p.tier_2_routing_group << "}) ";
     }
 
     oss << "]";
