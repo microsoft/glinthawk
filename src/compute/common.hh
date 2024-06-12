@@ -20,4 +20,20 @@ concept KernelConcept = requires( Kernel k, StateType s ) {
   { k.pop( s ) } -> std::same_as<bool>;
 };
 
+class Concurrency
+{
+private:
+  std::array<size_t, util::to_underlying( models::InferenceStage::__COUNT__ )> v_;
+
+public:
+  Concurrency( const size_t pre, const size_t att, const size_t post, const size_t classify )
+    : v_ { pre, att, post, classify }
+  {
+    CHECK_GT( pre + att + post + classify, 0 ) << "At least one stage must be enabled";
+  }
+
+  void set( const models::InferenceStage stage, const size_t value ) { v_[util::to_underlying( stage )] = value; }
+  size_t get( const models::InferenceStage stage ) const { return v_[util::to_underlying( stage )]; }
+};
+
 } // namespace glinthawk::compute

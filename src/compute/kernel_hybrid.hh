@@ -39,22 +39,6 @@ public:
 
   static constexpr KernelType Type = KernelType::Hybrid;
 
-  class Concurrency
-  {
-  private:
-    std::array<size_t, util::to_underlying( models::InferenceStage::__COUNT__ )> v_;
-
-  public:
-    Concurrency( const size_t pre, const size_t att, const size_t post, const size_t classify )
-      : v_ { pre, att, post, classify }
-    {
-      CHECK_GT( pre + att + post + classify, 0 ) << "At least one stage must be enabled";
-    }
-
-    void set( const models::InferenceStage stage, const size_t value ) { v_[util::to_underlying( stage )] = value; }
-    size_t get( const models::InferenceStage stage ) const { return v_[util::to_underlying( stage )]; }
-  };
-
 public:
   template<typename... Args>
   HybridComputeKernel( const Concurrency& concurrency_a, const Concurrency& concurrency_b, Args&&... args );
@@ -177,6 +161,7 @@ HybridComputeKernel<ModelA, ModelB>::HybridComputeKernel( const Concurrency& con
   : a_( std::make_unique<ModelA>( std::forward<Args>( args )... ), concurrency_a )
   , b_( std::make_unique<ModelB>( std::forward<Args>( args )... ), concurrency_b )
 {
+  // TODO(pouya): this stuff should be checked in tier router
   // check the concurrency settings to be permissible
   CHECK_EQ( a_.concurrency.get( Stage::PreAttention ) + b_.concurrency.get( Stage::PreAttention ),
             a_.concurrency.get( Stage::Attention ) + b_.concurrency.get( Stage::Attention ) );
@@ -230,6 +215,7 @@ void HybridComputeKernel<ModelA, ModelB>::push( models::BatchedInferenceState<Co
   }
 
   // XXX maybe we should do all this outside of the kernel
+  // TODO(pouya): incomplete state breaks many core assumptions, we should get rid of it
   // (3) do we have an incomplete state to merge this with?
   if ( incomplete_state_.has_value() ) {
     auto& new_state = incomplete_state_.value();
@@ -307,6 +293,7 @@ void HybridComputeKernel<ModelA, ModelB>::execution_thread_func(
     const auto local_id = state.id();
     const auto next_stage = state.next_stage();
     const auto next_layer = state.next_layer();
+    // TODO(pouya): fix this assumption: this machine serves all stages in one layer
     const auto is_last_step
       = ( next_stage == Stage::Classification )
         or ( next_stage == Stage::PostAttention and next_layer == model_data.model->settings().end_layer_num
@@ -367,6 +354,7 @@ void HybridComputeKernel<ModelA, ModelB>::execution_thread_func(
         {
           // remove the contexts from the context map
           std::unique_lock lock { context_mutex_ };
+          // TODO(pouya): rethink context map cache
           context_map_.erase( local_id );
         }
 
@@ -415,6 +403,7 @@ void HybridComputeKernel<ModelA, ModelB>::bookkeeping_thread_func()
 
     // can we, or have we already, allocated the contexts for this state?
 
+    // TODO(pouya): how do we know we haven't already reserved context?
     if ( context_map_.find( state.id() ) == context_map_.end() ) {
       if ( a_.context_manager.free() < a_.concurrency.get( Stage::Attention )
            or b_.context_manager.free() < b_.concurrency.get( Stage::Attention ) ) {
@@ -521,6 +510,7 @@ void HybridComputeKernel<ModelA, ModelB>::bookkeeping_thread_func()
 template<typename ModelA, typename ModelB>
 void HybridComputeKernel<ModelA, ModelB>::backlog_thread_func()
 {
+  // TODO(pouya): fix the waiting stuff
 }
 
 } // namespace glinthawk::compute
