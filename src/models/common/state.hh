@@ -12,6 +12,9 @@
 
 namespace glinthawk::models {
 
+// TODO(pouya): double check if tier_routing_group is implemented correctly. (this file is huge!)
+// TODO(pouya): double check if is_parent implemented correctly.
+
 struct __attribute__( ( packed ) ) StateMetadata
 {
   uint64_t id {};
@@ -26,6 +29,7 @@ struct __attribute__( ( packed ) ) StateMetadata
   bool has_activations { false };
   bool has_queries { false };
   bool has_kvs { false };
+  bool is_parent { true };
 
   uint32_t discarded_contexts { 0 };
 };
@@ -68,6 +72,7 @@ concept StateConcept = requires( T state, const T cstate, const std::string cstr
   { state.set_has_activations( false ) };
   { state.set_has_queries( false ) };
   { state.set_has_kvs( false ) };
+  { state.set_is_parent( false ) };
   { state.clear_discards() };
 
   { cstate.id() } -> std::same_as<uint64_t>;
@@ -80,6 +85,7 @@ concept StateConcept = requires( T state, const T cstate, const std::string cstr
   { cstate.has_activations() } -> std::same_as<bool>;
   { cstate.has_queries() } -> std::same_as<bool>;
   { cstate.has_kvs() } -> std::same_as<bool>;
+  { cstate.is_parent() } -> std::same_as<bool>;
   { cstate.discarded_contexts() } -> std::same_as<uint32_t>;
 
   { state.discarded_prompt_id( 0 ) } -> std::same_as<const PromptID&>;
@@ -208,6 +214,7 @@ public:
   void set_has_activations( const bool has_activations ) { metadata_.has_activations = has_activations; }
   void set_has_queries( const bool has_queries ) { metadata_.has_queries = has_queries; }
   void set_has_kvs( const bool has_kvs ) { metadata_.has_kvs = has_kvs; }
+  void set_is_parent( const bool is_parent ) { metadata_.is_parent = is_parent; }
   void clear_discards();
 
   // metadata getters
@@ -221,6 +228,7 @@ public:
   bool has_activations() const { return metadata_.has_activations; }
   bool has_queries() const { return metadata_.has_queries; }
   bool has_kvs() const { return metadata_.has_kvs; }
+  bool is_parent() const { return metadata_.is_parent; }
   uint32_t discarded_contexts() const { return metadata_.discarded_contexts; }
 
   const PromptID& discarded_prompt_id( const size_t i ) const { return discarded_contexts_.at( i ).prompt_id; }
@@ -359,6 +367,8 @@ public:
   void set_has_activations( const bool has_activations ) { state_.set_has_activations( has_activations ); }
   void set_has_queries( const bool has_queries ) { state_.set_has_queries( has_queries ); }
   void set_has_kvs( const bool has_kvs ) { state_.set_has_kvs( has_kvs ); }
+  void set_is_parent( const bool is_parent ) { state_.set_is_parent( is_parent ); }
+  // TODO(pouya): if spans share metadata with the original, this might break tier_router
   void clear_discards() { state_.clear_discards(); }
 
   uint64_t id() const { return state_.id(); }
@@ -371,6 +381,8 @@ public:
   bool has_activations() const { return state_.has_activations(); }
   bool has_queries() const { return state_.has_queries(); }
   bool has_kvs() const { return state_.has_kvs(); }
+  bool is_parent() const { return state_.is_parent(); }
+  // TODO(pouya): if spans share metadata with the original, this might break tier_router
   uint32_t discarded_contexts() const { return state_.discarded_contexts(); }
 
   const PromptID& discarded_prompt_id( const size_t i ) const { return state_.discarded_prompt_id( i ); }
@@ -473,6 +485,8 @@ BatchedInferenceState<Config>::BatchedInferenceState( uint32_t batch_size,
   metadata_.has_activations = state_has_activations;
   metadata_.has_queries = state_has_queries;
   metadata_.has_kvs = state_has_kvs;
+  // TODO(pouya): check with sadjad if he prefers default initializations over this, or explicit initializations.
+  metadata_.is_parent = true;
 
   prompts_.resize( metadata_.batch_size );
 
@@ -673,6 +687,8 @@ bool BatchedInferenceState<Config>::replenish_from( BatchedInferenceState& other
   CHECK_EQ( metadata_.has_activations, other.metadata_.has_activations ) << "States with different activation states";
   CHECK_EQ( metadata_.has_queries, other.metadata_.has_queries ) << "States with different query states";
   CHECK_EQ( metadata_.has_kvs, other.metadata_.has_kvs ) << "States with different key-value states";
+  // TODO(pouya): allow replenishing in different tier groups?
+  // TODO(pouya): allow replenishing between parent child?
 
   // copy the discard list
   metadata_.discarded_contexts += other.metadata_.discarded_contexts;
@@ -844,6 +860,8 @@ void BatchedInferenceState<Config>::merge( BatchedInferenceState&& other )
   CHECK_EQ( metadata_.has_activations, other.metadata_.has_activations ) << "States with different activation states";
   CHECK_EQ( metadata_.has_queries, other.metadata_.has_queries ) << "States with different query states";
   CHECK_EQ( metadata_.has_kvs, other.metadata_.has_kvs ) << "States with different key-value states";
+  // TODO(pouya): allow merging in different tier groups?
+  // TODO(pouya): allow merging between parent child?
 
   BatchedInferenceState new_state;
   new_state.metadata_ = metadata_;
@@ -900,7 +918,7 @@ std::string BatchedInferenceState<Config>::debug_string( const bool prompt_detai
       << "next_stage=" << metadata_.next_stage << ", " << "has_activations=" << metadata_.has_activations << ", "
       << "activations.len=" << activations_.len() << ", " << "has_queries=" << metadata_.has_queries << ", "
       << "queries.len=" << queries_.len() << ", " << "has_kvs=" << metadata_.has_kvs << ", " << "kvs.len=" << kvs_.len()
-      << ", " << "discarded_contexts=[ ";
+      << ", " << "is_parent=" << metadata_.is_parent << "discarded_contexts=[ ";
 
   for ( const auto& d : discarded_contexts_ ) {
     oss << " " << d.prompt_id.base58digest().substr( 0, 8 );
