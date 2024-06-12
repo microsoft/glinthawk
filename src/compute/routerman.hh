@@ -45,6 +45,7 @@ class TierRouter
 {
 private:
   using ConfigType = typename Model::ConfigType;
+  using Stage = glinthawk::models::InferenceStage;
   using StateType = typename glinthawk::models::BatchedInferenceState<ConfigType>;
 
   /// @brief
@@ -60,6 +61,11 @@ private:
 
   std::vector<VirtualPreallocatingContextManager<Model>> cms_tier_1;
   std::vector<VirtualPreallocatingContextManager<Model>> cms_tier_2;
+
+  std::vector<std::vector<StateType>> tier_1_idle_child_states;
+  std::vector<std::vector<StateType>> tier_2_idle_child_states;
+
+  void can_form_parent( size_t layer, Stage stage );
 
   /// @brief
   /// assign_sub_groups assigns tier_routing_group indices to states that have not been assigned them before. The
