@@ -36,4 +36,34 @@ public:
   size_t get( const models::InferenceStage stage ) const { return v_[util::to_underlying( stage )]; }
 };
 
+// std::priority_queue does not allow for moving elements, so we need to wrap the state in a struct
+// to be able to move it around. The struct keeps the comparison key separate from the state itself, so the state
+// can be moved out without affecting the queue's invariant.
+struct StateQueueItem
+{
+  std::pair<size_t, size_t> _comp_key; /* (layer, stage) */
+  mutable glinthawk::models::BatchedInferenceState<ConfigType> state;
+
+  StateQueueItem( glinthawk::models::BatchedInferenceState<ConfigType>&& in_state )
+    : state( std::move( in_state ) )
+    , _comp_key( state.next_layer(), util::to_underlying( state.next_stage() ) )
+  {
+  }
+};
+
+struct StateCompOp
+{
+  bool operator()( const StateQueueItem& lhs, const StateQueueItem& rhs ) const
+  {
+    return lhs._comp_key > rhs._comp_key;
+  }
+};
+
+struct GlobalQueue
+{
+  std::priority_queue<StateQueueItem, std::deque<StateQueueItem>, StateCompOp> queue;
+  std::mutex mutex;
+  std::condition_variable cv;
+};
+
 } // namespace glinthawk::compute

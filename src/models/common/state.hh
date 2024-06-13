@@ -108,8 +108,8 @@ concept StateConcept = requires( T state, const T cstate, const std::string cstr
   { state.set_prompt_length( 0, 0 ) };
   { state.set_temperature( 0, 0.0f ) };
   { state.set_finished( 0 ) };
-  { state.set_tier_1_routing_group( 0 ) };
-  { state.set_tier_2_routing_group( 0 ) };
+  { state.set_tier_1_routing_group( 0, 0 ) };
+  { state.set_tier_2_routing_group( 0, 0 ) };
 
   { state.discard( 0 ) };
 
