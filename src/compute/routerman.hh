@@ -30,9 +30,9 @@ namespace glinthawk::compute {
 /// @brief
 /// TierRouter is a middle-man between the worker and kernel. It's job is to break down states between machines in
 /// tiers, while ensuring context does not run out and deadlocks don't happen.
-/// TierRouter is only run on `rank-0' machines, i.e., it only runs on one node in each layer. The other nodes have a
-/// dummy TierRouter that pass states through with no delay. There is a possibility for improving this, where the
-/// tier-to-tier gather and scatter operations are distributed.
+/// TierRouter is only run on `rank-0' machines, i.e., it only runs on one node in each `slice' that may serve multiple
+/// layers. The other nodes in the slice have a dummy TierRouter that pass states through with no delay. There is a
+/// possibility for improving this, where the tier-to-tier gather and scatter operations are distributed.
 /// TierRouter distinguishes states as two types:
 ///     Parent BatchInferenceState: which is a full batch across all machines in both tiers.
 ///     Child BatchInferenceState: which is a specific part of a parent dedicated to a specific machine.
@@ -41,10 +41,16 @@ namespace glinthawk::compute {
 /// The worker reads an outgoing queue from TierRouter to send out outbound parent states.
 /// TierRouter fully handles context management, and guarantees that if a child state arrives at the kernel, that kernel
 /// has space for it.
+// TODO(pouya): how does routing work?
+// TODO(pouya): how does worker know to send a child state back to its origin?
+// TODO(pouya): do children carry discards?
+// TODO(pouya): who clears discards?
+// TODO(pouya): child states are one stage past when they return, compared to when they were sent, this might meme us.
 template<typename Model>
 class TierRouter
 {
 public:
+  // TODO(pouya): complete the constructor
   TierRouter();
 
   ~TierRouter();
@@ -70,6 +76,7 @@ private:
   /// For now we assume all tier 1 machines are alike and all tier 2 machines are alike.
   /// The TierRouter does not need to know if the kernel is hybrid or not. It treats hybrid kernels as a sum of two
   /// concurrencies.
+  // TODO(pouya): why do we need kv_slots here?
   const size_t n_tier_1_;
   const size_t kv_slots_tier_1_;
   const Concurrency concurrency_tier_1_;
@@ -78,6 +85,7 @@ private:
   const Concurrency concurrency_tier_2_;
 
   const size_t start_layer_;
+  const size_t end_layer_;
 
   std::vector<VirtualPreallocatingContextManager<Model>> cms_tier_1_;
   std::vector<VirtualPreallocatingContextManager<Model>> cms_tier_2_;
@@ -100,6 +108,7 @@ private:
 
   std::pair<uint8_t, uint8_t> tier_index( const size_t batch_index, const Stage stage ) const
   {
+    // TODO(pouya): is the syntax right?
     if ( i < n_tier_1_ * concurrency_tier_1_.get( stage ) ) {
       return { i / concurrency_tier_1_.get( stage ), -1 };
     } else {
@@ -107,7 +116,18 @@ private:
     }
   }
 
+  bool inline is_served_in_this_slice( const StateType& state ) const
+  {
+    // TODO(pouya): this is assuming classification is done on the same machine doing pre-att-post
+    // TODO(pouya) what if there is only one slice? the batch never gets pushed to worker to report generations.
+    return state.next_layer() >= start_layer_ and state.next_layer() <= end_layer_;
+  }
+
   bool can_form_parent( const size_t layer, const Stage stage ) const;
+
+  // TODO(pouya): looks super redundant with the above function
+  // TODO(pouya): is the signature right?
+  StateType&& form_parent( const size_t layer, const Stage stage );
 
   /// @brief
   /// assign_sub_groups assigns tier_routing_group indices to states that have not been assigned them before. The
@@ -129,7 +149,7 @@ private:
   /// @brief
   /// process_child_state manages an internal memory to merge states of various tiers together. If it receives a child
   /// state, it saves it. Upon merging, it may process it the same way it does the parent. If the parent does not need
-  /// processing (is not local to that machine anymore, e.g., is for a different layer) it is sent out via an outgoing
+  /// processing (is not local to that machine anymore, e.g., is for a different slice) it is sent out via an outgoing
   /// queue that the worker communicates with. This function may be indirectly called byh the compute kernel or the
   /// worker.
   void process_child_state( StateType&& state );
@@ -183,6 +203,54 @@ void TierRouter<Model>::assign_sub_groups( StateType& state ) const
       state.set_tier_1_routing_group( t_ind.first );
       state.set_tier_2_routing_group( t_ind.second );
     }
+  }
+}
+
+template<typename Model>
+StateType&& TierRouter<Model>::form_parent( const size_t layer, const Stage stage )
+{
+  // TODO(pouya): merge children to parent
+}
+
+template<typename Model>
+void TierRouter<Model>::process_parent_state( StateType&& state )
+{
+  if ( not is_served_in_this_slice( state ) ) {
+    {
+      std::lock_guard lock { outgoing_.mutex };
+      outgoing_.emplace( std::move( state ) );
+    }
+    event_fd_.write_event();
+  } else {
+    // TODO(pouya): break the parent and route
+  }
+}
+
+template<typename Model>
+void TierRouter<Model>::process_child_state( StateType&& state )
+{
+  for ( size_t i = 0; i < state.batch_size(); i++ ) {
+    if ( not state.tier_routed( i ) ) {
+      LOG( FATAL ) << "Child states must always be already routed.";
+    }
+  }
+
+  const auto next_stage = state.next_stage();
+  const auto next_layer = state.next_layer();
+  const auto vi = vector_index( next_layer, next_stage );
+
+  if ( state.get_tier_1_routing_group( 0 ) > -1 ) {
+    tier_1_idle_child_state_counts_[vi] += state.batch_size();
+    tier_1_idle_child_states_[vi].push_back( std::move( state ) );
+  } else {
+    tier_2_idle_child_state_counts_[vi] += state.batch_size();
+    tier_2_idle_child_states_[vi].push_back( std::move( state ) );
+  }
+
+  if ( can_form_parent( next_layer, next_stage ) ) {
+    // TODO(pouya): no move needed here? I never learn
+    StateType merged_parent_state = form_parent( next_layer, next_stage );
+    process_parent_state( std::move( merged_parent_state ) );
   }
 }
 
