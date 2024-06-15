@@ -31,20 +31,12 @@ template<typename Model>
 class TierRouter
 {
 public:
-  // TODO(pouya): complete the constructor
-  TierRouter( const size_t n_tier_1,
-              const Concurrency concurrency_tier_1,
-              const kv_slots_tier_1,
-              const size_t n_tier_2,
-              const Concurrency concurrency_tier_2,
-              const kv_slots_tier_2,
-              const typename Model::SettingsType& settings,
-              const std::unique_ptr<ComputeKernel> compute_kernel );
-
   virtual ~TierRouter() = 0;
 
   virtual EventFD& event_fd() = 0;
 
+  // TODO(pouya): I have to separate push to from_worker and from_kernel, since the ChildTierRouter can't tell where
+  //  it is getting the state from. This is unclean. Talk to sadjad about this.
   virtual void push_from_kernel( glinthawk::models::BatchedInferenceState<ConfigType>&& state ) = 0;
 
   virtual void push_from_worker( glinthawk::models::BatchedInferenceState<ConfigType>&& state ) = 0;
@@ -71,25 +63,21 @@ public:
 // TODO(pouya): can straggler's cause an unstable failure mode in dispersing work among tiers?
 // TODO(pouya): how does routing work?
 // TODO(pouya): how does worker know to send a child state back to its origin?
-// TODO(pouya): do children carry discards?
-// TODO(pouya): who clears discards?
-// TODO(pouya): child states are one stage past when they return, compared to when they were sent, this might meme us.
 // TODO(pouya): I'm forcing kernel to not have an outgoing queue. Talk to sadjad about this.
-// TODO(pouya): I have to separate push to from_worker and from_kernel, since the ChildTierRouter can't tell where it is
-//  getting the state from.
+// TODO(pouya): the parent child distinction is overloaded in state and tier router. Find better terminology. What does
+//  MPI use?
 template<typename Model>
 class ParentTierRouter : public glinthawk::compute::TierRouter
 {
 public:
-  // TODO(pouya): complete the constructor, does it need virtual?
   ParentTierRouter( const size_t n_tier_1,
-                    const Concurrency concurrency_tier_1,
+                    const Concurrency& concurrency_tier_1,
                     const kv_slots_tier_1,
                     const size_t n_tier_2,
-                    const Concurrency concurrency_tier_2,
+                    const Concurrency& concurrency_tier_2,
                     const kv_slots_tier_2,
                     const typename Model::SettingsType& settings,
-                    const std::unique_ptr<ComputeKernel> compute_kernel );
+                    const ComputeKernel& compute_kernel );
 
   virtual ~ParentTierRouter() override;
 
@@ -123,18 +111,22 @@ private:
   using ConfigType = typename Model::ConfigType;
   using Stage = glinthawk::models::InferenceStage;
   using StateType = typename glinthawk::models::BatchedInferenceState<ConfigType>;
-  // TODO(pouya): double check if reference_wrapper is necessary here
   using RefStateType = typename std::reference_wrapper<StateType>;
 
   /// @brief
-  /// For now we assume all tier 1 machines are alike and all tier 2 machines are alike.
-  /// We also assume all slices are alike.
+  /// For now we assume:
+  /// 1. All tier 1 machines are alike.
+  /// 2. All tier 2 machines are alike.
+  /// 3. All slices are alike.
+  /// 4. Classification is done on the same machine doing pre-att-post.
   /// The ParentTierRouter does not need to know if the kernel is hybrid or not. It treats hybrid kernels as a sum of
   /// two concurrencies.
   const size_t n_tier_1_;
   const Concurrency concurrency_tier_1_;
+  std::vector<size_t> free_contexts_tier_1_;
   const size_t n_tier_2_;
   const Concurrency concurrency_tier_2_;
+  std::vector<size_t> free_contexts_tier_2_;
 
   const size_t start_layer_;
   const size_t end_layer_;
@@ -142,9 +134,7 @@ private:
   // Worker doesn't see the compute kernel. Only the tier router does.
   std::unique_ptr<ComputeKernel> compute_kernel_ { nullptr };
 
-  std::vector<VirtualPreallocatingContextManager<Model>> cms_tier_1_;
-  std::vector<VirtualPreallocatingContextManager<Model>> cms_tier_2_;
-
+  // TODO(pouya): double check if reference_wrapper is necessary here
   std::vector<std::deque<RefStateType>> tier_1_idle_child_states_;
   std::vector<std::deque<RefStateType>> tier_2_idle_child_states_;
 
@@ -174,7 +164,6 @@ private:
   bool inline is_served_in_this_slice( const StateType& state ) const
   {
     // TODO(pouya): this is assuming classification is done on the same machine doing pre-att-post
-    // TODO(pouya) what if there is only one slice? the batch never gets pushed to worker to report generations.
     return state.next_layer() >= start_layer_ and state.next_layer() <= end_layer_;
   }
 
@@ -185,11 +174,12 @@ private:
   /// @brief
   /// assign_sub_groups assigns tier_routing_group indices to states that have not been assigned them before. The
   /// assignment is based on the index of each prompt in the state. Input states are either fully assigned (all slots
-  /// in the batch inference state were assigned before) or none were assigned. This function is called a finite number
-  /// of times before all context slots are taken, and never called again. Note that when worker replaces a discarded
-  /// prompt, it keeps any assigned tier_routing_group indices. This is important to avoid situations where new prompts
-  /// are assigned to tier sub groups that their neighbors do not belong in, which causes fragmentation.
-  void assign_sub_groups( StateType& state ) const;
+  /// in the batch inference state were assigned before) or none were assigned. If they were unassigned, the TierRouter
+  /// "reserves" context for them as well. This function is called a finite number of times before all context slots are
+  /// taken, and never called again. Note that when worker replaces a discarded prompt, it keeps any assigned
+  /// tier_routing_group indices. This is important to avoid situations where new prompts are assigned to tier sub
+  /// groups that their neighbors do not belong in, which causes fragmentation.
+  void assign_sub_groups( StateType& state );
 
   /// @brief
   /// process_parent_state breaks the `parent' state to `child' states by the tier_routing_group in each prompt. Each
@@ -206,6 +196,33 @@ private:
   /// worker.
   void process_child_state( StateType&& state );
 };
+
+template<typename Model>
+void ParentTierRouter<Model>::ParentTierRouter( const size_t n_tier_1,
+                                                const Concurrency& concurrency_tier_1,
+                                                const kv_slots_tier_1,
+                                                const size_t n_tier_2,
+                                                const Concurrency& concurrency_tier_2,
+                                                const kv_slots_tier_2,
+                                                const typename Model::SettingsType& settings,
+                                                const ComputeKernel& compute_kernel )
+  : n_tier_1_( n_tier_1 )
+  , concurrency_tier_1_( concurrency_tier_1 )
+  , free_contexts_tier_1_( n_tier_1, settings.start_layer_num == 0 ? kv_slots_tier_1 : 0 )
+  , n_tier_2_( n_tier_2 )
+  , concurrency_tier_2_( concurrency_tier_2 )
+  , free_contexts_tier_2_( n_tier_2, settings.start_layer_num == 0 ? kv_slots_tier_2 : 0 )
+  , start_layer_( settings.start_layer_num )
+  , end_layer_( settings.end_layer_num )
+  , compute_kernel_( std::make_unique( compute_kernel ) )
+  , tier_1_idle_child_states_( n_tier_1 )
+  , tier_2_idle_child_states_( n_tier_2 )
+  , tier_1_idle_child_state_counts_( n_tier_1, 0 )
+  , tier_2_idle_child_state_counts_( n_tier_2, 0 )
+{
+  // TODO(pouya): if there is only one slice, a generated batch never gets pushed to worker to report generations.
+  CHECK_EQ( start_layer_ == 0 and end_layer_ == ConfigType::n_layers - 1, false );
+}
 
 template<typename Model>
 void ParentTierRouter<Model>::push_from_kernel( models::BatchedInferenceState<ConfigType>&& state )
@@ -248,12 +265,12 @@ template<typename Model>
 bool ParentTierRouter<Model>::is_context_available()
 {
   for ( size_t i = 0; i < n_tier_1_; i++ ) {
-    if ( cms_tier_1_[i].free() < concurrency_tier_1_.get( glinthawk::models::InferenceStage::Attention ) ) {
+    if ( free_contexts_tier_1_[i] < concurrency_tier_1_.get( glinthawk::models::InferenceStage::Attention ) ) {
       return false;
     }
   }
   for ( size_t i = 0; i < n_tier_2_; i++ ) {
-    if ( cms_tier_2_[i].free() < concurrency_tier_2_.get( glinthawk::models::InferenceStage::Attention ) ) {
+    if ( free_contexts_tier_2_[i] < concurrency_tier_2_.get( glinthawk::models::InferenceStage::Attention ) ) {
       return false;
     }
   }
@@ -270,7 +287,7 @@ bool ParentTierRouter<Model>::can_form_parent( const size_t layer, const Stage s
 }
 
 template<typename Model>
-void ParentTierRouter<Model>::assign_sub_groups( StateType& state ) const
+void ParentTierRouter<Model>::assign_sub_groups( StateType& state )
 {
   CHECK_EQ( ( state.is_parent(), true );
   CHECK_EQ( ( state.batch_size(), n_tier_1_ * concurrency_tier_1_.get( stage ) + n_tier_2_ * concurrency_tier_2_.get( stage ) );
@@ -283,6 +300,13 @@ void ParentTierRouter<Model>::assign_sub_groups( StateType& state ) const
       const auto t_ind = tier_index( i, stage );
       state.set_tier_1_routing_group( t_ind.first );
       state.set_tier_2_routing_group( t_ind.second );
+      if ( t_ind.second == -1 ) {
+        CHECK_GE( free_contexts_tier_1_[t_ind.first], concurrency_tier_1_.get( Stage::Attention ) );
+        free_contexts_tier_1_[t_ind.first] -= concurrency_tier_1_.get( Stage::Attention );
+      } else {
+        CHECK_GE( free_contexts_tier_2_[t_ind.second], concurrency_tier_2_.get( Stage::Attention ) );
+        free_contexts_tier_2_[t_ind.second] -= concurrency_tier_2_.get( Stage::Attention );
+      }
     }
   }
 }
@@ -347,13 +371,11 @@ void ParentTierRouter<Model>::process_parent_state( StateType&& state )
     if ( concurrency_tier_1_.get( state.next_stage() ) > 0 ) {
 
       auto [state_rank_0_t1, state] = state.split( concurrency_tier_1_.get( state.next_stage() ) );
-      CHECK_EQ( cms_tier_1_[0].get_contexts( state_rank_0_t1 ), true );
       compute_kernel_->push( std::move( state_rank_0_t1 ) );
       {
         std::lock_guard lock { outgoing_.mutex };
         for ( size_t i = 1; i < n_tier_1_; i++ ) {
           auto [state_rank_i_t1, state] = state.split( concurrency_tier_1_.get( state.next_stage() ) );
-          CHECK_EQ( cms_tier_1_[i].get_contexts( state_rank_i_t1 ), true );
           outgoing_.emplace( std::move( state_rank_i_t1 ) );
           // TODO: one write_event per state?
           event_fd_.write_event();
@@ -361,7 +383,6 @@ void ParentTierRouter<Model>::process_parent_state( StateType&& state )
         if ( concurrency_tier_2_.get( state.next_stage() ) > 0 ) {
           for ( size_t i = 0; i < n_tier_2_ - 1; i++ ) {
             auto [state_rank_i_t2, state] = state.split( concurrency_tier_2_.get( state.next_stage() ) );
-            CHECK_EQ( cms_tier_2_[i].get_contexts( state_rank_i_t2 ), true );
             outgoing_.emplace( std::move( state_rank_i_t2 ) );
             event_fd_.write_event();
           }
@@ -375,11 +396,9 @@ void ParentTierRouter<Model>::process_parent_state( StateType&& state )
         CHECK_GT( concurrency_tier_2_.get( state.next_stage() ), 0 );
         for ( size_t i = 0; i < n_tier_2_ - 1; i++ ) {
           auto [state_rank_i_t2, state] = state.split( concurrency_tier_2_.get( state.next_stage() ) );
-          CHECK_EQ( cms_tier_2_[i].get_contexts( state_rank_i_t2 ), true );
           outgoing_.emplace( std::move( state_rank_i_t2 ) );
           event_fd_.write_event();
         }
-        CHECK_EQ( cms_tier_2_[n_tier_2_ - 1].get_contexts( state ), true );
         outgoing_.emplace( std::move( state ) );
         event_fd_.write_event();
       }
@@ -422,15 +441,14 @@ template<typename Model>
 class ChildTierRouter : public glinthawk::compute::TierRouter
 {
 public:
-  // TODO(pouya): complete the constructor, does it need virtual?
   ChildTierRouter( const size_t n_tier_1,
-                   const Concurrency concurrency_tier_1,
+                   const Concurrency& concurrency_tier_1,
                    const kv_slots_tier_1,
                    const size_t n_tier_2,
-                   const Concurrency concurrency_tier_2,
+                   const Concurrency& concurrency_tier_2,
                    const kv_slots_tier_2,
                    const typename Model::SettingsType& settings,
-                   const std::unique_ptr<ComputeKernel> compute_kernel );
+                   const ComputeKernel& compute_kernel );
 
   virtual ChildTierRouter() override;
 
@@ -459,6 +477,19 @@ private:
   EventFD event_fd_ {};
   GlobalQueue outgoing_;
 };
+
+template<typename Model>
+void ChildTierRouter<Model>::ChildTierRouter( const size_t n_tier_1,
+                                              const Concurrency& concurrency_tier_1,
+                                              const kv_slots_tier_1,
+                                              const size_t n_tier_2,
+                                              const Concurrency& concurrency_tier_2,
+                                              const kv_slots_tier_2,
+                                              const typename Model::SettingsType& settings,
+                                              const ComputeKernel& compute_kernel )
+  : compute_kernel_( std::make_unique( compute_kernel ) )
+{
+}
 
 template<typename Model>
 void ChildTierRouter<Model>::push_from_kernel( models::BatchedInferenceState<ConfigType>&& state )
