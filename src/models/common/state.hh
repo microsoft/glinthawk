@@ -14,7 +14,8 @@ namespace glinthawk::models {
 
 // TODO(pouya): double check if tier_rank is implemented correctly. (this file is huge!).
 // TODO(pouya): double check if is_sharded implemented correctly.
-// TODO(pouya): double check if merge is implemented correctly.
+// TODO(pouya): double check if merge_states is implemented correctly.
+// TODO(pouya): double check if split_states is implemented correctly.
 // TODO(pouya): revamp how discarded context works.
 // TODO(pouya): design a lazy merge.
 // TODO(pouya): revamp soft_split to be optimal for TierRouter.
@@ -323,6 +324,9 @@ public:
   /// @param n The size of the first state.
   /// @return A pair of states.
   std::pair<BatchedInferenceState, BatchedInferenceState> split( const size_t n );
+
+  std::deque<std::reference_wrapper<BatchedInferenceState>> split_states( std::vector<size_t> vec_n,
+                                                                          bool ignore_empty );
 
   /// @brief Like `split`, but creates spans of the current state instead of a new state.
   /// @param n The size of the first state span.
@@ -771,6 +775,63 @@ template<typename Config>
 size_t BatchedInferenceState<Config>::free_slots() const
 {
   return std::count_if( prompts_.begin(), prompts_.end(), []( const auto& p ) { return not p.active; } );
+}
+
+template<typename Config>
+std::deque<std::reference_wrapper<BatchedInferenceState>> BatchedInferenceState<Config>::split_states(
+  std::vector<size_t> vec_n,
+  bool ignore_empty )
+{
+  // TODO(pouya): how about the discarded contexts?
+  std::deque<std::reference_wrapper<BatchedInferenceState>> pieces {};
+  CHECK_GT( vec_n.size(), 1 ) << "Splitting to empty or single-element list";
+
+  size_t sum_n = 0;
+  for ( int i = 0; i < vec_n.size(); i++ ) {
+    CHECK_LE( vec_n[i], metadata_.batch_size ) << "Requested batch sizes should not exceed this state's size";
+    sum_n += vec_n[i];
+  }
+  CHECK_EQ( metadata_.batch_size, sum_n ) << "Requested batch sizes should sum up to this state's size";
+
+  DLOG( INFO ) << "Splitting state of size " << metadata_.batch_size << " into " << vec_n.size() << " states.";
+
+  size_t last_bi = 0;
+  for ( int i = 0; i < vec_n.size(); i++ ) {
+    if ( vec_n[i] == 0 and ignore_empty ) {
+      continue;
+    }
+    BatchedInferenceState<Config> state_new;
+
+    state_new.metadata_ = metadata_;
+    state_new.metadata_.batch_size = vec_n[i];
+    state_new.prompts_.resize( vec_n[i] );
+
+    for ( size_t i = 0; i < vec_n[i]; i++ ) {
+      state_new.prompts_[i] = prompts_[last_bi + i];
+    }
+
+    if ( this->has_activations() ) {
+      state_new.allocate_activations();
+      std::memcpy(
+        state_new.activations_.data(), activations_.data() + last_bi * activation_len(), vec_n[i] * activation_len() );
+    }
+
+    if ( this->has_queries() ) {
+      state_new.allocate_queries();
+      std::memcpy( state_new.queries_.data(), queries_.data() + last_bi * q_len(), vec_n[i] * q_len() );
+    }
+
+    if ( this->has_kvs() ) {
+      state_new.allocate_kvs();
+      std::memcpy( state_new.kvs_.data(), kvs_.data() + last_bi * kv_len(), vec_n[i] * kv_len() );
+    }
+
+    last_bi += vec_n[i];
+
+    pieces.push_back( std::reference_wrapper<BatchedInferenceState<Config>>( std::move( state_new ) ) );
+  }
+
+  return pieces;
 }
 
 template<typename Config>

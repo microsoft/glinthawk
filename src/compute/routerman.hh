@@ -143,6 +143,8 @@ private:
   const Concurrency concurrency_tier_2_;
   std::vector<size_t> free_contexts_tier_2_;
 
+  std::array<std::vector<size_t>, util::to_underlying( Stage::__COUNT__ )> sharding_batch_sizes;
+
   const size_t start_layer_;
   const size_t end_layer_;
 
@@ -233,6 +235,26 @@ void ParentTierRouter<Model>::ParentTierRouter( const ComputeKernel& compute_ker
 {
   // TODO(pouya): if there is only one slice, a generated batch never gets pushed to worker to report generations.
   CHECK( start_layer_ != 0 or end_layer_ != ConfigType::n_layers - 1 );
+
+  // TODO(pouya): put some checks for the concurrencies, like being equal across stages.
+
+  for ( int i = 0; i < sharding_batch_sizes.size(); i++ ) {
+    sharding_batch_sizes[i] = std::vector<size_t>( n_tier_1 + n_tier_2 );
+  }
+
+  for ( int i = 0; i < n_tier_1; i++ ) {
+    sharding_batch_sizes[0][i] = concurrency_tier_1_.get( glinthawk::models::InferenceStage::PreAttention );
+    sharding_batch_sizes[1][i] = concurrency_tier_1_.get( glinthawk::models::InferenceStage::Attention );
+    sharding_batch_sizes[2][i] = concurrency_tier_1_.get( glinthawk::models::InferenceStage::PostAttention );
+    sharding_batch_sizes[3][i] = concurrency_tier_1_.get( glinthawk::models::InferenceStage::Classification );
+  }
+
+  for ( int i = n_tier_1; i < n_tier_1 + n_tier_2; i++ ) {
+    sharding_batch_sizes[0][i] = concurrency_tier_2_.get( glinthawk::models::InferenceStage::PreAttention );
+    sharding_batch_sizes[1][i] = concurrency_tier_2_.get( glinthawk::models::InferenceStage::Attention );
+    sharding_batch_sizes[2][i] = concurrency_tier_2_.get( glinthawk::models::InferenceStage::PostAttention );
+    sharding_batch_sizes[3][i] = concurrency_tier_2_.get( glinthawk::models::InferenceStage::Classification );
+  }
 }
 
 template<typename Model>
@@ -341,10 +363,9 @@ StateType&& ParentTierRouter<Model>::form_monolith( const size_t layer, const St
       }
     }
   }
-
   // TODO(pouya): not sure if a "lazy" merge isn't a better option, especially if we're going to send it over the wire
   //  next. We can do an unlazify() func in compute_kernel->incoming thread for cases where it is going to the kernel.
-  StateType monolith = StateType::merge_states(shards);
+  StateType monolith = StateType::merge_states( shards );
   monolith.set_is_sharded( false );
   return monolith;
 }
@@ -362,41 +383,19 @@ void ParentTierRouter<Model>::process_monolith( StateType&& state )
       outgoing_.emplace( std::move( state ) );
     }
   } else {
-    // TODO(pouya): this is yet again spaghetti code. A better split function should take a list of batch sizes and
-    //  split them. If some batch_size=0, it should ignore it. We can also cache these size lists for efficiency.
+    std::deque<RefStateType> shards
+      = state.split_states( sharding_batch_sizes[util::to_underlying( state.next_stage() )], true );
     if ( concurrency_tier_1_.get( state.next_stage() ) > 0 ) {
-
-      auto [state_rank_0_t1, state] = state.split( concurrency_tier_1_.get( state.next_stage() ) );
-      state_rank_0_t1.set_is_sharded( true );
-      compute_kernel_->push( std::move( state_rank_0_t1 ) );
-      {
-        std::lock_guard lock { outgoing_.mutex };
-        for ( size_t i = 1; i < n_tier_1_; i++ ) {
-          auto [state_rank_i_t1, state] = state.split( concurrency_tier_1_.get( state.next_stage() ) );
-          state_rank_i_t1.set_is_sharded( true );
-          outgoing_.emplace( std::move( state_rank_i_t1 ) );
-        }
-        if ( concurrency_tier_2_.get( state.next_stage() ) > 0 ) {
-          for ( size_t i = 0; i < n_tier_2_ - 1; i++ ) {
-            auto [state_rank_i_t2, state] = state.split( concurrency_tier_2_.get( state.next_stage() ) );
-            state_rank_i_t2.set_is_sharded( true );
-            outgoing_.emplace( std::move( state_rank_i_t2 ) );
-          }
-          state.set_is_sharded( true );
-          outgoing_.emplace( std::move( state ) );
-        }
-      }
-    } else {
-      {
-        std::lock_guard lock { outgoing_.mutex };
-        CHECK_GT( concurrency_tier_2_.get( state.next_stage() ), 0 );
-        for ( size_t i = 0; i < n_tier_2_ - 1; i++ ) {
-          auto [state_rank_i_t2, state] = state.split( concurrency_tier_2_.get( state.next_stage() ) );
-          state_rank_i_t2.set_is_sharded( true );
-          outgoing_.emplace( std::move( state_rank_i_t2 ) );
-        }
-        state.set_is_sharded( true );
-        outgoing_.emplace( std::move( state ) );
+      shards.front()->get().set_is_sharded( true );
+      compute_kernel_->push( std::move( shards.front() ) );
+      shards.pop_front();
+    }
+    if ( shards.size() > 0 ) {
+      std::lock_guard lock { outgoing_.mutex };
+      while ( shards.size() > 0 ) {
+        shards.front()->get().set_is_sharded( true );
+        outgoing_.emplace( std::move( shards.front() ) );
+        shards.pop_front();
       }
     }
   }
