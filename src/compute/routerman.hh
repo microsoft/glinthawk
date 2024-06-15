@@ -74,6 +74,16 @@ public:
   /// (2) are child states that resulted from the local node pushing the last
   bool pop( glinthawk::models::BatchedInferenceState<ConfigType>& state );
 
+  /// @brief
+  /// is_context_available checks if we have context available for attention for all layers in this slice. It returns
+  /// false if even one node does not have the corresponding concurrency KV slots. Worker calls this function *before*
+  /// pushing new prompts, but does not need to check when receiving states over the network.
+  /// This is because we are assuming all slices are alike, and if slice 0 has context, so do the others. Thus, this
+  /// function is truly only relevant in slice 0.
+  /// This function will only return "true" a finite number of times before all contexts are filled up. From that point,
+  /// new prompts are placed in discarded prompt locations, and will have context by default.
+  bool is_context_available();
+
 private:
   using ConfigType = typename Model::ConfigType;
   using Stage = glinthawk::models::InferenceStage;
@@ -83,6 +93,7 @@ private:
 
   /// @brief
   /// For now we assume all tier 1 machines are alike and all tier 2 machines are alike.
+  /// We also assume all slices are alike.
   /// The TierRouter does not need to know if the kernel is hybrid or not. It treats hybrid kernels as a sum of two
   /// concurrencies.
   const size_t n_tier_1_;
@@ -104,8 +115,6 @@ private:
 
   std::vector<size_t> tier_1_idle_child_state_counts_;
   std::vector<size_t> tier_2_idle_child_state_counts_;
-
-  // TODO(pouya): queue for children waiting for context.
 
   std::mutex push_mutex_;
   EventFD event_fd_ {};
@@ -149,17 +158,16 @@ private:
 
   /// @brief
   /// process_parent_state breaks the `parent' state to `child' states by the tier_routing_group in each prompt. Each
-  /// child is only sent out if the remote/local machine can allot context for it. Note that we do not care if some
-  /// other machine has context for its own child state or not. If said context does not exist, TierRouter holds onto
-  /// that child state until it does. The latter only occurs on releasing past context, which also happens in push. So,
-  /// push may return older child states or return none at all.
+  /// child must have context on the remote/local machine for it. This is guaranteed by checking with
+  /// is_context_available() before scheduling "new" states that are made from scratch. Old states with new prompts in
+  /// discarded spots are by default going to have context.
   void process_parent_state( StateType&& state );
 
   /// @brief
   /// process_child_state manages an internal memory to merge states of various tiers together. If it receives a child
   /// state, it saves it. Upon merging, it may process it the same way it does the parent. If the parent does not need
   /// processing (is not local to that machine anymore, e.g., is for a different slice) it is sent out via an outgoing
-  /// queue that the worker communicates with. This function may be indirectly called byh the compute kernel or the
+  /// queue that the worker communicates with. This function may be indirectly called by the compute kernel or the
   /// worker.
   void process_child_state( StateType&& state );
 };
@@ -186,6 +194,23 @@ bool TierRouter<Model>::pop( models::BatchedInferenceState<ConfigType>& state )
 
   state = std::move( outgoing_.queue.top().state );
   outgoing_.queue.pop();
+  return true;
+}
+
+template<typename Model>
+bool TierRouter<Model>::is_context_available()
+{
+  for ( size_t i = 0; i < n_tier_1_; i++ ) {
+    if ( cms_tier_1_[i].free() < concurrency_tier_1_.get( glinthawk::models::InferenceStage::Attention ) ) {
+      return false;
+    }
+  }
+  for ( size_t i = 0; i < n_tier_2_; i++ ) {
+    if ( cms_tier_2_[i].free() < concurrency_tier_2_.get( glinthawk::models::InferenceStage::Attention ) ) {
+      return false;
+    }
+  }
+
   return true;
 }
 
@@ -259,6 +284,7 @@ StateType&& TierRouter<Model>::form_parent( const size_t layer, const Stage stag
 template<typename Model>
 void TierRouter<Model>::process_parent_state( StateType&& state )
 {
+  assign_sub_groups( state );
   if ( not is_served_in_this_slice( state ) ) {
     {
       // TODO(pouya): not sure if it makes sense to merge parent in the current slice if the next stage is in another
@@ -273,13 +299,14 @@ void TierRouter<Model>::process_parent_state( StateType&& state )
     //  split them. If some batch_size=0, it should ignore it. We can also cache these size lists for efficiency.
     if ( concurrency_tier_1_.get( state.next_stage() ) > 0 ) {
 
-      // TODO(pouya): handle context management
       auto [state_rank_0_t1, state] = state.split( concurrency_tier_1_.get( state.next_stage() ) );
+      CHECK_EQ( cms_tier_1_[0].get_contexts( state_rank_0_t1 ), true );
       compute_kernel_->push( std::move( state_rank_0_t1 ) );
       {
         std::lock_guard lock { outgoing_.mutex };
         for ( size_t i = 1; i < n_tier_1_; i++ ) {
           auto [state_rank_i_t1, state] = state.split( concurrency_tier_1_.get( state.next_stage() ) );
+          CHECK_EQ( cms_tier_1_[i].get_contexts( state_rank_i_t1 ), true );
           outgoing_.emplace( std::move( state_rank_i_t1 ) );
           // TODO: one write_event per state?
           event_fd_.write_event();
@@ -287,6 +314,7 @@ void TierRouter<Model>::process_parent_state( StateType&& state )
         if ( concurrency_tier_2_.get( state.next_stage() ) > 0 ) {
           for ( size_t i = 0; i < n_tier_2_ - 1; i++ ) {
             auto [state_rank_i_t2, state] = state.split( concurrency_tier_2_.get( state.next_stage() ) );
+            CHECK_EQ( cms_tier_2_[i].get_contexts( state_rank_i_t2 ), true );
             outgoing_.emplace( std::move( state_rank_i_t2 ) );
             event_fd_.write_event();
           }
@@ -300,9 +328,11 @@ void TierRouter<Model>::process_parent_state( StateType&& state )
         CHECK_GT( concurrency_tier_2_.get( state.next_stage() ), 0 );
         for ( size_t i = 0; i < n_tier_2_ - 1; i++ ) {
           auto [state_rank_i_t2, state] = state.split( concurrency_tier_2_.get( state.next_stage() ) );
+          CHECK_EQ( cms_tier_2_[i].get_contexts( state_rank_i_t2 ), true );
           outgoing_.emplace( std::move( state_rank_i_t2 ) );
           event_fd_.write_event();
         }
+        CHECK_EQ( cms_tier_2_[n_tier_2_ - 1].get_contexts( state ), true );
         outgoing_.emplace( std::move( state ) );
         event_fd_.write_event();
       }
