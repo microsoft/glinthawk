@@ -27,25 +27,6 @@
 
 namespace glinthawk::compute {
 
-/// @brief
-/// TierRouter is a middle-man between the worker and kernel. It's job is to break down states between machines in
-/// tiers, while ensuring context does not run out and deadlocks don't happen.
-/// TierRouter is only run on `rank-0' machines, i.e., it only runs on one node in each `slice' that may serve multiple
-/// layers. The other nodes in the slice have a dummy TierRouter that pass states through with no delay. There is a
-/// possibility for improving this, where the tier-to-tier gather and scatter operations are distributed.
-/// TierRouter distinguishes states as two types:
-///     Parent BatchInferenceState: which is a full batch across all machines in both tiers.
-///     Child BatchInferenceState: which is a specific part of a parent dedicated to a specific machine.
-/// TierRouter receives parent/child states through push, and returns child through an outgoing queue. It sends to and
-/// receives local child states from the compute kernel directly.
-/// The worker reads an outgoing queue from TierRouter to send out outbound parent states.
-/// TierRouter fully handles context management, and guarantees that if a child state arrives at the kernel, that kernel
-/// has space for it.
-// TODO(pouya): how does routing work?
-// TODO(pouya): how does worker know to send a child state back to its origin?
-// TODO(pouya): do children carry discards?
-// TODO(pouya): who clears discards?
-// TODO(pouya): child states are one stage past when they return, compared to when they were sent, this might meme us.
 template<typename Model>
 class TierRouter
 {
@@ -60,19 +41,73 @@ public:
               const typename Model::SettingsType& settings,
               const std::unique_ptr<ComputeKernel> compute_kernel );
 
-  ~TierRouter();
+  virtual ~TierRouter() = 0;
 
-  EventFD& event_fd() { return event_fd_; }
+  virtual EventFD& event_fd() = 0;
+
+  virtual void push_from_kernel( glinthawk::models::BatchedInferenceState<ConfigType>&& state ) = 0;
+
+  virtual void push_from_worker( glinthawk::models::BatchedInferenceState<ConfigType>&& state ) = 0;
+
+  virtual bool pop( glinthawk::models::BatchedInferenceState<ConfigType>& state ) = 0;
+
+  virtual bool is_context_available() = 0;
+};
+
+/// @brief
+/// ParentTierRouter is a middle-man between the worker and kernel. It's job is to break down states between machines in
+/// tiers, while ensuring context does not run out and deadlocks don't happen.
+/// ParentTierRouter is only run on `rank-0' machines, i.e., it only runs on one node in each `slice' that may serve
+/// multiple layers. The other nodes in the slice have a ChildTierRouter that pass states through with no delay. There
+/// is a possibility for improving this, where the tier-to-tier gather and scatter operations are distributed.
+/// ParentTierRouter distinguishes states as two types:
+///     Parent BatchInferenceState: which is a full batch across all machines in both tiers.
+///     Child BatchInferenceState: which is a specific part of a parent dedicated to a specific machine.
+/// ParentTierRouter receives parent/child states through push, and returns child through an outgoing queue. It sends to
+/// and receives local child states from the compute kernel directly.
+/// The worker reads an outgoing queue from ParentTierRouter to send out outbound parent states.
+/// ParentTierRouter fully handles context management, and guarantees that if a child state arrives at the kernel, that
+/// kernel has space for it.
+// TODO(pouya): can straggler's cause an unstable failure mode in dispersing work among tiers?
+// TODO(pouya): how does routing work?
+// TODO(pouya): how does worker know to send a child state back to its origin?
+// TODO(pouya): do children carry discards?
+// TODO(pouya): who clears discards?
+// TODO(pouya): child states are one stage past when they return, compared to when they were sent, this might meme us.
+// TODO(pouya): I'm forcing kernel to not have an outgoing queue. Talk to sadjad about this.
+// TODO(pouya): I have to separate push to from_worker and from_kernel, since the ChildTierRouter can't tell where it is
+//  getting the state from.
+template<typename Model>
+class ParentTierRouter : public glinthawk::compute::TierRouter
+{
+public:
+  // TODO(pouya): complete the constructor, does it need virtual?
+  ParentTierRouter( const size_t n_tier_1,
+                    const Concurrency concurrency_tier_1,
+                    const kv_slots_tier_1,
+                    const size_t n_tier_2,
+                    const Concurrency concurrency_tier_2,
+                    const kv_slots_tier_2,
+                    const typename Model::SettingsType& settings,
+                    const std::unique_ptr<ComputeKernel> compute_kernel );
+
+  virtual ~ParentTierRouter() override;
+
+  virtual EventFD& event_fd() override { return event_fd_; }
 
   /// @brief
-  /// if the state was a parent state calls process_parent_state
-  /// if the state was a child state calls process_child_state
-  void push( glinthawk::models::BatchedInferenceState<ConfigType>&& state );
+  /// 1. Push child state from kernel -> process_child_state, may internally call process_parent_state
+  virtual void push_from_kernel( glinthawk::models::BatchedInferenceState<ConfigType>&& state ) override;
+
+  /// @brief
+  /// 1. Push parent state from worker -> calls process_parent_state
+  /// 2. Push child state from worker -> process_child_state, may internally call process_parent_state
+  virtual void push_from_worker( glinthawk::models::BatchedInferenceState<ConfigType>&& state ) override;
 
   /// @brief
   /// pop is called by the worker to receive states, that (1) are parent states that are no longer local to the node, or
   /// (2) are child states that resulted from the local node pushing the last
-  bool pop( glinthawk::models::BatchedInferenceState<ConfigType>& state );
+  virtual bool pop( glinthawk::models::BatchedInferenceState<ConfigType>& state ) override;
 
   /// @brief
   /// is_context_available checks if we have context available for attention for all layers in this slice. It returns
@@ -82,7 +117,7 @@ public:
   /// function is truly only relevant in slice 0.
   /// This function will only return "true" a finite number of times before all contexts are filled up. From that point,
   /// new prompts are placed in discarded prompt locations, and will have context by default.
-  bool is_context_available();
+  virtual bool is_context_available() override;
 
 private:
   using ConfigType = typename Model::ConfigType;
@@ -94,8 +129,8 @@ private:
   /// @brief
   /// For now we assume all tier 1 machines are alike and all tier 2 machines are alike.
   /// We also assume all slices are alike.
-  /// The TierRouter does not need to know if the kernel is hybrid or not. It treats hybrid kernels as a sum of two
-  /// concurrencies.
+  /// The ParentTierRouter does not need to know if the kernel is hybrid or not. It treats hybrid kernels as a sum of
+  /// two concurrencies.
   const size_t n_tier_1_;
   const Concurrency concurrency_tier_1_;
   const size_t n_tier_2_;
@@ -104,7 +139,7 @@ private:
   const size_t start_layer_;
   const size_t end_layer_;
 
-  // Worker no longer sees compute kernel. Only the tier router does.
+  // Worker doesn't see the compute kernel. Only the tier router does.
   std::unique_ptr<ComputeKernel> compute_kernel_ { nullptr };
 
   std::vector<VirtualPreallocatingContextManager<Model>> cms_tier_1_;
@@ -173,8 +208,20 @@ private:
 };
 
 template<typename Model>
-void TierRouter<Model>::push( models::BatchedInferenceState<ConfigType>&& state )
+void ParentTierRouter<Model>::push_from_kernel( models::BatchedInferenceState<ConfigType>&& state )
 {
+  // TODO(pouya): we hold push_mutex here, and outgoing_mutex and compute_kernel incoming mutex later. Need to check for
+  //  deadlocks or revise mutex style.
+  std::lock_guard lock { push_mutex_ };
+
+  process_child_state( std::move( state ) );
+}
+
+template<typename Model>
+void ParentTierRouter<Model>::push_from_worker( models::BatchedInferenceState<ConfigType>&& state )
+{
+  // TODO(pouya): we hold push_mutex here, and outgoing_mutex and compute_kernel incoming mutex later. Need to check for
+  //  deadlocks or revise mutex style.
   std::lock_guard lock { push_mutex_ };
 
   if ( state.is_parent() )
@@ -184,7 +231,7 @@ void TierRouter<Model>::push( models::BatchedInferenceState<ConfigType>&& state 
 }
 
 template<typename Model>
-bool TierRouter<Model>::pop( models::BatchedInferenceState<ConfigType>& state )
+bool ParentTierRouter<Model>::pop( models::BatchedInferenceState<ConfigType>& state )
 {
   std::lock_guard lock { outgoing_.mutex };
 
@@ -198,7 +245,7 @@ bool TierRouter<Model>::pop( models::BatchedInferenceState<ConfigType>& state )
 }
 
 template<typename Model>
-bool TierRouter<Model>::is_context_available()
+bool ParentTierRouter<Model>::is_context_available()
 {
   for ( size_t i = 0; i < n_tier_1_; i++ ) {
     if ( cms_tier_1_[i].free() < concurrency_tier_1_.get( glinthawk::models::InferenceStage::Attention ) ) {
@@ -215,7 +262,7 @@ bool TierRouter<Model>::is_context_available()
 }
 
 template<typename Model>
-bool TierRouter<Model>::can_form_parent( const size_t layer, const Stage stage )
+bool ParentTierRouter<Model>::can_form_parent( const size_t layer, const Stage stage )
 {
   return tier_1_idle_child_state_counts_[vector_index( layer, stage )] > n_tier_1_ * concurrency_tier_1_.get( stage )
          and tier_2_idle_child_state_counts_[vector_index( layer, stage )]
@@ -223,7 +270,7 @@ bool TierRouter<Model>::can_form_parent( const size_t layer, const Stage stage )
 }
 
 template<typename Model>
-void TierRouter<Model>::assign_sub_groups( StateType& state ) const
+void ParentTierRouter<Model>::assign_sub_groups( StateType& state ) const
 {
   CHECK_EQ( ( state.is_parent(), true );
   CHECK_EQ( ( state.batch_size(), n_tier_1_ * concurrency_tier_1_.get( stage ) + n_tier_2_ * concurrency_tier_2_.get( stage ) );
@@ -241,7 +288,7 @@ void TierRouter<Model>::assign_sub_groups( StateType& state ) const
 }
 
 template<typename Model>
-StateType&& TierRouter<Model>::form_parent( const size_t layer, const Stage stage )
+StateType&& ParentTierRouter<Model>::form_parent( const size_t layer, const Stage stage )
 {
   const auto vi = vector_index( layer, stage );
   // TODO(pouya): this is probably super inefficient. We should be able to "reserve" the correct size beforehand.
@@ -282,7 +329,7 @@ StateType&& TierRouter<Model>::form_parent( const size_t layer, const Stage stag
 }
 
 template<typename Model>
-void TierRouter<Model>::process_parent_state( StateType&& state )
+void ParentTierRouter<Model>::process_parent_state( StateType&& state )
 {
   assign_sub_groups( state );
   if ( not is_served_in_this_slice( state ) ) {
@@ -341,7 +388,7 @@ void TierRouter<Model>::process_parent_state( StateType&& state )
 }
 
 template<typename Model>
-void TierRouter<Model>::process_child_state( StateType&& state )
+void ParentTierRouter<Model>::process_child_state( StateType&& state )
 {
   for ( size_t i = 0; i < state.batch_size(); i++ ) {
     if ( not state.tier_routed( i ) ) {
@@ -366,6 +413,85 @@ void TierRouter<Model>::process_child_state( StateType&& state )
     StateType merged_parent_state = form_parent( next_layer, next_stage );
     process_parent_state( std::move( merged_parent_state ) );
   }
+}
+
+/// @brief
+/// ChildTierRouter is an empty middle-man between the worker and kernel. It's job is to mimic the TierRouter do the
+/// worker is oblivious to which rank it has. DummyTierRouter that pass states through with no delay.
+template<typename Model>
+class ChildTierRouter : public glinthawk::compute::TierRouter
+{
+public:
+  // TODO(pouya): complete the constructor, does it need virtual?
+  ChildTierRouter( const size_t n_tier_1,
+                   const Concurrency concurrency_tier_1,
+                   const kv_slots_tier_1,
+                   const size_t n_tier_2,
+                   const Concurrency concurrency_tier_2,
+                   const kv_slots_tier_2,
+                   const typename Model::SettingsType& settings,
+                   const std::unique_ptr<ComputeKernel> compute_kernel );
+
+  virtual ChildTierRouter() override;
+
+  virtual EventFD& event_fd() override { return event_fd_; }
+
+  /// @brief
+  /// 1. Push child state from kernel -> send state to worker
+  virtual void push_from_kernel( glinthawk::models::BatchedInferenceState<ConfigType>&& state ) override;
+
+  /// @brief
+  /// 1. Push child state from worker -> send state to kernel
+  virtual void push_from_worker( glinthawk::models::BatchedInferenceState<ConfigType>&& state ) override;
+
+  /// @brief
+  /// Behaves similar to TierRouter
+  virtual bool pop( glinthawk::models::BatchedInferenceState<ConfigType>& state ) override;
+
+  /// @brief
+  /// This should never be called.
+  virtual bool is_context_available() override;
+
+private:
+  // Worker doesn't see the compute kernel. Only the tier router does.
+  std::unique_ptr<ComputeKernel> compute_kernel_ { nullptr };
+
+  EventFD event_fd_ {};
+  GlobalQueue outgoing_;
+};
+
+template<typename Model>
+void ChildTierRouter<Model>::push_from_kernel( models::BatchedInferenceState<ConfigType>&& state )
+{
+  outgoing_.emplace( std::move( state ) );
+  event_fd_.write_event();
+}
+
+template<typename Model>
+void ChildTierRouter<Model>::push_from_worker( models::BatchedInferenceState<ConfigType>&& state )
+{
+  compute_kernel_->push( std::move( state ) );
+}
+
+template<typename Model>
+bool ChildTierRouter<Model>::pop( models::BatchedInferenceState<ConfigType>& state )
+{
+  std::lock_guard lock { outgoing_.mutex };
+
+  if ( outgoing_.queue.empty() ) {
+    return false;
+  }
+
+  state = std::move( outgoing_.queue.top().state );
+  outgoing_.queue.pop();
+  return true;
+}
+
+template<typename Model>
+bool ChildTierRouter<Model>::is_context_available()
+{
+  LOG( FATAL ) << "DummyTierRouter should never receive new batches. That is only going to happen in slice0, tier1, "
+                  "rank0.";
 }
 
 } // namespace glinthawk::compute
