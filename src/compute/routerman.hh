@@ -141,7 +141,8 @@ private:
   std::vector<size_t> tier_1_idle_child_state_counts_;
   std::vector<size_t> tier_2_idle_child_state_counts_;
 
-  std::mutex push_mutex_;
+  std::mutex ctx_mutex_;
+  std::mutex children_mutex_;
   EventFD event_fd_ {};
   GlobalQueue outgoing_;
 
@@ -227,20 +228,12 @@ void ParentTierRouter<Model>::ParentTierRouter( const size_t n_tier_1,
 template<typename Model>
 void ParentTierRouter<Model>::push_from_kernel( models::BatchedInferenceState<ConfigType>&& state )
 {
-  // TODO(pouya): we hold push_mutex here, and outgoing_mutex and compute_kernel incoming mutex later. Need to check for
-  //  deadlocks or revise mutex style.
-  std::lock_guard lock { push_mutex_ };
-
   process_child_state( std::move( state ) );
 }
 
 template<typename Model>
 void ParentTierRouter<Model>::push_from_worker( models::BatchedInferenceState<ConfigType>&& state )
 {
-  // TODO(pouya): we hold push_mutex here, and outgoing_mutex and compute_kernel incoming mutex later. Need to check for
-  //  deadlocks or revise mutex style.
-  std::lock_guard lock { push_mutex_ };
-
   if ( state.is_parent() )
     process_parent_state( std::move( state ) );
   else
@@ -264,6 +257,8 @@ bool ParentTierRouter<Model>::pop( models::BatchedInferenceState<ConfigType>& st
 template<typename Model>
 bool ParentTierRouter<Model>::is_context_available()
 {
+  std::lock_guard lock { ctx_mutex_ };
+
   for ( size_t i = 0; i < n_tier_1_; i++ ) {
     if ( free_contexts_tier_1_[i] < concurrency_tier_1_.get( glinthawk::models::InferenceStage::Attention ) ) {
       return false;
@@ -281,6 +276,8 @@ bool ParentTierRouter<Model>::is_context_available()
 template<typename Model>
 bool ParentTierRouter<Model>::can_form_parent( const size_t layer, const Stage stage )
 {
+  std::lock_guard lock { children_mutex_ };
+
   return tier_1_idle_child_state_counts_[vector_index( layer, stage )] > n_tier_1_ * concurrency_tier_1_.get( stage )
          and tier_2_idle_child_state_counts_[vector_index( layer, stage )]
                > n_tier_2_ * concurrency_tier_2_.get( stage )
@@ -301,9 +298,11 @@ void ParentTierRouter<Model>::assign_sub_groups( StateType& state )
       state.set_tier_1_routing_group( t_ind.first );
       state.set_tier_2_routing_group( t_ind.second );
       if ( t_ind.second == -1 ) {
+        std::lock_guard lock { ctx_mutex_ };
         CHECK_GE( free_contexts_tier_1_[t_ind.first], concurrency_tier_1_.get( Stage::Attention ) );
         free_contexts_tier_1_[t_ind.first] -= concurrency_tier_1_.get( Stage::Attention );
       } else {
+        std::lock_guard lock { ctx_mutex_ };
         CHECK_GE( free_contexts_tier_2_[t_ind.second], concurrency_tier_2_.get( Stage::Attention ) );
         free_contexts_tier_2_[t_ind.second] -= concurrency_tier_2_.get( Stage::Attention );
       }
@@ -315,6 +314,8 @@ template<typename Model>
 StateType&& ParentTierRouter<Model>::form_parent( const size_t layer, const Stage stage )
 {
   const auto vi = vector_index( layer, stage );
+
+  std::lock_guard lock { children_mutex_ };
   // TODO(pouya): this is probably super inefficient. We should be able to "reserve" the correct size beforehand.
   // TODO(pouya): merge creates a new state underneath, that should be unnecessary if we have the full size allocated.
   // TODO(pouya): not sure if a "lazy" merge isn't a better option, especially if we're going to send it over the wire
@@ -418,17 +419,18 @@ void ParentTierRouter<Model>::process_child_state( StateType&& state )
   const auto next_stage = state.next_stage();
   const auto next_layer = state.next_layer();
   const auto vi = vector_index( next_layer, next_stage );
-
-  if ( state.get_tier_1_routing_group( 0 ) > -1 ) {
-    tier_1_idle_child_state_counts_[vi] += state.batch_size();
-    tier_1_idle_child_states_[vi].push_back( RefStateType( std::move( state ) ) );
-  } else {
-    tier_2_idle_child_state_counts_[vi] += state.batch_size();
-    tier_2_idle_child_states_[vi].push_back( RefStateType( std::move( state ) ) );
+  {
+    std::lock_guard lock { children_mutex_ };
+    if ( state.get_tier_1_routing_group( 0 ) > -1 ) {
+      tier_1_idle_child_state_counts_[vi] += state.batch_size();
+      tier_1_idle_child_states_[vi].push_back( RefStateType( std::move( state ) ) );
+    } else {
+      tier_2_idle_child_state_counts_[vi] += state.batch_size();
+      tier_2_idle_child_states_[vi].push_back( RefStateType( std::move( state ) ) );
+    }
   }
 
   if ( can_form_parent( next_layer, next_stage ) ) {
-    // TODO(pouya): no move needed here? I never learn
     StateType merged_parent_state = form_parent( next_layer, next_stage );
     process_parent_state( std::move( merged_parent_state ) );
   }
