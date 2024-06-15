@@ -82,7 +82,7 @@ protected:
 // TODO(pouya): how does worker know to send a shard back to its origin?
 // TODO(pouya): I'm forcing kernel to not have an outgoing queue. Talk to sadjad about this.
 template<typename Model>
-class ParentTierRouter : public glinthawk::compute::TierRouter
+class ParentTierRouter : public TierRouter
 {
 public:
   ParentTierRouter( const ComputeKernel& compute_kernel,
@@ -232,7 +232,7 @@ void ParentTierRouter<Model>::ParentTierRouter( const ComputeKernel& compute_ker
   , tier_2_idle_shard_counts_( n_tier_2, 0 )
 {
   // TODO(pouya): if there is only one slice, a generated batch never gets pushed to worker to report generations.
-  CHECK_EQ( start_layer_ == 0 and end_layer_ == ConfigType::n_layers - 1, false );
+  CHECK( start_layer_ != 0 or end_layer_ != ConfigType::n_layers - 1 );
 }
 
 template<typename Model>
@@ -295,8 +295,9 @@ bool ParentTierRouter<Model>::can_form_monolith( const size_t layer, const Stage
 template<typename Model>
 void ParentTierRouter<Model>::assign_ranks( StateType& state )
 {
-  CHECK_EQ( ( state.is_sharded(), false );
-  CHECK_EQ( ( state.batch_size(), n_tier_1_ * concurrency_tier_1_.get( stage ) + n_tier_2_ * concurrency_tier_2_.get( stage ) );
+  CHECK( not state.is_sharded() );
+  CHECK_EQ( state.batch_size(),
+            n_tier_1_ * concurrency_tier_1_.get( stage ) + n_tier_2_ * concurrency_tier_2_.get( stage ) );
   bool already_assigned = state.rank_assigned( 0 );
   for ( size_t i = 0; i < state.batch_size(); i++ ) {
     CHECK_EQ( already_assigned, state.rank_assigned( i ) )
@@ -315,51 +316,37 @@ void ParentTierRouter<Model>::assign_ranks( StateType& state )
         free_contexts_tier_2_[t_ind.second] -= concurrency_tier_2_.get( Stage::Attention );
       }
     }
-}
+  }
 }
 
 template<typename Model>
 StateType&& ParentTierRouter<Model>::form_monolith( const size_t layer, const Stage stage )
 {
   const auto vi = vector_index( layer, stage );
-
-  std::lock_guard lock { shards_mutex_ };
-  // TODO(pouya): this is probably super inefficient. We should be able to "reserve" the correct size beforehand.
-  // TODO(pouya): merge creates a new state underneath, that should be unnecessary if we have the full size allocated.
-  // TODO(pouya): not sure if a "lazy" merge isn't a better option, especially if we're going to send it over the wire
-  //  next. We can do an unlazify() func in compute_kernel->incoming thread for cases where it is going to the kernel.
-  StateType base_state;
-  // TODO(pouya): while not sending states with batch_size=0 is efficient, this is spaghetti code. Better code would be
-  //  to compile a list of states to merge, and then use a single function to merge them.
-  if ( concurrency_tier_1_.get( stage ) > 0 ) {
-    base_state = std::move( tier_1_idle_shards_[vi].front()->get() );
-    tier_1_idle_shards_[vi].pop_front();
-    tier_1_idle_shard_counts_[vi] -= concurrency_tier_1_.get( stage );
-    for ( size_t i = 1; i < n_tier_1_; i++ ) {
-      base_state.merge( std::move( tier_1_idle_shards_[vi].front()->get() ) );
-      tier_1_idle_shards_[vi].pop_front();
-      tier_1_idle_shard_counts_[vi] -= concurrency_tier_1_.get( stage );
+  std::vector<RefStateType> shards;
+  {
+    std::lock_guard lock { shards_mutex_ };
+    if ( concurrency_tier_1_.get( stage ) > 0 ) {
+      for ( size_t i = 0; i < n_tier_1_; i++ ) {
+        shards.push_back( tier_1_idle_shards_[vi].front() );
+        tier_1_idle_shards_[vi].pop_front();
+        tier_1_idle_shard_counts_[vi] -= concurrency_tier_1_.get( stage );
+      }
     }
     if ( concurrency_tier_2_.get( stage ) > 0 ) {
       for ( size_t i = 0; i < n_tier_2_; i++ ) {
-        base_state.merge( std::move( tier_2_idle_shards_[vi].front()->get() ) );
+        shards.push_back( tier_2_idle_shards_[vi].front() );
         tier_2_idle_shards_[vi].pop_front();
         tier_2_idle_shard_counts_[vi] -= concurrency_tier_2_.get( stage );
       }
     }
-  } else {
-    CHECK_GT( concurrency_tier_2_.get( stage ), 0 );
-    base_state = std::move( tier_2_idle_shards_[vi].front()->get() );
-    tier_2_idle_shards_[vi].pop_front();
-    tier_2_idle_shard_counts_[vi] -= concurrency_tier_2_.get( stage );
-    for ( size_t i = 1; i < n_tier_2_; i++ ) {
-      base_state.merge( std::move( tier_2_idle_shards_[vi].front()->get() ) );
-      tier_2_idle_shards_[vi].pop_front();
-      tier_2_idle_shard_counts_[vi] -= concurrency_tier_2_.get( stage );
-    }
   }
-  base_state.set_is_sharded( false );
-  return base_state;
+
+  // TODO(pouya): not sure if a "lazy" merge isn't a better option, especially if we're going to send it over the wire
+  //  next. We can do an unlazify() func in compute_kernel->incoming thread for cases where it is going to the kernel.
+  StateType monolith = StateType::merge_states(shards);
+  monolith.set_is_sharded( false );
+  return monolith;
 }
 
 template<typename Model>
@@ -419,7 +406,7 @@ void ParentTierRouter<Model>::process_monolith( StateType&& state )
 template<typename Model>
 void ParentTierRouter<Model>::process_shard( StateType&& state )
 {
-  CHECK_EQ( state.all_rank_assigned() ) << "Sharded states must always be already routed.";
+  CHECK( state.all_rank_assigned() ) << "Sharded states must always be already routed.";
 
   const auto next_stage = state.next_stage();
   const auto next_layer = state.next_layer();
@@ -445,7 +432,7 @@ void ParentTierRouter<Model>::process_shard( StateType&& state )
 /// ChildTierRouter is an empty middle-man between the worker and kernel. It's job is to mimic the TierRouter do the
 /// worker is oblivious to which rank it has. DummyTierRouter that pass states through with no delay.
 template<typename Model>
-class ChildTierRouter : public glinthawk::compute::TierRouter
+class ChildTierRouter : public TierRouter
 {
 public:
   ChildTierRouter( const ComputeKernel& compute_kernel,

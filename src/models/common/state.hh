@@ -12,8 +12,12 @@
 
 namespace glinthawk::models {
 
-// TODO(pouya): double check if tier_rank is implemented correctly. (this file is huge!)
+// TODO(pouya): double check if tier_rank is implemented correctly. (this file is huge!).
 // TODO(pouya): double check if is_sharded implemented correctly.
+// TODO(pouya): double check if merge is implemented correctly.
+// TODO(pouya): revamp how discarded context works.
+// TODO(pouya): design a lazy merge.
+// TODO(pouya): revamp soft_split to be optimal for TierRouter.
 
 struct __attribute__( ( packed ) ) StateMetadata
 {
@@ -37,6 +41,7 @@ struct __attribute__( ( packed ) ) StateMetadata
 /// @brief This struct is used to keep track of prompts that are done, and the workers can safely discard them.
 struct __attribute__( ( packed ) ) DiscardedContext
 {
+  // TODO(pouya): add tier ranks here
   PromptID prompt_id {};
 };
 
@@ -330,6 +335,8 @@ public:
   /// @param other
   /// @return The merged state.
   void merge( BatchedInferenceState&& other );
+
+  static BatchedInferenceState&& merge_states( std::vector<std::reference_wrapper<BatchedInferenceState>> vec_state );
 
   std::string debug_string( const bool prompt_details = false ) const;
 };
@@ -804,6 +811,7 @@ std::pair<BatchedInferenceState<Config>, BatchedInferenceState<Config>> BatchedI
     state_b.allocate_kvs();
   }
 
+  // TODO(pouya): moving all discarded contexts to one state is bad
   // moving all the discarded contexts to the first state
   state_a.discarded_contexts_ = discarded_contexts_;
   state_a.metadata_.discarded_contexts = metadata_.discarded_contexts;
@@ -883,7 +891,7 @@ void BatchedInferenceState<Config>::merge( BatchedInferenceState&& other )
   new_state.metadata_ = metadata_;
   new_state.metadata_.batch_size += other.metadata_.batch_size;
 
-  // XXX how about the discarded contexts?
+  // TODO(pouya): how about the discarded contexts?
 
   new_state.prompts_.resize( metadata_.batch_size + other.metadata_.batch_size );
 
@@ -922,6 +930,84 @@ void BatchedInferenceState<Config>::merge( BatchedInferenceState&& other )
 
   *this = std::move( new_state );
   other = {};
+}
+
+template<typename Config>
+static BatchedInferenceState&& BatchedInferenceState<Config>::merge_states(
+  std::vector<std::reference_wrapper<BatchedInferenceState>> vec_state )
+{
+  // TODO(pouya): how about the discarded contexts?
+  CHECK_GT( vec_state.size(), 1 ) << "Merging empty or single-element list";
+
+  BatchedInferenceState new_state;
+  new_state.metadata_ = vec_state[0]->get().metadata_;
+  new_state.metadata_.batch_size = 0;
+  for ( int i = 0; i < vec_state.size(); i++ ) {
+    new_state.metadata_.batch_size += vec_state[i]->get().metadata_.batch_size;
+  }
+  CHECK_GT( new_state.metadata_.batch_size, 0 ) << "Merging empty states";
+  new_state.prompts_.resize( new_state.metadata_.batch_size );
+
+  if ( new_state.metadata_.has_activations ) {
+    new_state.allocate_activations();
+  }
+
+  if ( new_state.metadata_.has_queries ) {
+    new_state.allocate_queries();
+  }
+
+  if ( new_state.metadata_.has_kvs ) {
+    new_state.allocate_kvs();
+  }
+
+  size_t last_bi = 0;
+  for ( int i = 0; i < vec_state.size(); i++ ) {
+    const auto other = std::move( vec_state[i]->get() );
+
+    // merging an empty state
+    if ( other.metadata_.batch_size == 0 ) {
+      other = {};
+      continue;
+    }
+
+    CHECK( new_state.metadata_.dtype == other.metadata_.dtype ) << "States with different data types";
+    CHECK_EQ( new_state.metadata_.route_id, other.metadata_.route_id ) << "States with different route IDs";
+    CHECK_EQ( new_state.metadata_.model_id, other.metadata_.model_id ) << "States with different model IDs";
+    CHECK_EQ( new_state.metadata_.next_layer, other.metadata_.next_layer ) << "States with different next layers";
+    CHECK( new_state.metadata_.next_stage == other.metadata_.next_stage ) << "States with different next stages";
+    CHECK_EQ( new_state.metadata_.has_activations, other.metadata_.has_activations )
+      << "States with different activation states";
+    CHECK_EQ( new_state.metadata_.has_queries, other.metadata_.has_queries ) << "States with different query states";
+    CHECK_EQ( new_state.metadata_.has_kvs, other.metadata_.has_kvs ) << "States with different key-value states";
+    CHECK_EQ( new_state.metadata_.is_sharded, other.metadata_.is_sharded ) << "Sharded and Monolithic states";
+
+    // copying prompt data
+    for ( size_t j = 0; j < other.metadata_.batch_size; j++ ) {
+      new_state.prompts_[last_bi + j] = other.prompts_[j];
+    }
+
+    if ( new_state.metadata_.has_activations ) {
+      std::memcpy( new_state.activations_.data() + last_bi * new_state.activation_len(),
+                   other.activations_.data(),
+                   other.metadata_.batch_size * new_state.activation_len() );
+    }
+
+    if ( new_state.metadata_.has_queries ) {
+      std::memcpy( new_state.queries_.data() + last_bi * new_state.q_len(),
+                   other.queries_.data(),
+                   other.metadata_.batch_size * new_state.q_len() );
+    }
+
+    if ( new_state.metadata_.has_kvs ) {
+      std::memcpy( new_state.kvs_.data() + last_bi * new_state.kv_len(),
+                   other.kvs_.data(),
+                   other.metadata_.batch_size * new_state.kv_len() );
+    }
+    last_bi += other.metadata_.batch_size;
+
+    other = {};
+  }
+  return new_state;
 }
 
 template<typename Config>
