@@ -33,7 +33,7 @@ class TierRouter
 public:
   virtual ~TierRouter() = 0;
 
-  virtual EventFD& event_fd() = 0;
+  EventFD& event_fd() { return event_fd_; }
 
   // TODO(pouya): I have to separate push to from_worker and from_kernel, since the ChildTierRouter can't tell where
   //  it is getting the state from. This is unclean. Talk to sadjad about this.
@@ -44,6 +44,13 @@ public:
   virtual bool pop( glinthawk::models::BatchedInferenceState<ConfigType>& state ) = 0;
 
   virtual bool is_context_available() = 0;
+
+protected:
+  // Worker doesn't see the compute kernel. Only the tier router does.
+  std::unique_ptr<ComputeKernel> compute_kernel_;
+
+  EventFD event_fd_ {};
+  GlobalQueue outgoing_;
 };
 
 /// @brief
@@ -70,18 +77,17 @@ template<typename Model>
 class ParentTierRouter : public glinthawk::compute::TierRouter
 {
 public:
-  ParentTierRouter( const size_t n_tier_1,
+  ParentTierRouter( const ComputeKernel& compute_kernel,
+                    const size_t n_tier_1,
                     const Concurrency& concurrency_tier_1,
                     const kv_slots_tier_1,
                     const size_t n_tier_2,
                     const Concurrency& concurrency_tier_2,
                     const kv_slots_tier_2,
-                    const typename Model::SettingsType& settings,
-                    const ComputeKernel& compute_kernel );
+                    const typename Model::SettingsType& settings );
 
+  // TODO(pouya): anything to do in the deconstructor?
   virtual ~ParentTierRouter() override;
-
-  virtual EventFD& event_fd() override { return event_fd_; }
 
   /// @brief
   /// 1. Push child state from kernel -> process_child_state, may internally call process_parent_state
@@ -131,9 +137,6 @@ private:
   const size_t start_layer_;
   const size_t end_layer_;
 
-  // Worker doesn't see the compute kernel. Only the tier router does.
-  std::unique_ptr<ComputeKernel> compute_kernel_ { nullptr };
-
   // TODO(pouya): double check if reference_wrapper is necessary here
   std::vector<std::deque<RefStateType>> tier_1_idle_child_states_;
   std::vector<std::deque<RefStateType>> tier_2_idle_child_states_;
@@ -143,8 +146,6 @@ private:
 
   std::mutex ctx_mutex_;
   std::mutex children_mutex_;
-  EventFD event_fd_ {};
-  GlobalQueue outgoing_;
 
   inline size_t vector_index( const size_t layer, const Stage stage ) const
   {
@@ -199,15 +200,16 @@ private:
 };
 
 template<typename Model>
-void ParentTierRouter<Model>::ParentTierRouter( const size_t n_tier_1,
+void ParentTierRouter<Model>::ParentTierRouter( const ComputeKernel& compute_kernel,
+                                                const size_t n_tier_1,
                                                 const Concurrency& concurrency_tier_1,
                                                 const kv_slots_tier_1,
                                                 const size_t n_tier_2,
                                                 const Concurrency& concurrency_tier_2,
                                                 const kv_slots_tier_2,
-                                                const typename Model::SettingsType& settings,
-                                                const ComputeKernel& compute_kernel )
-  : n_tier_1_( n_tier_1 )
+                                                const typename Model::SettingsType& settings )
+  : compute_kernel_( std::make_unique( compute_kernel ) )
+  , n_tier_1_( n_tier_1 )
   , concurrency_tier_1_( concurrency_tier_1 )
   , free_contexts_tier_1_( n_tier_1, settings.start_layer_num == 0 ? kv_slots_tier_1 : 0 )
   , n_tier_2_( n_tier_2 )
@@ -215,7 +217,6 @@ void ParentTierRouter<Model>::ParentTierRouter( const size_t n_tier_1,
   , free_contexts_tier_2_( n_tier_2, settings.start_layer_num == 0 ? kv_slots_tier_2 : 0 )
   , start_layer_( settings.start_layer_num )
   , end_layer_( settings.end_layer_num )
-  , compute_kernel_( std::make_unique( compute_kernel ) )
   , tier_1_idle_child_states_( n_tier_1 )
   , tier_2_idle_child_states_( n_tier_2 )
   , tier_1_idle_child_state_counts_( n_tier_1, 0 )
@@ -365,7 +366,6 @@ void ParentTierRouter<Model>::process_parent_state( StateType&& state )
       std::lock_guard lock { outgoing_.mutex };
       outgoing_.emplace( std::move( state ) );
     }
-    event_fd_.write_event();
   } else {
     // TODO(pouya): this is yet again spaghetti code. A better split function should take a list of batch sizes and
     //  split them. If some batch_size=0, it should ignore it. We can also cache these size lists for efficiency.
@@ -378,17 +378,13 @@ void ParentTierRouter<Model>::process_parent_state( StateType&& state )
         for ( size_t i = 1; i < n_tier_1_; i++ ) {
           auto [state_rank_i_t1, state] = state.split( concurrency_tier_1_.get( state.next_stage() ) );
           outgoing_.emplace( std::move( state_rank_i_t1 ) );
-          // TODO: one write_event per state?
-          event_fd_.write_event();
         }
         if ( concurrency_tier_2_.get( state.next_stage() ) > 0 ) {
           for ( size_t i = 0; i < n_tier_2_ - 1; i++ ) {
             auto [state_rank_i_t2, state] = state.split( concurrency_tier_2_.get( state.next_stage() ) );
             outgoing_.emplace( std::move( state_rank_i_t2 ) );
-            event_fd_.write_event();
           }
           outgoing_.emplace( std::move( state ) );
-          event_fd_.write_event();
         }
       }
     } else {
@@ -398,13 +394,12 @@ void ParentTierRouter<Model>::process_parent_state( StateType&& state )
         for ( size_t i = 0; i < n_tier_2_ - 1; i++ ) {
           auto [state_rank_i_t2, state] = state.split( concurrency_tier_2_.get( state.next_stage() ) );
           outgoing_.emplace( std::move( state_rank_i_t2 ) );
-          event_fd_.write_event();
         }
         outgoing_.emplace( std::move( state ) );
-        event_fd_.write_event();
       }
     }
   }
+  event_fd_.write_event();
 }
 
 template<typename Model>
@@ -443,18 +438,16 @@ template<typename Model>
 class ChildTierRouter : public glinthawk::compute::TierRouter
 {
 public:
-  ChildTierRouter( const size_t n_tier_1,
+  ChildTierRouter( const ComputeKernel& compute_kernel,
+                   const size_t n_tier_1,
                    const Concurrency& concurrency_tier_1,
                    const kv_slots_tier_1,
                    const size_t n_tier_2,
                    const Concurrency& concurrency_tier_2,
                    const kv_slots_tier_2,
-                   const typename Model::SettingsType& settings,
-                   const ComputeKernel& compute_kernel );
+                   const typename Model::SettingsType& settings );
 
   virtual ChildTierRouter() override;
-
-  virtual EventFD& event_fd() override { return event_fd_; }
 
   /// @brief
   /// 1. Push child state from kernel -> send state to worker
@@ -471,24 +464,17 @@ public:
   /// @brief
   /// This should never be called.
   virtual bool is_context_available() override;
-
-private:
-  // Worker doesn't see the compute kernel. Only the tier router does.
-  std::unique_ptr<ComputeKernel> compute_kernel_ { nullptr };
-
-  EventFD event_fd_ {};
-  GlobalQueue outgoing_;
 };
 
 template<typename Model>
-void ChildTierRouter<Model>::ChildTierRouter( const size_t n_tier_1,
+void ChildTierRouter<Model>::ChildTierRouter( const ComputeKernel& compute_kernel,
+                                              const size_t n_tier_1,
                                               const Concurrency& concurrency_tier_1,
                                               const kv_slots_tier_1,
                                               const size_t n_tier_2,
                                               const Concurrency& concurrency_tier_2,
                                               const kv_slots_tier_2,
-                                              const typename Model::SettingsType& settings,
-                                              const ComputeKernel& compute_kernel )
+                                              const typename Model::SettingsType& settings )
   : compute_kernel_( std::make_unique( compute_kernel ) )
 {
 }
