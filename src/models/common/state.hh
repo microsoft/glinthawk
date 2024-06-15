@@ -12,8 +12,8 @@
 
 namespace glinthawk::models {
 
-// TODO(pouya): double check if tier_routing_group is implemented correctly. (this file is huge!)
-// TODO(pouya): double check if is_parent implemented correctly.
+// TODO(pouya): double check if tier_rank is implemented correctly. (this file is huge!)
+// TODO(pouya): double check if is_sharded implemented correctly.
 
 struct __attribute__( ( packed ) ) StateMetadata
 {
@@ -29,7 +29,7 @@ struct __attribute__( ( packed ) ) StateMetadata
   bool has_activations { false };
   bool has_queries { false };
   bool has_kvs { false };
-  bool is_parent { true };
+  bool is_sharded { false };
 
   uint32_t discarded_contexts { 0 };
 };
@@ -50,10 +50,10 @@ struct __attribute__( ( packed ) ) PromptData
   uint8_t temperature {}; // compact temprature, between [0, 255]; has to be divided by 255.0f before use.
   uint32_t prompt_length {};
   bool finished { false };
-  uint8_t tier_1_routing_group {}; // Denotes which group in tier 1 this prompt needs to be forwarded to, 0-indexed, -1
-                                   // means it belongs in tier 2, if both are -1 this prompt has not been routed yet
-  uint8_t tier_2_routing_group {}; // Denotes which group in tier 2 this prompt needs to be forwarded to, 0-indexed, -1
-                                   // means it belongs in tier 1, if both are -1 this prompt has not been routed yet
+  uint8_t rank_tier_1 {}; // Denotes which group in tier 1 this prompt needs to be forwarded to, 0-indexed, -1
+                          // means it belongs in tier 2, if both are -1 this prompt has not been routed yet
+  uint8_t rank_tier_2 {}; // Denotes which group in tier 2 this prompt needs to be forwarded to, 0-indexed, -1
+                          // means it belongs in tier 1, if both are -1 this prompt has not been routed yet
 };
 
 template<typename T>
@@ -72,7 +72,7 @@ concept StateConcept = requires( T state, const T cstate, const std::string cstr
   { state.set_has_activations( false ) };
   { state.set_has_queries( false ) };
   { state.set_has_kvs( false ) };
-  { state.set_is_parent( false ) };
+  { state.set_is_sharded( false ) };
   { state.clear_discards() };
 
   { cstate.id() } -> std::same_as<uint64_t>;
@@ -85,7 +85,8 @@ concept StateConcept = requires( T state, const T cstate, const std::string cstr
   { cstate.has_activations() } -> std::same_as<bool>;
   { cstate.has_queries() } -> std::same_as<bool>;
   { cstate.has_kvs() } -> std::same_as<bool>;
-  { cstate.is_parent() } -> std::same_as<bool>;
+  { cstate.is_sharded() } -> std::same_as<bool>;
+  { state.all_rank_assigned() } -> std::same_as<bool>;
   { cstate.discarded_contexts() } -> std::same_as<uint32_t>;
 
   { state.discarded_prompt_id( 0 ) } -> std::same_as<const PromptID&>;
@@ -97,9 +98,9 @@ concept StateConcept = requires( T state, const T cstate, const std::string cstr
   { state.prompt_length( 0 ) } -> std::same_as<uint32_t>;
   { state.temperature( 0 ) } -> std::same_as<float>;
   { state.finished( 0 ) } -> std::same_as<bool>;
-  { state.tier_1_routing_group( 0 ) } -> std::same_as<uint8_t>;
-  { state.tier_2_routing_group( 0 ) } -> std::same_as<uint8_t>;
-  { state.tier_routed( 0 ) } -> std::same_as<bool>;
+  { state.rank_tier_1( 0 ) } -> std::same_as<uint8_t>;
+  { state.rank_tier_2( 0 ) } -> std::same_as<uint8_t>;
+  { state.rank_assigned( 0 ) } -> std::same_as<bool>;
   { state.active( 0 ) } -> std::same_as<bool>;
 
   { state.set_prompt_id( 0, {} ) };
@@ -108,8 +109,8 @@ concept StateConcept = requires( T state, const T cstate, const std::string cstr
   { state.set_prompt_length( 0, 0 ) };
   { state.set_temperature( 0, 0.0f ) };
   { state.set_finished( 0 ) };
-  { state.set_tier_1_routing_group( 0, 0 ) };
-  { state.set_tier_2_routing_group( 0, 0 ) };
+  { state.set_rank_tier_1( 0, 0 ) };
+  { state.set_rank_tier_2( 0, 0 ) };
 
   { state.discard( 0 ) };
 
@@ -214,7 +215,7 @@ public:
   void set_has_activations( const bool has_activations ) { metadata_.has_activations = has_activations; }
   void set_has_queries( const bool has_queries ) { metadata_.has_queries = has_queries; }
   void set_has_kvs( const bool has_kvs ) { metadata_.has_kvs = has_kvs; }
-  void set_is_parent( const bool is_parent ) { metadata_.is_parent = is_parent; }
+  void set_is_sharded( const bool is_sharded ) { metadata_.is_sharded = is_shared; }
   void clear_discards();
 
   // metadata getters
@@ -228,7 +229,16 @@ public:
   bool has_activations() const { return metadata_.has_activations; }
   bool has_queries() const { return metadata_.has_queries; }
   bool has_kvs() const { return metadata_.has_kvs; }
-  bool is_parent() const { return metadata_.is_parent; }
+  bool is_sharded() const { return metadata_.is_sharded; }
+  bool all_rank_assigned() const
+  {
+    for ( int i = 0; i < metadata_.batch_size; i++ ) {
+      if ( not rank_assigned( i ) ) {
+        return false;
+      }
+    }
+    return true;
+  }
   uint32_t discarded_contexts() const { return metadata_.discarded_contexts; }
 
   const PromptID& discarded_prompt_id( const size_t i ) const { return discarded_contexts_.at( i ).prompt_id; }
@@ -240,8 +250,8 @@ public:
                    uint32_t token_pos,
                    float temperature,
                    uint32_t prompt_length,
-                   uint8_t tier_1_routing_group,
-                   uint8_t tier_2_routing_group );
+                   uint8_t rank_tier_1,
+                   uint8_t rank_tier_2 );
 
   // prompt getters
   PromptID prompt_id( const size_t i ) const { return prompts_[i].prompt_id; }
@@ -250,11 +260,12 @@ public:
   uint32_t prompt_length( const size_t i ) const { return prompts_[i].prompt_length; }
   float temperature( const size_t i ) const { return prompts_[i].temperature / 255.0f; }
   bool finished( const size_t i ) const { return prompts_[i].finished; }
-  uint8_t tier_1_routing_group( const size_t i ) const { return prompts_[i].tier_1_routing_group; }
-  uint8_t tier_2_routing_group( const size_t i ) const { return prompts_[i].tier_2_routing_group; }
-  bool tier_routed( const size_t i ) const
+  uint8_t rank_tier_1( const size_t i ) const { return prompts_[i].rank_tier_1; }
+  uint8_t rank_tier_2( const size_t i ) const { return prompts_[i].rank_tier_2; }
+  bool rank_assigned( const size_t i ) const
   {
-    return prompts_[i].tier_1_routing_group != -1 or prompts_[i].tier_2_routing_group != -1;
+    // TODO(pouya): -1 on uint8_t is bad practice!
+    return prompts_[i].rank_tier_1 != -1 or prompts_[i].rank_tier_2 != -1;
   }
   bool active( const size_t i ) const { return prompts_[i].active; }
 
@@ -265,14 +276,8 @@ public:
   void set_prompt_length( const size_t i, uint32_t prompt_length ) { prompts_[i].prompt_length = prompt_length; }
   void set_temperature( const size_t i, float t ) { prompts_[i].temperature = static_cast<uint8_t>( t * 255.0f ); }
   void set_finished( const size_t i ) { prompts_[i].finished = true; }
-  void set_tier_1_routing_group( const size_t i, uint8_t tier_1_routing_group )
-  {
-    prompts_[i].tier_1_routing_group = tier_1_routing_group;
-  }
-  void set_tier_2_routing_group( const size_t i, uint8_t tier_2_routing_group )
-  {
-    prompts_[i].tier_2_routing_group = tier_2_routing_group;
-  }
+  void set_rank_tier_1( const size_t i, uint8_t rank_tier_1 ) { prompts_[i].rank_tier_1 = rank_tier_1; }
+  void set_rank_tier_2( const size_t i, uint8_t rank_tier_2 ) { prompts_[i].rank_tier_2 = rank_tier_2; }
 
   void discard( const size_t i );
 
@@ -367,8 +372,8 @@ public:
   void set_has_activations( const bool has_activations ) { state_.set_has_activations( has_activations ); }
   void set_has_queries( const bool has_queries ) { state_.set_has_queries( has_queries ); }
   void set_has_kvs( const bool has_kvs ) { state_.set_has_kvs( has_kvs ); }
-  void set_is_parent( const bool is_parent ) { state_.set_is_parent( is_parent ); }
   // TODO(pouya): if spans share metadata with the original, this might break tier_router
+  void set_is_sharded( const bool is_sharded ) { state_.set_is_sharded( is_sharded ); }
   void clear_discards() { state_.clear_discards(); }
 
   uint64_t id() const { return state_.id(); }
@@ -381,7 +386,15 @@ public:
   bool has_activations() const { return state_.has_activations(); }
   bool has_queries() const { return state_.has_queries(); }
   bool has_kvs() const { return state_.has_kvs(); }
-  bool is_parent() const { return state_.is_parent(); }
+  bool is_sharded() const { return state_.is_sharded(); }
+  bool all_rank_assigned() const
+  {
+    for ( int i = 0; i < n_; i++ ) {
+      if ( not state_.rank_assigned( off_ + i ) )
+        return false;
+    }
+    return true;
+  }
   // TODO(pouya): if spans share metadata with the original, this might break tier_router
   uint32_t discarded_contexts() const { return state_.discarded_contexts(); }
 
@@ -393,11 +406,10 @@ public:
                    uint32_t token_pos,
                    float temperature,
                    uint32_t prompt_length,
-                   uint8_t tier_1_routing_group,
-                   uint8_t tier_2_routing_group )
+                   uint8_t rank_tier_1,
+                   uint8_t rank_tier_2 )
   {
-    state_.set_prompt(
-      off_ + i, prompt_id, token, token_pos, temperature, prompt_length, tier_1_routing_group, tier_2_routing_group );
+    state_.set_prompt( off_ + i, prompt_id, token, token_pos, temperature, prompt_length, rank_tier_1, rank_tier_2 );
   }
 
   PromptID prompt_id( const size_t i ) const { return state_.prompt_id( off_ + i ); }
@@ -407,9 +419,9 @@ public:
   float temperature( const size_t i ) const { return state_.temperature( off_ + i ); }
   bool finished( const size_t i ) const { return state_.finished( off_ + i ); }
   bool active( const size_t i ) const { return state_.active( off_ + i ); }
-  uint8_t tier_1_routing_group( const size_t i ) const { return state_.tier_1_routing_group( off_ + i ); }
-  uint8_t tier_2_routing_group( const size_t i ) const { return state_.tier_2_routing_group( off_ + i ); }
-  bool tier_routed( const size_t i ) const { return state_.tier_routed( off_ + i ); }
+  uint8_t rank_tier_1( const size_t i ) const { return state_.rank_tier_1( off_ + i ); }
+  uint8_t rank_tier_2( const size_t i ) const { return state_.rank_tier_2( off_ + i ); }
+  bool rank_assigned( const size_t i ) const { return state_.rank_assigned( off_ + i ); }
 
   void set_prompt_id( const size_t i, PromptID prompt_id ) { state_.set_prompt_id( off_ + i, prompt_id ); }
   void set_token( const size_t i, uint32_t token ) { state_.set_token( off_ + i, token ); }
@@ -417,14 +429,8 @@ public:
   void set_prompt_length( const size_t i, uint32_t len ) { state_.set_prompt_length( off_ + i, len ); }
   void set_temperature( const size_t i, float t ) { state_.set_temperature( off_ + i, t ); }
   void set_finished( const size_t i ) { state_.set_finished( off_ + i ); }
-  void set_tier_1_routing_group( const size_t i, uint8_t tier_1_routing_group )
-  {
-    state_.set_tier_1_routing_group( off_ + i, tier_1_routing_group );
-  }
-  void set_tier_2_routing_group( const size_t i, uint8_t tier_2_routing_group )
-  {
-    state_.set_tier_2_routing_group( off_ + i, tier_2_routing_group );
-  }
+  void set_rank_tier_1( const size_t i, uint8_t rank_tier_1 ) { state_.set_rank_tier_1( off_ + i, rank_tier_1 ); }
+  void set_rank_tier_2( const size_t i, uint8_t rank_tier_2 ) { state_.set_rank_tier_2( off_ + i, rank_tier_2 ); }
 
   void discard( const size_t i ) { state_.discard( off_ + i ); }
 
@@ -486,7 +492,7 @@ BatchedInferenceState<Config>::BatchedInferenceState( uint32_t batch_size,
   metadata_.has_queries = state_has_queries;
   metadata_.has_kvs = state_has_kvs;
   // TODO(pouya): check with sadjad if he prefers default initializations over this, or explicit initializations.
-  metadata_.is_parent = true;
+  metadata_.is_sharded = false;
 
   prompts_.resize( metadata_.batch_size );
 
@@ -606,8 +612,8 @@ void BatchedInferenceState<Config>::set_prompt( const size_t i,
                                                 uint32_t token_pos,
                                                 float temperature,
                                                 uint32_t prompt_length,
-                                                uint8_t tier_1_routing_group,
-                                                uint8_t tier_2_routing_group )
+                                                uint8_t rank_tier_1,
+                                                uint8_t rank_tier_2 )
 {
   prompts_[i].prompt_id = prompt_id;
   prompts_[i].token = token;
@@ -616,8 +622,8 @@ void BatchedInferenceState<Config>::set_prompt( const size_t i,
   prompts_[i].prompt_length = prompt_length;
   prompts_[i].finished = false;
   prompts_[i].active = true;
-  prompts_[i].tier_1_routing_group = tier_1_routing_group;
-  prompts_[i].tier_2_routing_group = tier_2_routing_group;
+  prompts_[i].rank_tier_1 = rank_tier_1;
+  prompts_[i].rank_tier_2 = rank_tier_2;
 }
 
 template<typename Config>
@@ -687,8 +693,7 @@ bool BatchedInferenceState<Config>::replenish_from( BatchedInferenceState& other
   CHECK_EQ( metadata_.has_activations, other.metadata_.has_activations ) << "States with different activation states";
   CHECK_EQ( metadata_.has_queries, other.metadata_.has_queries ) << "States with different query states";
   CHECK_EQ( metadata_.has_kvs, other.metadata_.has_kvs ) << "States with different key-value states";
-  // TODO(pouya): allow replenishing in different tier groups?
-  // TODO(pouya): allow replenishing between parent child?
+  CHECK_EQ( metadata_.is_sharded, other.metadata_.is_sharded ) << "Sharded and Monolithic states";
 
   // copy the discard list
   metadata_.discarded_contexts += other.metadata_.discarded_contexts;
@@ -713,6 +718,18 @@ bool BatchedInferenceState<Config>::replenish_from( BatchedInferenceState& other
         // no more active prompts in the other state
         return false;
       }
+    }
+
+    // We can only replenish when (1) either the other prompt is not rank assigned, and we can assign it to whatever
+    // rank the discarded prompt had, or (2) they have the same rank.
+    // So this condition won't trigger if 'other' is entirely unassigned. The second condition should ideally never get
+    // triggered, since it is hard to reason about it before runtime.
+    if ( not other.prompts_[other_idx].rank_assigned ) {
+      other.prompts_[other_idx].tier_1_rank = prompt.tier_1_rank;
+      other.prompts_[other_idx].tier_2_rank = prompt.tier_2_rank;
+    } else {
+      CHECK_EQ( other.prompts_[other_idx].tier_1_rank, prompt.tier_1_rank );
+      CHECK_EQ( other.prompts_[other_idx].tier_2_rank, prompt.tier_2_rank );
     }
 
     prompt = other.prompts_[other_idx];
@@ -860,8 +877,7 @@ void BatchedInferenceState<Config>::merge( BatchedInferenceState&& other )
   CHECK_EQ( metadata_.has_activations, other.metadata_.has_activations ) << "States with different activation states";
   CHECK_EQ( metadata_.has_queries, other.metadata_.has_queries ) << "States with different query states";
   CHECK_EQ( metadata_.has_kvs, other.metadata_.has_kvs ) << "States with different key-value states";
-  // TODO(pouya): allow merging in different tier groups?
-  // TODO(pouya): allow merging between parent child?
+  CHECK_EQ( metadata_.is_sharded, other.metadata_.is_sharded ) << "Sharded and Monolithic states";
 
   BatchedInferenceState new_state;
   new_state.metadata_ = metadata_;
@@ -918,7 +934,7 @@ std::string BatchedInferenceState<Config>::debug_string( const bool prompt_detai
       << "next_stage=" << metadata_.next_stage << ", " << "has_activations=" << metadata_.has_activations << ", "
       << "activations.len=" << activations_.len() << ", " << "has_queries=" << metadata_.has_queries << ", "
       << "queries.len=" << queries_.len() << ", " << "has_kvs=" << metadata_.has_kvs << ", " << "kvs.len=" << kvs_.len()
-      << ", " << "is_parent=" << metadata_.is_parent << "discarded_contexts=[ ";
+      << ", " << "is_sharded=" << metadata_.is_sharded << "discarded_contexts=[ ";
 
   for ( const auto& d : discarded_contexts_ ) {
     oss << " " << d.prompt_id.base58digest().substr( 0, 8 );
@@ -931,8 +947,8 @@ std::string BatchedInferenceState<Config>::debug_string( const bool prompt_detai
 
     for ( const auto& p : prompts_ ) {
       oss << " (" << p.prompt_id.base58digest().substr( 0, 8 ) << ", " << p.token << ", " << p.token_pos << ", "
-          << ( p.temperature / 255.0f ) << ", " << p.prompt_length << ", " << p.finished << ", {"
-          << p.tier_1_routing_group << ", " << p.tier_2_routing_group << "}) ";
+          << ( p.temperature / 255.0f ) << ", " << p.prompt_length << ", " << p.finished << ", {" << p.rank_tier_1
+          << ", " << p.rank_tier_2 << "}) ";
     }
 
     oss << "]";

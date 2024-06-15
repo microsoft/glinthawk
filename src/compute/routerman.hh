@@ -27,6 +27,16 @@
 
 namespace glinthawk::compute {
 
+// Terminology:
+// 'Node': a compute machine that runs forward operations for a number of layers.
+// 'Tier': A set of nodes that either mainly 1. focus on compute-heavy operations (e.g., Post-Attention) or 2. focus
+//         predominantly on memory-heavy tasks (e.g., Attention)
+// 'Rank': an arbitrary index between nodes in a Tier.
+// 'Slice': all nodes that serve an atomic unit of layers, e.g., if each node serves 2 layers, all nodes serving layers
+//          0 and 1 are a slice.
+// 'Monolithic State' or 'Monolith': a BatchedInferenceState that has not been broken to smaller pieces.
+// 'Sharded State' or 'Shard': a piece of a monolith that is only relevant to a single node.
+
 template<typename Model>
 class TierRouter
 {
@@ -60,19 +70,17 @@ protected:
 /// multiple layers. The other nodes in the slice have a ChildTierRouter that pass states through with no delay. There
 /// is a possibility for improving this, where the tier-to-tier gather and scatter operations are distributed.
 /// ParentTierRouter distinguishes states as two types:
-///     Parent BatchInferenceState: which is a full batch across all machines in both tiers.
-///     Child BatchInferenceState: which is a specific part of a parent dedicated to a specific machine.
-/// ParentTierRouter receives parent/child states through push, and returns child through an outgoing queue. It sends to
-/// and receives local child states from the compute kernel directly.
-/// The worker reads an outgoing queue from ParentTierRouter to send out outbound parent states.
-/// ParentTierRouter fully handles context management, and guarantees that if a child state arrives at the kernel, that
+///     Monolithic BatchInferenceState: which is a full batch across all machines in both tiers.
+///     Sharded BatchInferenceState: which is a specific part of a monolith dedicated to a specific machine.
+/// ParentTierRouter receives monolithic/sharded states through push, and returns monolithic/sharded states through an
+/// outgoing queue. It sends local shards to and receives them from the compute kernel directly.
+/// The worker reads an outgoing queue from ParentTierRouter to send out outbound states.
+/// ParentTierRouter fully handles context management, and guarantees that if a shard arrives at the kernel, that
 /// kernel has space for it.
 // TODO(pouya): can straggler's cause an unstable failure mode in dispersing work among tiers?
 // TODO(pouya): how does routing work?
-// TODO(pouya): how does worker know to send a child state back to its origin?
+// TODO(pouya): how does worker know to send a shard back to its origin?
 // TODO(pouya): I'm forcing kernel to not have an outgoing queue. Talk to sadjad about this.
-// TODO(pouya): the parent child distinction is overloaded in state and tier router. Find better terminology. What does
-//  MPI use?
 template<typename Model>
 class ParentTierRouter : public glinthawk::compute::TierRouter
 {
@@ -86,21 +94,22 @@ public:
                     const kv_slots_tier_2,
                     const typename Model::SettingsType& settings );
 
-  // TODO(pouya): anything to do in the deconstructor?
   virtual ~ParentTierRouter() override;
 
   /// @brief
-  /// 1. Push child state from kernel -> process_child_state, may internally call process_parent_state
+  /// 1. Push sharded state from kernel -> process_shard, may internally call process_monolith
   virtual void push_from_kernel( glinthawk::models::BatchedInferenceState<ConfigType>&& state ) override;
 
   /// @brief
-  /// 1. Push parent state from worker -> calls process_parent_state
-  /// 2. Push child state from worker -> process_child_state, may internally call process_parent_state
+  /// 1. Push monolithic state from worker -> calls process_monolith
+  /// 2. Push sharded state from worker -> process_shard, may internally call process_monolith
   virtual void push_from_worker( glinthawk::models::BatchedInferenceState<ConfigType>&& state ) override;
 
   /// @brief
-  /// pop is called by the worker to receive states, that (1) are parent states that are no longer local to the node, or
-  /// (2) are child states that resulted from the local node pushing the last
+  /// pop is called by the worker to receive states, that are:
+  /// 1. monoliths that are no longer local to the node.
+  /// 2. shards that the compute kernel processed.
+  /// 3. shards that resulted from a monolith being broken.
   virtual bool pop( glinthawk::models::BatchedInferenceState<ConfigType>& state ) override;
 
   /// @brief
@@ -138,14 +147,14 @@ private:
   const size_t end_layer_;
 
   // TODO(pouya): double check if reference_wrapper is necessary here
-  std::vector<std::deque<RefStateType>> tier_1_idle_child_states_;
-  std::vector<std::deque<RefStateType>> tier_2_idle_child_states_;
+  std::vector<std::deque<RefStateType>> tier_1_idle_shards_;
+  std::vector<std::deque<RefStateType>> tier_2_idle_shards_;
 
-  std::vector<size_t> tier_1_idle_child_state_counts_;
-  std::vector<size_t> tier_2_idle_child_state_counts_;
+  std::vector<size_t> tier_1_idle_shard_counts_;
+  std::vector<size_t> tier_2_idle_shard_counts_;
 
   std::mutex ctx_mutex_;
-  std::mutex children_mutex_;
+  std::mutex shards_mutex_;
 
   inline size_t vector_index( const size_t layer, const Stage stage ) const
   {
@@ -169,34 +178,34 @@ private:
     return state.next_layer() >= start_layer_ and state.next_layer() <= end_layer_;
   }
 
-  bool can_form_parent( const size_t layer, const Stage stage ) const;
+  bool can_form_monolith( const size_t layer, const Stage stage ) const;
 
-  StateType&& form_parent( const size_t layer, const Stage stage );
+  StateType&& form_monolith( const size_t layer, const Stage stage );
 
   /// @brief
-  /// assign_sub_groups assigns tier_routing_group indices to states that have not been assigned them before. The
+  /// assign_ranks assigns tier_routing_group indices to states that have not been assigned them before. The
   /// assignment is based on the index of each prompt in the state. Input states are either fully assigned (all slots
   /// in the batch inference state were assigned before) or none were assigned. If they were unassigned, the TierRouter
   /// "reserves" context for them as well. This function is called a finite number of times before all context slots are
   /// taken, and never called again. Note that when worker replaces a discarded prompt, it keeps any assigned
   /// tier_routing_group indices. This is important to avoid situations where new prompts are assigned to tier sub
   /// groups that their neighbors do not belong in, which causes fragmentation.
-  void assign_sub_groups( StateType& state );
+  void assign_ranks( StateType& state );
 
   /// @brief
-  /// process_parent_state breaks the `parent' state to `child' states by the tier_routing_group in each prompt. Each
-  /// child must have context on the remote/local machine for it. This is guaranteed by checking with
-  /// is_context_available() before scheduling "new" states that are made from scratch. Old states with new prompts in
-  /// discarded spots are by default going to have context.
-  void process_parent_state( StateType&& state );
+  /// process_monolith breaks the state to sharded states by the tier_routing_group in each prompt. Each shard must have
+  /// context on the remote/local machine for it. This is guaranteed by checking with is_context_available() before
+  /// scheduling "new" states that are made from scratch. Old states with new prompts in discarded spots are by default
+  /// going to have context.
+  void process_monolith( StateType&& state );
 
   /// @brief
-  /// process_child_state manages an internal memory to merge states of various tiers together. If it receives a child
-  /// state, it saves it. Upon merging, it may process it the same way it does the parent. If the parent does not need
-  /// processing (is not local to that machine anymore, e.g., is for a different slice) it is sent out via an outgoing
-  /// queue that the worker communicates with. This function may be indirectly called by the compute kernel or the
-  /// worker.
-  void process_child_state( StateType&& state );
+  /// process_shard manages an internal memory to merge states of various tiers together. If it receives a sharded
+  /// state, it saves it. Upon merging, it may process it the same way it does the monolith. If the monolith does not
+  /// need processing (is not local to that machine anymore, e.g., is for a different slice) it is sent out via an
+  /// outgoing queue that the worker communicates with. This function may be indirectly called by the compute kernel or
+  /// the worker.
+  void process_shard( StateType&& state );
 };
 
 template<typename Model>
@@ -217,10 +226,10 @@ void ParentTierRouter<Model>::ParentTierRouter( const ComputeKernel& compute_ker
   , free_contexts_tier_2_( n_tier_2, settings.start_layer_num == 0 ? kv_slots_tier_2 : 0 )
   , start_layer_( settings.start_layer_num )
   , end_layer_( settings.end_layer_num )
-  , tier_1_idle_child_states_( n_tier_1 )
-  , tier_2_idle_child_states_( n_tier_2 )
-  , tier_1_idle_child_state_counts_( n_tier_1, 0 )
-  , tier_2_idle_child_state_counts_( n_tier_2, 0 )
+  , tier_1_idle_shards_( n_tier_1 )
+  , tier_2_idle_shards_( n_tier_2 )
+  , tier_1_idle_shard_counts_( n_tier_1, 0 )
+  , tier_2_idle_shard_counts_( n_tier_2, 0 )
 {
   // TODO(pouya): if there is only one slice, a generated batch never gets pushed to worker to report generations.
   CHECK_EQ( start_layer_ == 0 and end_layer_ == ConfigType::n_layers - 1, false );
@@ -229,16 +238,16 @@ void ParentTierRouter<Model>::ParentTierRouter( const ComputeKernel& compute_ker
 template<typename Model>
 void ParentTierRouter<Model>::push_from_kernel( models::BatchedInferenceState<ConfigType>&& state )
 {
-  process_child_state( std::move( state ) );
+  process_shard( std::move( state ) );
 }
 
 template<typename Model>
 void ParentTierRouter<Model>::push_from_worker( models::BatchedInferenceState<ConfigType>&& state )
 {
-  if ( state.is_parent() )
-    process_parent_state( std::move( state ) );
+  if ( state.is_sharded() )
+    process_shard( std::move( state ) );
   else
-    process_child_state( std::move( state ) );
+    process_monolith( std::move( state ) );
 }
 
 template<typename Model>
@@ -275,29 +284,27 @@ bool ParentTierRouter<Model>::is_context_available()
 }
 
 template<typename Model>
-bool ParentTierRouter<Model>::can_form_parent( const size_t layer, const Stage stage )
+bool ParentTierRouter<Model>::can_form_monolith( const size_t layer, const Stage stage )
 {
-  std::lock_guard lock { children_mutex_ };
+  std::lock_guard lock { shards_mutex_ };
 
-  return tier_1_idle_child_state_counts_[vector_index( layer, stage )] > n_tier_1_ * concurrency_tier_1_.get( stage )
-         and tier_2_idle_child_state_counts_[vector_index( layer, stage )]
-               > n_tier_2_ * concurrency_tier_2_.get( stage )
+  return tier_1_idle_shard_counts_[vector_index( layer, stage )] > n_tier_1_ * concurrency_tier_1_.get( stage )
+         and tier_2_idle_shard_counts_[vector_index( layer, stage )] > n_tier_2_ * concurrency_tier_2_.get( stage )
 }
 
 template<typename Model>
-void ParentTierRouter<Model>::assign_sub_groups( StateType& state )
+void ParentTierRouter<Model>::assign_ranks( StateType& state )
 {
-  CHECK_EQ( ( state.is_parent(), true );
+  CHECK_EQ( ( state.is_sharded(), false );
   CHECK_EQ( ( state.batch_size(), n_tier_1_ * concurrency_tier_1_.get( stage ) + n_tier_2_ * concurrency_tier_2_.get( stage ) );
-  bool already_assigned = state.tier_routed( 0 );
+  bool already_assigned = state.rank_assigned( 0 );
   for ( size_t i = 0; i < state.batch_size(); i++ ) {
-    if ( already_assigned != state.tier_routed( i ) ) {
-      LOG( FATAL ) << "Either all prompts are already tier-routed or none of them are.";
-    }
-    if ( not state.tier_routed( i ) ) {
+    CHECK_EQ( already_assigned, state.rank_assigned( i ) )
+      << "Either all prompts are already tier-routed or none of them are.";
+    if ( not state.rank_assigned( i ) ) {
       const auto t_ind = tier_index( i, stage );
-      state.set_tier_1_routing_group( t_ind.first );
-      state.set_tier_2_routing_group( t_ind.second );
+      state.set_rank_tier_1( t_ind.first );
+      state.set_rank_tier_2( t_ind.second );
       if ( t_ind.second == -1 ) {
         std::lock_guard lock { ctx_mutex_ };
         CHECK_GE( free_contexts_tier_1_[t_ind.first], concurrency_tier_1_.get( Stage::Attention ) );
@@ -308,15 +315,15 @@ void ParentTierRouter<Model>::assign_sub_groups( StateType& state )
         free_contexts_tier_2_[t_ind.second] -= concurrency_tier_2_.get( Stage::Attention );
       }
     }
-  }
+}
 }
 
 template<typename Model>
-StateType&& ParentTierRouter<Model>::form_parent( const size_t layer, const Stage stage )
+StateType&& ParentTierRouter<Model>::form_monolith( const size_t layer, const Stage stage )
 {
   const auto vi = vector_index( layer, stage );
 
-  std::lock_guard lock { children_mutex_ };
+  std::lock_guard lock { shards_mutex_ };
   // TODO(pouya): this is probably super inefficient. We should be able to "reserve" the correct size beforehand.
   // TODO(pouya): merge creates a new state underneath, that should be unnecessary if we have the full size allocated.
   // TODO(pouya): not sure if a "lazy" merge isn't a better option, especially if we're going to send it over the wire
@@ -325,42 +332,43 @@ StateType&& ParentTierRouter<Model>::form_parent( const size_t layer, const Stag
   // TODO(pouya): while not sending states with batch_size=0 is efficient, this is spaghetti code. Better code would be
   //  to compile a list of states to merge, and then use a single function to merge them.
   if ( concurrency_tier_1_.get( stage ) > 0 ) {
-    base_state = std::move( tier_1_idle_child_states_[vi].front()->get() );
-    tier_1_idle_child_states_[vi].pop_front();
-    tier_1_idle_child_state_counts_[vi] -= concurrency_tier_1_.get( stage );
+    base_state = std::move( tier_1_idle_shards_[vi].front()->get() );
+    tier_1_idle_shards_[vi].pop_front();
+    tier_1_idle_shard_counts_[vi] -= concurrency_tier_1_.get( stage );
     for ( size_t i = 1; i < n_tier_1_; i++ ) {
-      base_state.merge( std::move( tier_1_idle_child_states_[vi].front()->get() ) );
-      tier_1_idle_child_states_[vi].pop_front();
-      tier_1_idle_child_state_counts_[vi] -= concurrency_tier_1_.get( stage );
+      base_state.merge( std::move( tier_1_idle_shards_[vi].front()->get() ) );
+      tier_1_idle_shards_[vi].pop_front();
+      tier_1_idle_shard_counts_[vi] -= concurrency_tier_1_.get( stage );
     }
     if ( concurrency_tier_2_.get( stage ) > 0 ) {
       for ( size_t i = 0; i < n_tier_2_; i++ ) {
-        base_state.merge( std::move( tier_2_idle_child_states_[vi].front()->get() ) );
-        tier_2_idle_child_states_[vi].pop_front();
-        tier_2_idle_child_state_counts_[vi] -= concurrency_tier_2_.get( stage );
+        base_state.merge( std::move( tier_2_idle_shards_[vi].front()->get() ) );
+        tier_2_idle_shards_[vi].pop_front();
+        tier_2_idle_shard_counts_[vi] -= concurrency_tier_2_.get( stage );
       }
     }
   } else {
     CHECK_GT( concurrency_tier_2_.get( stage ), 0 );
-    base_state = std::move( tier_2_idle_child_states_[vi].front()->get() );
-    tier_2_idle_child_states_[vi].pop_front();
-    tier_2_idle_child_state_counts_[vi] -= concurrency_tier_2_.get( stage );
+    base_state = std::move( tier_2_idle_shards_[vi].front()->get() );
+    tier_2_idle_shards_[vi].pop_front();
+    tier_2_idle_shard_counts_[vi] -= concurrency_tier_2_.get( stage );
     for ( size_t i = 1; i < n_tier_2_; i++ ) {
-      base_state.merge( std::move( tier_2_idle_child_states_[vi].front()->get() ) );
-      tier_2_idle_child_states_[vi].pop_front();
-      tier_2_idle_child_state_counts_[vi] -= concurrency_tier_2_.get( stage );
+      base_state.merge( std::move( tier_2_idle_shards_[vi].front()->get() ) );
+      tier_2_idle_shards_[vi].pop_front();
+      tier_2_idle_shard_counts_[vi] -= concurrency_tier_2_.get( stage );
     }
   }
+  base_state.set_is_sharded( false );
   return base_state;
 }
 
 template<typename Model>
-void ParentTierRouter<Model>::process_parent_state( StateType&& state )
+void ParentTierRouter<Model>::process_monolith( StateType&& state )
 {
-  assign_sub_groups( state );
+  assign_ranks( state );
   if ( not is_served_in_this_slice( state ) ) {
     {
-      // TODO(pouya): not sure if it makes sense to merge parent in the current slice if the next stage is in another
+      // TODO(pouya): not sure if it makes sense to merge monolith in the current slice if the next stage is in another
       //  slice. In general, optimizing the data transfer graph between tiers in different slices is something we should
       //  think about.
       std::lock_guard lock { outgoing_.mutex };
@@ -372,18 +380,22 @@ void ParentTierRouter<Model>::process_parent_state( StateType&& state )
     if ( concurrency_tier_1_.get( state.next_stage() ) > 0 ) {
 
       auto [state_rank_0_t1, state] = state.split( concurrency_tier_1_.get( state.next_stage() ) );
+      state_rank_0_t1.set_is_sharded( true );
       compute_kernel_->push( std::move( state_rank_0_t1 ) );
       {
         std::lock_guard lock { outgoing_.mutex };
         for ( size_t i = 1; i < n_tier_1_; i++ ) {
           auto [state_rank_i_t1, state] = state.split( concurrency_tier_1_.get( state.next_stage() ) );
+          state_rank_i_t1.set_is_sharded( true );
           outgoing_.emplace( std::move( state_rank_i_t1 ) );
         }
         if ( concurrency_tier_2_.get( state.next_stage() ) > 0 ) {
           for ( size_t i = 0; i < n_tier_2_ - 1; i++ ) {
             auto [state_rank_i_t2, state] = state.split( concurrency_tier_2_.get( state.next_stage() ) );
+            state_rank_i_t2.set_is_sharded( true );
             outgoing_.emplace( std::move( state_rank_i_t2 ) );
           }
+          state.set_is_sharded( true );
           outgoing_.emplace( std::move( state ) );
         }
       }
@@ -393,8 +405,10 @@ void ParentTierRouter<Model>::process_parent_state( StateType&& state )
         CHECK_GT( concurrency_tier_2_.get( state.next_stage() ), 0 );
         for ( size_t i = 0; i < n_tier_2_ - 1; i++ ) {
           auto [state_rank_i_t2, state] = state.split( concurrency_tier_2_.get( state.next_stage() ) );
+          state_rank_i_t2.set_is_sharded( true );
           outgoing_.emplace( std::move( state_rank_i_t2 ) );
         }
+        state.set_is_sharded( true );
         outgoing_.emplace( std::move( state ) );
       }
     }
@@ -403,31 +417,27 @@ void ParentTierRouter<Model>::process_parent_state( StateType&& state )
 }
 
 template<typename Model>
-void ParentTierRouter<Model>::process_child_state( StateType&& state )
+void ParentTierRouter<Model>::process_shard( StateType&& state )
 {
-  for ( size_t i = 0; i < state.batch_size(); i++ ) {
-    if ( not state.tier_routed( i ) ) {
-      LOG( FATAL ) << "Child states must always be already routed.";
-    }
-  }
+  CHECK_EQ( state.all_rank_assigned() ) << "Sharded states must always be already routed.";
 
   const auto next_stage = state.next_stage();
   const auto next_layer = state.next_layer();
   const auto vi = vector_index( next_layer, next_stage );
   {
-    std::lock_guard lock { children_mutex_ };
-    if ( state.get_tier_1_routing_group( 0 ) > -1 ) {
-      tier_1_idle_child_state_counts_[vi] += state.batch_size();
-      tier_1_idle_child_states_[vi].push_back( RefStateType( std::move( state ) ) );
+    std::lock_guard lock { shards_mutex_ };
+    if ( state.get_rank_tier_1( 0 ) > -1 ) {
+      tier_1_idle_shard_counts_[vi] += state.batch_size();
+      tier_1_idle_shards_[vi].push_back( RefStateType( std::move( state ) ) );
     } else {
-      tier_2_idle_child_state_counts_[vi] += state.batch_size();
-      tier_2_idle_child_states_[vi].push_back( RefStateType( std::move( state ) ) );
+      tier_2_idle_shard_counts_[vi] += state.batch_size();
+      tier_2_idle_shards_[vi].push_back( RefStateType( std::move( state ) ) );
     }
   }
 
-  if ( can_form_parent( next_layer, next_stage ) ) {
-    StateType merged_parent_state = form_parent( next_layer, next_stage );
-    process_parent_state( std::move( merged_parent_state ) );
+  if ( can_form_monolith( next_layer, next_stage ) ) {
+    StateType monolithic_state = form_monolith( next_layer, next_stage );
+    process_monolith( std::move( monolithic_state ) );
   }
 }
 
@@ -450,11 +460,11 @@ public:
   virtual ChildTierRouter() override;
 
   /// @brief
-  /// 1. Push child state from kernel -> send state to worker
+  /// 1. Push sharded state from kernel -> send state to worker
   virtual void push_from_kernel( glinthawk::models::BatchedInferenceState<ConfigType>&& state ) override;
 
   /// @brief
-  /// 1. Push child state from worker -> send state to kernel
+  /// 1. Push sharded state from worker -> send state to kernel
   virtual void push_from_worker( glinthawk::models::BatchedInferenceState<ConfigType>&& state ) override;
 
   /// @brief
