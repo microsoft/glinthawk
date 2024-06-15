@@ -51,7 +51,14 @@ class TierRouter
 {
 public:
   // TODO(pouya): complete the constructor
-  TierRouter();
+  TierRouter( const size_t n_tier_1,
+              const Concurrency concurrency_tier_1,
+              const kv_slots_tier_1,
+              const size_t n_tier_2,
+              const Concurrency concurrency_tier_2,
+              const kv_slots_tier_2,
+              const typename Model::SettingsType& settings,
+              const std::unique_ptr<ComputeKernel> compute_kernel );
 
   ~TierRouter();
 
@@ -71,30 +78,34 @@ private:
   using ConfigType = typename Model::ConfigType;
   using Stage = glinthawk::models::InferenceStage;
   using StateType = typename glinthawk::models::BatchedInferenceState<ConfigType>;
+  // TODO(pouya): double check if reference_wrapper is necessary here
+  using RefStateType = typename std::reference_wrapper<StateType>;
 
   /// @brief
   /// For now we assume all tier 1 machines are alike and all tier 2 machines are alike.
   /// The TierRouter does not need to know if the kernel is hybrid or not. It treats hybrid kernels as a sum of two
   /// concurrencies.
-  // TODO(pouya): why do we need kv_slots here?
   const size_t n_tier_1_;
-  const size_t kv_slots_tier_1_;
   const Concurrency concurrency_tier_1_;
   const size_t n_tier_2_;
-  const size_t kv_slots_tier_2_;
   const Concurrency concurrency_tier_2_;
 
   const size_t start_layer_;
   const size_t end_layer_;
 
+  // Worker no longer sees compute kernel. Only the tier router does.
+  std::unique_ptr<ComputeKernel> compute_kernel_ { nullptr };
+
   std::vector<VirtualPreallocatingContextManager<Model>> cms_tier_1_;
   std::vector<VirtualPreallocatingContextManager<Model>> cms_tier_2_;
 
-  std::vector<std::deque<StateType>> tier_1_idle_child_states_;
-  std::vector<std::deque<StateType>> tier_2_idle_child_states_;
+  std::vector<std::deque<RefStateType>> tier_1_idle_child_states_;
+  std::vector<std::deque<RefStateType>> tier_2_idle_child_states_;
 
   std::vector<size_t> tier_1_idle_child_state_counts_;
   std::vector<size_t> tier_2_idle_child_state_counts_;
+
+  // TODO(pouya): queue for children waiting for context.
 
   std::mutex push_mutex_;
   EventFD event_fd_ {};
@@ -108,11 +119,11 @@ private:
 
   std::pair<uint8_t, uint8_t> tier_index( const size_t batch_index, const Stage stage ) const
   {
-    // TODO(pouya): is the syntax right?
     if ( i < n_tier_1_ * concurrency_tier_1_.get( stage ) ) {
-      return { i / concurrency_tier_1_.get( stage ), -1 };
+      return std::make_pair( i / concurrency_tier_1_.get( stage ), -1 );
     } else {
-      return { -1, ( i - n_tier_1_ * concurrency_tier_1_.get( stage ) ) / concurrency_tier_2_.get( stage ) };
+      return std::make_pair( -1,
+                             ( i - n_tier_1_ * concurrency_tier_1_.get( stage ) ) / concurrency_tier_2_.get( stage ) );
     }
   }
 
@@ -125,8 +136,6 @@ private:
 
   bool can_form_parent( const size_t layer, const Stage stage ) const;
 
-  // TODO(pouya): looks super redundant with the above function
-  // TODO(pouya): is the signature right?
   StateType&& form_parent( const size_t layer, const Stage stage );
 
   /// @brief
@@ -183,8 +192,8 @@ bool TierRouter<Model>::pop( models::BatchedInferenceState<ConfigType>& state )
 template<typename Model>
 bool TierRouter<Model>::can_form_parent( const size_t layer, const Stage stage )
 {
-  return tier_1_idle_child_state_counts_( vector_index( layer, stage ) ) > n_tier_1_ * concurrency_tier_1_.get( stage )
-         and tier_2_idle_child_state_counts_( vector_index( layer, stage ) )
+  return tier_1_idle_child_state_counts_[vector_index( layer, stage )] > n_tier_1_ * concurrency_tier_1_.get( stage )
+         and tier_2_idle_child_state_counts_[vector_index( layer, stage )]
                > n_tier_2_ * concurrency_tier_2_.get( stage )
 }
 
@@ -209,7 +218,42 @@ void TierRouter<Model>::assign_sub_groups( StateType& state ) const
 template<typename Model>
 StateType&& TierRouter<Model>::form_parent( const size_t layer, const Stage stage )
 {
-  // TODO(pouya): merge children to parent
+  const auto vi = vector_index( layer, stage );
+  // TODO(pouya): this is probably super inefficient. We should be able to "reserve" the correct size beforehand.
+  // TODO(pouya): merge creates a new state underneath, that should be unnecessary if we have the full size allocated.
+  // TODO(pouya): not sure if a "lazy" merge isn't a better option, especially if we're going to send it over the wire
+  //  next. We can do an unlazify() func in compute_kernel->incoming thread for cases where it is going to the kernel.
+  StateType base_state;
+  // TODO(pouya): while not sending states with batch_size=0 is efficient, this is spaghetti code. Better code would be
+  //  to compile a list of states to merge, and then use a single function to merge them.
+  if ( concurrency_tier_1_.get( stage ) > 0 ) {
+    base_state = std::move( tier_1_idle_child_states_[vi].front()->get() );
+    tier_1_idle_child_states_[vi].pop_front();
+    tier_1_idle_child_state_counts_[vi] -= concurrency_tier_1_.get( stage );
+    for ( size_t i = 1; i < n_tier_1_; i++ ) {
+      base_state.merge( std::move( tier_1_idle_child_states_[vi].front()->get() ) );
+      tier_1_idle_child_states_[vi].pop_front();
+      tier_1_idle_child_state_counts_[vi] -= concurrency_tier_1_.get( stage );
+    }
+    if ( concurrency_tier_2_.get( stage ) > 0 ) {
+      for ( size_t i = 0; i < n_tier_2_; i++ ) {
+        base_state.merge( std::move( tier_2_idle_child_states_[vi].front()->get() ) );
+        tier_2_idle_child_states_[vi].pop_front();
+        tier_2_idle_child_state_counts_[vi] -= concurrency_tier_2_.get( stage );
+      }
+    }
+  } else {
+    CHECK_GT( concurrency_tier_2_.get( stage ), 0 );
+    base_state = std::move( tier_2_idle_child_states_[vi].front()->get() );
+    tier_2_idle_child_states_[vi].pop_front();
+    tier_2_idle_child_state_counts_[vi] -= concurrency_tier_2_.get( stage );
+    for ( size_t i = 1; i < n_tier_2_; i++ ) {
+      base_state.merge( std::move( tier_2_idle_child_states_[vi].front()->get() ) );
+      tier_2_idle_child_states_[vi].pop_front();
+      tier_2_idle_child_state_counts_[vi] -= concurrency_tier_2_.get( stage );
+    }
+  }
+  return base_state;
 }
 
 template<typename Model>
@@ -217,12 +261,52 @@ void TierRouter<Model>::process_parent_state( StateType&& state )
 {
   if ( not is_served_in_this_slice( state ) ) {
     {
+      // TODO(pouya): not sure if it makes sense to merge parent in the current slice if the next stage is in another
+      //  slice. In general, optimizing the data transfer graph between tiers in different slices is something we should
+      //  think about.
       std::lock_guard lock { outgoing_.mutex };
       outgoing_.emplace( std::move( state ) );
     }
     event_fd_.write_event();
   } else {
-    // TODO(pouya): break the parent and route
+    // TODO(pouya): this is yet again spaghetti code. A better split function should take a list of batch sizes and
+    //  split them. If some batch_size=0, it should ignore it. We can also cache these size lists for efficiency.
+    if ( concurrency_tier_1_.get( state.next_stage() ) > 0 ) {
+
+      // TODO(pouya): handle context management
+      auto [state_rank_0_t1, state] = state.split( concurrency_tier_1_.get( state.next_stage() ) );
+      compute_kernel_->push( std::move( state_rank_0_t1 ) );
+      {
+        std::lock_guard lock { outgoing_.mutex };
+        for ( size_t i = 1; i < n_tier_1_; i++ ) {
+          auto [state_rank_i_t1, state] = state.split( concurrency_tier_1_.get( state.next_stage() ) );
+          outgoing_.emplace( std::move( state_rank_i_t1 ) );
+          // TODO: one write_event per state?
+          event_fd_.write_event();
+        }
+        if ( concurrency_tier_2_.get( state.next_stage() ) > 0 ) {
+          for ( size_t i = 0; i < n_tier_2_ - 1; i++ ) {
+            auto [state_rank_i_t2, state] = state.split( concurrency_tier_2_.get( state.next_stage() ) );
+            outgoing_.emplace( std::move( state_rank_i_t2 ) );
+            event_fd_.write_event();
+          }
+          outgoing_.emplace( std::move( state ) );
+          event_fd_.write_event();
+        }
+      }
+    } else {
+      {
+        std::lock_guard lock { outgoing_.mutex };
+        CHECK_GT( concurrency_tier_2_.get( state.next_stage() ), 0 );
+        for ( size_t i = 0; i < n_tier_2_ - 1; i++ ) {
+          auto [state_rank_i_t2, state] = state.split( concurrency_tier_2_.get( state.next_stage() ) );
+          outgoing_.emplace( std::move( state_rank_i_t2 ) );
+          event_fd_.write_event();
+        }
+        outgoing_.emplace( std::move( state ) );
+        event_fd_.write_event();
+      }
+    }
   }
 }
 
@@ -241,10 +325,10 @@ void TierRouter<Model>::process_child_state( StateType&& state )
 
   if ( state.get_tier_1_routing_group( 0 ) > -1 ) {
     tier_1_idle_child_state_counts_[vi] += state.batch_size();
-    tier_1_idle_child_states_[vi].push_back( std::move( state ) );
+    tier_1_idle_child_states_[vi].push_back( RefStateType( std::move( state ) ) );
   } else {
     tier_2_idle_child_state_counts_[vi] += state.batch_size();
-    tier_2_idle_child_states_[vi].push_back( std::move( state ) );
+    tier_2_idle_child_states_[vi].push_back( RefStateType( std::move( state ) ) );
   }
 
   if ( can_form_parent( next_layer, next_stage ) ) {
