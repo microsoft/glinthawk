@@ -35,7 +35,7 @@ namespace glinthawk::compute {
 // 'Slice': all nodes that serve an atomic unit of layers, e.g., if each node serves 2 layers, all nodes serving layers
 //          0 and 1 are a slice.
 // 'Monolithic State' or 'Monolith': a BatchedInferenceState that has not been broken to smaller pieces.
-// 'Sharded State' or 'Shard': a piece of a monolith that is only relevant to a single node.
+// 'Sharded State' or 'Shard': an atomic piece of a monolith that is only relevant to a single node.
 
 template<typename Model>
 class TierRouter
@@ -81,6 +81,8 @@ protected:
 // TODO(pouya): how does routing work?
 // TODO(pouya): how does worker know to send a shard back to its origin?
 // TODO(pouya): I'm forcing kernel to not have an outgoing queue. Talk to sadjad about this.
+// TODO(pouya): context is guaranteed per some implicit BatchInferenceState ID. Maybe we should stop caring about
+//  mapping from prompt ID to context, and just get mapping from BIS ID to context vector.
 template<typename Model>
 class ParentTierRouter : public TierRouter
 {
@@ -265,6 +267,30 @@ void ParentTierRouter<Model>::ParentTierRouter( const ComputeKernel& compute_ker
 
   CHECK_LT( n_tier_1, 256 );
   CHECK_LT( n_tier_2, 256 );
+
+  switch ( compute_kernel_::Type ) {
+    case KernelType::Batched:
+    case KernelType::SimpleHybrid:
+      // Batched and SimpleHybrid are not "piped" kernels, i.e., they take PreAttention states as input and output
+      // PreAttention states
+      CHECK_EQ( concurrency_tier_1_.get( glinthawk::models::InferenceStage::PreAttention ),
+                concurrency_tier_1_.get( glinthawk::models::InferenceStage::Attention ) );
+      CHECK_EQ( concurrency_tier_1_.get( glinthawk::models::InferenceStage::Attention ),
+                concurrency_tier_1_.get( glinthawk::models::InferenceStage::PostAttention ) );
+      CHECK_EQ( concurrency_tier_1_.get( glinthawk::models::InferenceStage::PostAttention ),
+                concurrency_tier_1_.get( glinthawk::models::InferenceStage::Classification ) );
+
+      CHECK_EQ( concurrency_tier_2_.get( glinthawk::models::InferenceStage::PreAttention ),
+                concurrency_tier_2_.get( glinthawk::models::InferenceStage::Attention ) );
+      CHECK_EQ( concurrency_tier_2_.get( glinthawk::models::InferenceStage::Attention ),
+                concurrency_tier_2_.get( glinthawk::models::InferenceStage::PostAttention ) );
+      CHECK_EQ( concurrency_tier_2_.get( glinthawk::models::InferenceStage::PostAttention ),
+                concurrency_tier_2_.get( glinthawk::models::InferenceStage::Classification ) );
+      break;
+    case KernelType::Hybrid:
+    case KernelType::SimplePiped: break;
+    default: LOG( FATAL ) << "No such kernel type"; break;
+  }
 }
 
 template<typename Model>
