@@ -80,9 +80,10 @@ protected:
 /// kernel has space for it.
 // TODO(pouya): where are TierRouter's initialized
 // TODO(pouya): fix incomplete states to be filled in worker
-// TODO(pouya): can straggler's cause an unstable failure mode in dispersing work among tiers?
 // TODO(pouya): how does routing work?
 // TODO(pouya): how does worker know to send a shard back to its origin?
+// TODO(pouya): context pool in worker
+// TODO(pouya): can straggler's cause an unstable failure mode in dispersing work among tiers?
 // TODO(pouya): I'm forcing kernel to not have an outgoing queue. Talk to sadjad about this.
 // TODO(pouya): context is guaranteed per some implicit BatchInferenceState ID. Maybe we should stop caring about
 //  mapping from context ID to context, and just get mapping from BIS ID to context vector.
@@ -93,10 +94,10 @@ public:
   ParentTierRouter( const ComputeKernel& compute_kernel,
                     const size_t n_tier_1,
                     const Concurrency& concurrency_tier_1,
-                    const kv_slots_tier_1,
+                    const size_t kv_slots_tier_1,
                     const size_t n_tier_2,
                     const Concurrency& concurrency_tier_2,
-                    const kv_slots_tier_2,
+                    const size_t kv_slots_tier_2,
                     const typename Model::SettingsType& settings );
 
   virtual ~ParentTierRouter() override;
@@ -127,7 +128,7 @@ public:
   /// new prompts are placed in discarded prompt locations, and will have context by default.
   virtual bool is_context_available() const override;
 
-private:
+protected:
   using Stage = glinthawk::models::InferenceStage;
   using StateType = typename glinthawk::models::BatchedInferenceState<Model::ConfigType>;
   using RefStateType = typename std::reference_wrapper<StateType>;
@@ -185,6 +186,8 @@ private:
     return state.next_layer() >= start_layer_ and state.next_layer() <= end_layer_;
   }
 
+  void place_shard( StateType&& state );
+
   bool can_form_monolith( const size_t layer, const Stage stage ) const;
 
   StateType&& form_monolith( const size_t layer, const Stage stage );
@@ -219,10 +222,10 @@ template<typename Model>
 void ParentTierRouter<Model>::ParentTierRouter( const ComputeKernel& compute_kernel,
                                                 const size_t n_tier_1,
                                                 const Concurrency& concurrency_tier_1,
-                                                const kv_slots_tier_1,
+                                                const size_t kv_slots_tier_1,
                                                 const size_t n_tier_2,
                                                 const Concurrency& concurrency_tier_2,
-                                                const kv_slots_tier_2,
+                                                const size_t kv_slots_tier_2,
                                                 const typename Model::SettingsType& settings )
   : compute_kernel_( std::make_unique( compute_kernel ) )
   , n_tier_1_( n_tier_1 )
@@ -233,10 +236,10 @@ void ParentTierRouter<Model>::ParentTierRouter( const ComputeKernel& compute_ker
   , free_contexts_tier_2_( n_tier_2, settings.start_layer_num == 0 ? kv_slots_tier_2 : 0 )
   , start_layer_( settings.start_layer_num )
   , end_layer_( settings.end_layer_num )
-  , tier_1_idle_shards_( n_tier_1 )
-  , tier_2_idle_shards_( n_tier_2 )
-  , tier_1_idle_shard_counts_( n_tier_1, 0 )
-  , tier_2_idle_shard_counts_( n_tier_2, 0 )
+  , tier_1_idle_shards_( ( end_layer_ - start_layer_ + 1 ) * util::to_underlying( Stage::__COUNT__ ) )
+  , tier_2_idle_shards_( ( end_layer_ - start_layer_ + 1 ) * util::to_underlying( Stage::__COUNT__ ) )
+  , tier_1_idle_shard_counts_( ( end_layer_ - start_layer_ + 1 ) * util::to_underlying( Stage::__COUNT__ ), 0 )
+  , tier_2_idle_shard_counts_( ( end_layer_ - start_layer_ + 1 ) * util::to_underlying( Stage::__COUNT__ ), 0 )
 {
   // TODO(pouya): if there is only one slice, a generated batch never gets pushed to worker to report generations.
   CHECK( start_layer_ != 0 or end_layer_ != Model::ConfigType::n_layers - 1 );
@@ -350,7 +353,7 @@ bool ParentTierRouter<Model>::is_context_available() const
 }
 
 template<typename Model>
-bool ParentTierRouter<Model>::can_form_monolith( const size_t layer, const Stage stage )
+bool ParentTierRouter<Model>::can_form_monolith( const size_t layer, const Stage stage ) const
 {
   std::lock_guard lock { shards_mutex_ };
 
@@ -449,7 +452,7 @@ void ParentTierRouter<Model>::process_monolith( StateType&& state )
 }
 
 template<typename Model>
-void ParentTierRouter<Model>::process_shard( StateType&& state )
+void ParentTierRouter<Model>::place_shard( StateType&& state )
 {
   CHECK( state.all_rank_assigned() ) << "Sharded states must always be already routed.";
 
@@ -466,10 +469,141 @@ void ParentTierRouter<Model>::process_shard( StateType&& state )
       tier_2_idle_shards_[vi].push_back( RefStateType( std::move( state ) ) );
     }
   }
+}
+
+template<typename Model>
+void ParentTierRouter<Model>::process_shard( StateType&& state )
+{
+  place_shard( std::move( state ) );
 
   if ( can_form_monolith( next_layer, next_stage ) ) {
     StateType monolithic_state = form_monolith( next_layer, next_stage );
     process_monolith( std::move( monolithic_state ) );
+  }
+}
+
+/// @brief
+/// StaticParentTierRouter is very similar to ParentTierRouter, but forces merge operations to be done across nodes
+/// rather than tiers, i.e., each node must contribute to a join.
+template<typename Model>
+class StaticParentTierRouter : public ParentTierRouter
+{
+public:
+  StaticParentTierRouter( const ComputeKernel& compute_kernel,
+                    const size_t n_tier_1,
+                    const Concurrency& concurrency_tier_1,
+                    const size_t kv_slots_tier_1,
+                    const size_t n_tier_2,
+                    const Concurrency& concurrency_tier_2,
+                    const size_t kv_slots_tier_2,
+                    const typename Model::SettingsType& settings );
+
+  virtual ~StaticParentTierRouter() override;
+  virtual void pull_from_kernel() override;
+  virtual void push( glinthawk::models::BatchedInferenceState<Model::ConfigType>&& state ) override;
+  virtual bool pop( glinthawk::models::BatchedInferenceState<Model::ConfigType>& state ) override;
+  virtual bool is_context_available() const override;
+
+protected:
+  // TODO(pouya): double check if reference_wrapper is necessary here
+  // TODO(pouya): hiding variables is unclean
+  std::vector<std::vector<std::deque<RefStateType>>> tier_1_idle_shards_;
+  std::vector<std::vector<std::deque<RefStateType>>> tier_2_idle_shards_;
+
+  /// @brief
+  /// places shard to a specific deque for that (layer, stage, node), instead of one for (layer, stage, tier).
+  void place_shard( StateType&& state ) override;
+
+  /// @brief
+  /// checks if deques for all nodes in a (layer, stage) are non-empty (if the concurrency for that node is non-zero)
+  bool can_form_monolith( const size_t layer, const Stage stage ) const override;
+
+  /// @brief
+  /// builds a monolith by pulling from deques for all nodes in a (layer, stage) (if the concurrency for that node is
+  /// non-zero)
+  StateType&& form_monolith( const size_t layer, const Stage stage ) override;
+};
+
+template<typename Model>
+void StaticParentTierRouter<Model>::StaticParentTierRouter( const ComputeKernel& compute_kernel,
+                                                const size_t n_tier_1,
+                                                const Concurrency& concurrency_tier_1,
+                                                const size_t kv_slots_tier_1,
+                                                const size_t n_tier_2,
+                                                const Concurrency& concurrency_tier_2,
+                                                const size_t kv_slots_tier_2,
+                                                const typename Model::SettingsType& settings )
+  : ParentTierRouter( compute_kernel,
+                      n_tier_1,
+                      concurrency_tier_1,
+                      kv_slots_tier_1,
+                      n_tier_2,
+                      concurrency_tier_2,
+                      kv_slots_tier_2,
+                      settings )
+  // TODO: will this initialize the inner vector?
+  , tier_1_idle_shards_( ( end_layer_ - start_layer_ + 1 ) * util::to_underlying( Stage::__COUNT__ ), n_tier_1 )
+  , tier_2_idle_shards_( ( end_layer_ - start_layer_ + 1 ) * util::to_underlying( Stage::__COUNT__ ), n_tier_2 )
+{
+}
+
+template<typename Model>
+bool StaticParentTierRouter<Model>::can_form_monolith( const size_t layer, const Stage stage ) const
+{
+  std::lock_guard lock { shards_mutex_ };
+
+  return ( concurrency_tier_1_.get( stage ) == 0
+           or std::count_if( tier_1_idle_shards_[vector_index( layer, stage )].begin(),
+                             tier_1_idle_shards_[vector_index( layer, stage )].end(),
+                             []( const auto& q ) { return not q.size() > 0; } ) )
+         and ( concurrency_tier_2_.get( stage ) == 0
+               or std::count_if( tier_2_idle_shards_[vector_index( layer, stage )].begin(),
+                                 tier_2_idle_shards_[vector_index( layer, stage )].end(),
+                                 []( const auto& q ) { return not q.size() > 0; } ) );
+}
+
+template<typename Model>
+StateType&& StaticParentTierRouter<Model>::form_monolith( const size_t layer, const Stage stage )
+{
+  const auto vi = vector_index( layer, stage );
+  std::vector<RefStateType> shards;
+  {
+    std::lock_guard lock { shards_mutex_ };
+    if ( concurrency_tier_1_.get( stage ) > 0 ) {
+      for ( size_t i = 0; i < n_tier_1_; i++ ) {
+        shards.push_back( tier_1_idle_shards_[vi][i].front() );
+        tier_1_idle_shards_[vi][i].pop_front();
+      }
+    }
+    if ( concurrency_tier_2_.get( stage ) > 0 ) {
+      for ( size_t i = 0; i < n_tier_2_; i++ ) {
+        shards.push_back( tier_2_idle_shards_[vi][i].front() );
+        tier_2_idle_shards_[vi][i].pop_front();
+      }
+    }
+  }
+  // TODO(pouya): not sure if a "lazy" merge isn't a better option, especially if we're going to send it over the wire
+  //  next. We can do an unlazify() func in compute_kernel->incoming thread for cases where it is going to the kernel.
+  StateType monolith = StateType::merge_states( shards );
+  monolith.set_is_sharded( false );
+  return monolith;
+}
+
+template<typename Model>
+void StaticParentTierRouter<Model>::place_shard( StateType&& state )
+{
+  CHECK( state.all_rank_assigned() ) << "Sharded states must always be already routed.";
+
+  const auto next_stage = state.next_stage();
+  const auto next_layer = state.next_layer();
+  const auto vi = vector_index( next_layer, next_stage );
+  {
+    std::lock_guard lock { shards_mutex_ };
+    if ( state.get_rank_tier_1( 0 ) > -1 ) {
+      tier_1_idle_shards_[vi][state.get_rank_tier_1( 0 )].push_back( RefStateType( std::move( state ) ) );
+    } else {
+      tier_2_idle_shards_[vi][state.get_rank_tier_2( 0 )].push_back( RefStateType( std::move( state ) ) );
+    }
   }
 }
 
@@ -483,10 +617,10 @@ public:
   ChildTierRouter( const ComputeKernel& compute_kernel,
                    const size_t n_tier_1,
                    const Concurrency& concurrency_tier_1,
-                   const kv_slots_tier_1,
+                   const size_t kv_slots_tier_1,
                    const size_t n_tier_2,
                    const Concurrency& concurrency_tier_2,
-                   const kv_slots_tier_2,
+                   const size_t kv_slots_tier_2,
                    const typename Model::SettingsType& settings );
 
   virtual ChildTierRouter() override;
@@ -512,10 +646,10 @@ template<typename Model>
 void ChildTierRouter<Model>::ChildTierRouter( const ComputeKernel& compute_kernel,
                                               const size_t n_tier_1,
                                               const Concurrency& concurrency_tier_1,
-                                              const kv_slots_tier_1,
+                                              const size_t kv_slots_tier_1,
                                               const size_t n_tier_2,
                                               const Concurrency& concurrency_tier_2,
-                                              const kv_slots_tier_2,
+                                              const size_t kv_slots_tier_2,
                                               const typename Model::SettingsType& settings )
   : compute_kernel_( std::make_unique( compute_kernel ) )
 {
@@ -596,7 +730,7 @@ public:
   /// new prompts are placed in discarded prompt locations, and will have context by default.
   virtual bool is_context_available() const override;
 
-private:
+protected:
   /// @brief
   /// For now we assume:
   /// 1. All slices are alike.
