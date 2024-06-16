@@ -53,7 +53,7 @@ public:
 
   virtual bool pop( glinthawk::models::BatchedInferenceState<ConfigType>& state ) = 0;
 
-  virtual bool is_context_available() = 0;
+  virtual bool is_context_available() const = 0;
 
 protected:
   // Worker doesn't see the compute kernel. Only the tier router does.
@@ -120,7 +120,7 @@ public:
   /// function is truly only relevant in slice 0.
   /// This function will only return "true" a finite number of times before all contexts are filled up. From that point,
   /// new prompts are placed in discarded prompt locations, and will have context by default.
-  virtual bool is_context_available() override;
+  virtual bool is_context_available() const override;
 
 private:
   using ConfigType = typename Model::ConfigType;
@@ -134,6 +134,7 @@ private:
   /// 2. All tier 2 machines are alike.
   /// 3. All slices are alike.
   /// 4. Classification is done on the same machine doing pre-att-post.
+  /// 5. Batch sizes are equal across stages
   /// The ParentTierRouter does not need to know if the kernel is hybrid or not. It treats hybrid kernels as a sum of
   /// two concurrencies.
   const size_t n_tier_1_;
@@ -236,8 +237,6 @@ void ParentTierRouter<Model>::ParentTierRouter( const ComputeKernel& compute_ker
   // TODO(pouya): if there is only one slice, a generated batch never gets pushed to worker to report generations.
   CHECK( start_layer_ != 0 or end_layer_ != ConfigType::n_layers - 1 );
 
-  // TODO(pouya): put some checks for the concurrencies, like being equal across stages.
-
   for ( int i = 0; i < sharding_batch_sizes.size(); i++ ) {
     sharding_batch_sizes[i] = std::vector<size_t>( n_tier_1 + n_tier_2 );
   }
@@ -255,6 +254,17 @@ void ParentTierRouter<Model>::ParentTierRouter( const ComputeKernel& compute_ker
     sharding_batch_sizes[2][i] = concurrency_tier_2_.get( glinthawk::models::InferenceStage::PostAttention );
     sharding_batch_sizes[3][i] = concurrency_tier_2_.get( glinthawk::models::InferenceStage::Classification );
   }
+
+  for ( int i = 1; i < util::to_underlying( Stage::__COUNT__ ); i++ ) {
+    CHECK_EQ( std::accumulate( sharding_batch_sizes[i - 1].begin(), sharding_batch_sizes[i - 1].end(), 0 ),
+              std::accumulate( sharding_batch_sizes[i].begin(), sharding_batch_sizes[i].end(), 0 ) );
+  }
+
+  CHECK( kv_slots_tier_1 > 0 or concurrency_tier_1_.get( glinthawk::models::InferenceStage::Attention ) == 0 );
+  CHECK( kv_slots_tier_2 > 0 or concurrency_tier_2_.get( glinthawk::models::InferenceStage::Attention ) == 0 );
+
+  CHECK_LT( n_tier_1, 256 );
+  CHECK_LT( n_tier_2, 256 );
 }
 
 template<typename Model>
@@ -287,10 +297,12 @@ bool ParentTierRouter<Model>::pop( models::BatchedInferenceState<ConfigType>& st
 }
 
 template<typename Model>
-bool ParentTierRouter<Model>::is_context_available()
+bool ParentTierRouter<Model>::is_context_available() const
 {
   std::lock_guard lock { ctx_mutex_ };
 
+  // TODO(pouya): this is somewhat pointless. Since we are assuming identical tiers, and assigning ranks identically,
+  //  we only need to keep one free_contexts variable per tier.
   for ( size_t i = 0; i < n_tier_1_; i++ ) {
     if ( free_contexts_tier_1_[i] < concurrency_tier_1_.get( glinthawk::models::InferenceStage::Attention ) ) {
       return false;
@@ -459,7 +471,7 @@ public:
 
   /// @brief
   /// This should never be called.
-  virtual bool is_context_available() override;
+  virtual bool is_context_available() const override;
 };
 
 template<typename Model>
@@ -503,7 +515,7 @@ bool ChildTierRouter<Model>::pop( models::BatchedInferenceState<ConfigType>& sta
 }
 
 template<typename Model>
-bool ChildTierRouter<Model>::is_context_available()
+bool ChildTierRouter<Model>::is_context_available() const
 {
   LOG( FATAL ) << "DummyTierRouter should never receive new batches. That is only going to happen in slice0, tier1, "
                   "rank0.";
