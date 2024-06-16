@@ -8,9 +8,10 @@ namespace glinthawk::compute {
 
 enum class KernelType
 {
-  Batched,     /* kernel.hh */
-  Hybrid,      /* kernel_hybrid.hh */
-  SimpleHybrid /* kernel_hybrid_simple.hh */
+  Batched,      /* kernel.hh */
+  Hybrid,       /* kernel_hybrid.hh */
+  SimpleHybrid, /* kernel_hybrid_simple.hh */
+  SimplePiped,  /* kernel_piped.hh */
 };
 
 template<typename Kernel, typename StateType>

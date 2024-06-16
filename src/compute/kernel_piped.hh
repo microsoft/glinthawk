@@ -28,22 +28,20 @@
 
 namespace glinthawk::compute {
 
-template<typename ModelA, typename ModelB>
-requires std::same_as<typename ModelA::ConfigType, typename ModelB::ConfigType>
-class HybridComputeKernel
+template<typename Model>
+class PipedComputeKernel
 {
 public:
-  using ConfigType = typename ModelA::ConfigType;
-  using ContextPtrA = std::shared_ptr<typename ModelA::ContextType>;
-  using ContextPtrB = std::shared_ptr<typename ModelB::ContextType>;
+  using ConfigType = typename Model::ConfigType;
+  using ContextPtr = std::shared_ptr<typename Model::ContextType>;
 
-  static constexpr KernelType Type = KernelType::Hybrid;
+  static constexpr KernelType Type = KernelType::SimplePiped;
 
 public:
   template<typename... Args>
-  HybridComputeKernel( const Concurrency& concurrency_a, const Concurrency& concurrency_b, Args&&... args );
+  PipedComputeKernel( const Concurrency& concurrency, Args&&... args );
 
-  ~HybridComputeKernel();
+  ~PipedComputeKernel();
 
   void push( glinthawk::models::BatchedInferenceState<ConfigType>&& state );
   bool pop( glinthawk::models::BatchedInferenceState<ConfigType>& state );
@@ -56,7 +54,6 @@ private:
   using StatePriorityQueue = std::priority_queue<StateQueueItem, std::deque<StateQueueItem>, StateCompOp>;
 
   template<typename M>
-  requires std::same_as<M, ModelA> || std::same_as<M, ModelB>
   struct ModelData
   {
     ModelData( std::unique_ptr<M>&& in_model, const Concurrency& in_concurrency );
@@ -71,23 +68,15 @@ private:
   };
 
   // ... -> [pre(a|b) -> att(a|b) -> post(a|b)] * n_layers -> classify(a|b)
-  ModelData<ModelA> a_;
-  ModelData<ModelB> b_;
-
-  // a state with some empty slots
-  std::optional<StateType> incomplete_state_ {};
+  ModelData<Model> model_;
 
   EventFD event_fd_ {};
   std::atomic<bool> running_ { true };
 
-  // keeping track of splitted states and merge them back when needed
-  size_t current_local_state_id_ { 0 };
-  std::map<size_t, std::pair<std::optional<StateType>, std::optional<StateType>>> splitted_state_map_ {};
-  std::mutex splitted_state_mutex_ {};
-
   // <context management>
   // keeping track of the populated contexts for the states
-  std::map<size_t, std::pair<std::vector<ContextPtrA>, std::vector<ContextPtrB>>> context_map_ {};
+  size_t current_local_state_id_ { 0 };
+  std::map<size_t, std::vector<ContextPtr>> context_map_ {};
   std::mutex context_mutex_ {};
 
   void release_discarded_contexts( const StateType& state );
@@ -102,52 +91,32 @@ private:
   // <threads>
   template<typename M>
   void execution_thread_func( ModelData<M>& model_data );
-
   void bookkeeping_thread_func();
-  void backlog_thread_func();
 
   std::vector<std::thread> threads_;
   // </threads>
 };
 
-template<typename ModelA, typename ModelB>
+template<typename Model>
 template<typename M>
-HybridComputeKernel<ModelA, ModelB>::ModelData<M>::ModelData( std::unique_ptr<M>&& in_model,
-                                                              const Concurrency& in_concurrency )
+PipedComputeKernel<Model>::ModelData<M>::ModelData( std::unique_ptr<M>&& in_model, const Concurrency& in_concurrency )
   : model( std::move( in_model ) )
   , context_manager( model->settings() )
   , concurrency( in_concurrency )
 {
 }
 
-template<typename ModelA, typename ModelB>
+template<typename Model>
 template<typename... Args>
-HybridComputeKernel<ModelA, ModelB>::HybridComputeKernel( const Concurrency& concurrency_a,
-                                                          const Concurrency& concurrency_b,
-                                                          Args&&... args )
-  : a_( std::make_unique<ModelA>( std::forward<Args>( args )... ), concurrency_a )
-  , b_( std::make_unique<ModelB>( std::forward<Args>( args )... ), concurrency_b )
+PipedComputeKernel<Model>::PipedComputeKernel( const Concurrency& concurrency, Args&&... args )
+  : model_( std::make_unique<Model>( std::forward<Args>( args )... ), concurrency )
 {
-  // TODO(pouya): this stuff should be checked in tier router
-  // check the concurrency settings to be permissible
-  CHECK_EQ( a_.concurrency.get( Stage::PreAttention ) + b_.concurrency.get( Stage::PreAttention ),
-            a_.concurrency.get( Stage::Attention ) + b_.concurrency.get( Stage::Attention ) );
-
-  CHECK_EQ( a_.concurrency.get( Stage::Attention ) + b_.concurrency.get( Stage::Attention ),
-            a_.concurrency.get( Stage::PostAttention ) + b_.concurrency.get( Stage::PostAttention ) );
-
-  // Following is not always true; we need to figure it out before enabling it.
-  // CHECK_EQ( a_.concurrency.get( Stage::PostAttention ) + b_.concurrency.get( Stage::PostAttention ),
-  //           a_.concurrency.get( Stage::Classification ) + b_.concurrency.get( Stage::Classification ) );
-
-  threads_.emplace_back( &HybridComputeKernel::backlog_thread_func, this );
   threads_.emplace_back( &HybridComputeKernel::bookkeeping_thread_func, this );
-  threads_.emplace_back( &HybridComputeKernel::execution_thread_func<ModelA>, this, std::ref( a_ ) );
-  threads_.emplace_back( &HybridComputeKernel::execution_thread_func<ModelB>, this, std::ref( b_ ) );
+  threads_.emplace_back( &HybridComputeKernel::execution_thread_func<Model>, this, std::ref( model_ ) );
 }
 
-template<typename ModelA, typename ModelB>
-HybridComputeKernel<ModelA, ModelB>::~HybridComputeKernel()
+template<typename Model>
+PipedComputeKernel<Model>::~PipedComputeKernel()
 {
   running_ = false;
   for ( auto& t : threads_ ) {
@@ -155,10 +124,10 @@ HybridComputeKernel<ModelA, ModelB>::~HybridComputeKernel()
   }
 }
 
-template<typename ModelA, typename ModelB>
-void HybridComputeKernel<ModelA, ModelB>::push( models::BatchedInferenceState<ConfigType>&& state )
+template<typename Model>
+void PipedComputeKernel<Model>::push( models::BatchedInferenceState<ConfigType>&& state )
 {
-  auto push_to_incoming = [this]( StateType&& s ) {
+  auto push_to_incoming = [this]( models::BatchedInferenceState<ConfigType>&& s ) {
     s.set_id( current_local_state_id_++ );
 
     DLOG( INFO ) << "Pushing state to incoming queue: " << s.debug_string( false );
@@ -177,41 +146,16 @@ void HybridComputeKernel<ModelA, ModelB>::push( models::BatchedInferenceState<Co
   }
 
   // (2) is this the last layer? if so, we can get rid of the discard list.
-  if ( a_.model->settings().end_layer_num == ConfigType::n_layers - 1 ) {
+  if ( model_.model->settings().end_layer_num == ConfigType::n_layers - 1 ) {
     state.clear_discards();
   }
 
-  // XXX maybe we should do all this outside of the kernel
-  // TODO(pouya): incomplete state breaks many core assumptions, we should get rid of it
-  // (3) do we have an incomplete state to merge this with?
-  if ( incomplete_state_.has_value() ) {
-    auto& new_state = incomplete_state_.value();
-    new_state.replenish_from( state );
-
-    if ( new_state.free_slots() == 0 ) {
-      push_to_incoming( std::move( new_state ) );
-      incomplete_state_.reset();
-    } else {
-      // if there's a free slot, it means that the input state must be now empty and we can discard it
-      CHECK_EQ( state.free_slots(), state.batch_size() );
-      return;
-    }
-  }
-
-  // (4) there's something left in the input state; let's see if we can push it to the incoming queue
-  if ( state.free_slots() == 0 ) {
-    // all slots are filled; push it to the incoming queue
-    push_to_incoming( std::move( state ) );
-  } else if ( state.free_slots() < state.batch_size() ) {
-    // some slots are filled; keep it as an incomplete state
-    incomplete_state_ = std::move( state );
-  } else {
-    // all slots are empty; discard it
-  }
+  // (3) push it to the incoming queue
+  push_to_incoming( std::move( state ) );
 }
 
-template<typename ModelA, typename ModelB>
-bool HybridComputeKernel<ModelA, ModelB>::pop( models::BatchedInferenceState<ConfigType>& state )
+template<typename Model>
+bool PipedComputeKernel<Model>::pop( models::BatchedInferenceState<ConfigType>& state )
 {
   std::lock_guard lock { outgoing_.mutex };
 
@@ -224,27 +168,25 @@ bool HybridComputeKernel<ModelA, ModelB>::pop( models::BatchedInferenceState<Con
   return true;
 }
 
-template<typename ModelA, typename ModelB>
-void HybridComputeKernel<ModelA, ModelB>::release_discarded_contexts( const StateType& state )
+template<typename Model>
+void PipedComputeKernel<Model>::release_discarded_contexts( const StateType& state )
 {
   for ( size_t i = 0; i < state.discarded_contexts(); i++ ) {
     auto& prompt_id = state.discarded_prompt_id( i );
-    a_.context_manager.release_context( prompt_id );
-    b_.context_manager.release_context( prompt_id );
+    model_.context_manager.release_context( prompt_id );
   }
 }
 
-template<typename ModelA, typename ModelB>
+template<typename Model>
 template<typename M>
-void HybridComputeKernel<ModelA, ModelB>::execution_thread_func(
-  typename HybridComputeKernel<ModelA, ModelB>::template ModelData<M>& model_data )
+void PipedComputeKernel<Model>::execution_thread_func(
+  typename PipedComputeKernel<Model>::template ModelData<M>& model_data )
 {
   while ( running_ ) {
     StateType state {};
 
-    DLOG( WARNING ) << "Current status: " << "incoming_size=" << incoming_.queue.size() << ", "
-                    << "waiting_size=" << waiting_.queue.size() << ", " << "a_processing_size=" << a_.processing.size()
-                    << ", " << "b_processing_size=" << b_.processing.size();
+    DLOG( WARNING ) << "Current status: " << "incoming_size=" << incoming_.queue.size() << ", " << ", "
+                    << "processing_size=" << model_.processing.size();
 
     // get the next state to process
     {
@@ -254,17 +196,10 @@ void HybridComputeKernel<ModelA, ModelB>::execution_thread_func(
       model_data.processing.pop();
     }
 
-    DLOG( INFO ) << "Popped state from processing: " << state.debug_string( false ) << " (by "
-                 << ( std::is_same_v<ModelA, M> ? "A" : "B" ) << ")";
+    DLOG( INFO ) << "Popped state from processing: " << state.debug_string( false );
 
     const auto local_id = state.id();
     const auto next_stage = state.next_stage();
-    const auto next_layer = state.next_layer();
-    // TODO(pouya): fix this assumption: this machine serves all stages in one layer
-    const auto is_last_step
-      = ( next_stage == Stage::Classification )
-        or ( next_stage == Stage::PostAttention and next_layer == model_data.model->settings().end_layer_num
-             and next_layer < ConfigType::n_layers - 1 );
 
     // run the corresponding forward function
     switch ( next_stage ) {
@@ -272,84 +207,35 @@ void HybridComputeKernel<ModelA, ModelB>::execution_thread_func(
 
       case Stage::Attention: {
         std::unique_lock lock { context_mutex_ };
-
-        if constexpr ( std::same_as<M, ModelA> ) {
-          auto& contexts = context_map_[local_id].first;
-          lock.unlock();
-          model_data.model->forward_attention( state, contexts );
-        } else {
-          auto& contexts = context_map_[local_id].second;
-          lock.unlock();
-          model_data.model->forward_attention( state, contexts );
-        }
+        auto& contexts = context_map_[local_id];
+        lock.unlock();
+        model_data.model->forward_attention( state, contexts );
       } break;
 
       case Stage::PostAttention: model_data.model->forward_post_attention( state ); break;
       case Stage::Classification: model_data.model->forward_classify( state ); break;
     }
 
-    std::optional<StateType> merged_state;
+    // We always put the result in outgoing, so TierRouter makes a decision about it.
     {
-      std::lock_guard lock { splitted_state_mutex_ };
-
-      auto& [state_a, state_b] = splitted_state_map_[local_id];
-
-      if constexpr ( std::same_as<M, ModelA> ) {
-        state_a.emplace( std::move( state ) );
-      } else {
-        state_b.emplace( std::move( state ) );
-      }
-
-      if ( state_a.has_value() and state_b.has_value() ) {
-        // merge back the states
-        if ( state_b->empty() ) {
-          merged_state.emplace( std::move( *state_a ) );
-        } else if ( state_a->empty() ) {
-          merged_state.emplace( std::move( *state_b ) );
-        } else {
-          state_a->merge( std::move( *state_b ) );
-          merged_state.emplace( std::move( *state_a ) );
-        }
-        splitted_state_map_.erase( local_id );
-      }
+      // remove the contexts from the context map
+      std::lock_guard lock { context_mutex_ };
+      context_map_.erase( local_id );
     }
 
-    if ( merged_state.has_value() ) {
-      // was this the last layer and stage served by this kernel?
-      if ( is_last_step ) {
-        // yes; we need to send it to the outgoing queue
-        {
-          // remove the contexts from the context map
-          std::unique_lock lock { context_mutex_ };
-          // TODO(pouya): rethink context map cache
-          context_map_.erase( local_id );
-        }
+    DLOG( INFO ) << "Pushing state to outgoing queue: " << state.debug_string( false );
 
-        DLOG( INFO ) << "Pushing state to outgoing queue: " << merged_state->debug_string( false );
-
-        {
-          std::lock_guard lock { outgoing_.mutex };
-          outgoing_.queue.push( std::move( *merged_state ) );
-        }
-
-        event_fd_.write_event();
-      } else {
-        // no; we need to keep processing it
-        DLOG( INFO ) << "Pushing state back to incoming queue: " << merged_state->debug_string( false );
-
-        {
-          std::lock_guard lock { incoming_.mutex };
-          incoming_.queue.push( std::move( *merged_state ) );
-        }
-
-        incoming_.cv.notify_one();
-      }
+    {
+      std::lock_guard lock { outgoing_.mutex };
+      outgoing_.queue.push( std::move( state ) );
     }
+
+    event_fd_.write_event();
   }
 }
 
-template<typename ModelA, typename ModelB>
-void HybridComputeKernel<ModelA, ModelB>::bookkeeping_thread_func()
+template<typename Model>
+void PipedComputeKernel<Model>::bookkeeping_thread_func()
 {
   while ( running_ ) {
     StateType state;
@@ -364,120 +250,36 @@ void HybridComputeKernel<ModelA, ModelB>::bookkeeping_thread_func()
       DLOG( INFO ) << "Popped state from incoming queue: " << state.debug_string( false );
     }
 
-    // TODO(sadjad): check if this state is even valid for this kernel
+    CHECK_GE( model_.model->settings().end_layer_num, state.next_layer() );
+    CHECK_LE( model_.model->settings().start_layer_num, state.next_layer() );
+    CHECK_EQ( model_.concurrency.get( state.next_stage() ), state.batch_size() );
 
-    // TODO(sadjad): discard the finished prompts (state.discarded_contexts_)
+    switch ( state.next_stage() ) {
+      case Stage::Attention:
+        CHECK_EQ( context_map_.find( state.id() ), context_map_.end() );
+        std::vector<ContextPtr> contexts;
+        contexts.reserve( model_.concurrency.get( Stage::Attention ) );
 
-    // can we, or have we already, allocated the contexts for this state?
-
-    // TODO(pouya): how do we know we haven't already reserved context?
-    if ( context_map_.find( state.id() ) == context_map_.end() ) {
-      if ( a_.context_manager.free() < a_.concurrency.get( Stage::Attention )
-           or b_.context_manager.free() < b_.concurrency.get( Stage::Attention ) ) {
-        // we don't have enough space for these contexts, this is going to the waiting queue
-        DLOG( INFO ) << "Pushing state to waiting queue: " << state.debug_string( false );
-        std::unique_lock lock { waiting_.mutex };
-        waiting_.queue.push( std::move( state ) );
-        continue;
-      }
-
-      std::vector<ContextPtrA> contexts_a;
-      std::vector<ContextPtrB> contexts_b;
-
-      contexts_a.reserve( a_.concurrency.get( Stage::Attention ) );
-      contexts_b.reserve( b_.concurrency.get( Stage::Attention ) );
-
-      for ( size_t i = 0; i < state.batch_size(); i++ ) {
-        if ( i < a_.concurrency.get( Stage::Attention ) ) {
-          auto ctx = a_.context_manager.get_context( state.prompt_id( i ) );
-          if ( not ctx ) {
-            LOG( FATAL ) << "Cannot allocate context.";
-            break;
-          }
-          contexts_a.push_back( std::move( ctx ) );
-        } else if ( i < a_.concurrency.get( Stage::Attention ) + b_.concurrency.get( Stage::Attention ) ) {
-          auto ctx = b_.context_manager.get_context( state.prompt_id( i ) );
-          if ( not ctx ) {
-            LOG( FATAL ) << "Cannot allocate context.";
-            break;
-          }
-          contexts_b.push_back( std::move( ctx ) );
-        } else {
-          LOG( FATAL ) << "Invalid state: " << state.debug_string( false );
+        for ( size_t i = 0; i < state.batch_size(); i++ ) {
+          // context_manager has an internal thread safety lock, we should never hold a lock while calling it
+          auto ctx = model_.context_manager.get_context( state.prompt_id( i ) );
+          CHECK( ctx ) << "TierRouter has guaranteed context space, but compute kernel doesn't have any";
+          contexts.push_back( std::move( ctx ) );
         }
-      }
-
-      {
-        std::lock_guard lock { context_mutex_ };
-        context_map_[state.id()] = std::make_pair( std::move( contexts_a ), std::move( contexts_b ) );
-      }
+        {
+          std::lock_guard lock { context_mutex_ };
+          // TODO(pouya): why move vector of context? is context non-copyable? Will this line even work on a map?
+          context_map_[state.id()] = std::move( contexts );
+        }
     }
 
-    const auto next_stage = state.next_stage();
-    const auto next_layer = state.next_layer();
-
-    // do we need to split this state?
-    if ( a_.concurrency.get( next_stage ) > 0 && b_.concurrency.get( next_stage ) > 0 ) {
-      // TODO(sadjad): check the batch size against concurrency settings
-
-      // XXX(sadjad): allow for incomplete states?
-      // I don't think incomplete states should happen inside the kernel at all.
-
-      // split the state
-      auto [state_a, state_b] = state.split( a_.concurrency.get( next_stage ) );
-
-      CHECK_EQ( state_a.batch_size(), a_.concurrency.get( next_stage ) );
-      CHECK_EQ( state_b.batch_size(), b_.concurrency.get( next_stage ) );
-
-      {
-        std::lock_guard lock { a_.mutex };
-        a_.processing.push( std::move( state_a ) );
-      }
-      a_.cv.notify_one();
-
-      {
-        std::lock_guard lock { b_.mutex };
-        b_.processing.push( std::move( state_b ) );
-      }
-      b_.cv.notify_one();
-    } else {
-      if ( a_.concurrency.get( next_stage ) == state.batch_size() ) {
-        DLOG( INFO ) << "Pushing state to A's processing queue: " << state.debug_string( false );
-
-        {
-          std::lock_guard lock { splitted_state_mutex_ };
-          splitted_state_map_[state.id()].second.emplace();
-        }
-
-        {
-          std::lock_guard lock { a_.mutex };
-          a_.processing.push( std::move( state ) );
-        }
-        a_.cv.notify_one();
-      } else if ( b_.concurrency.get( next_stage ) == state.batch_size() ) {
-        DLOG( INFO ) << "Pushing state to B's processing queue: " << state.debug_string( false );
-
-        {
-          std::lock_guard lock { splitted_state_mutex_ };
-          splitted_state_map_[state.id()].first.emplace();
-        }
-
-        {
-          std::lock_guard lock { b_.mutex };
-          b_.processing.push( std::move( state ) );
-        }
-        b_.cv.notify_one();
-      } else {
-        LOG( FATAL ) << "State batch size and concurrency settings do not match";
-      }
+    {
+      std::lock_guard lock { model_.mutex };
+      model_.processing.push( std::move( state ) );
     }
+
+    model_.cv.notify_one();
   }
-}
-
-template<typename ModelA, typename ModelB>
-void HybridComputeKernel<ModelA, ModelB>::backlog_thread_func()
-{
-  // TODO(pouya): fix the waiting stuff
 }
 
 } // namespace glinthawk::compute
