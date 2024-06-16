@@ -35,6 +35,7 @@ struct __attribute__( ( packed ) ) StateMetadata
   bool has_queries { false };
   bool has_kvs { false };
   bool is_sharded { false };
+  bool to_parent { false };
 };
 
 struct __attribute__( ( packed ) ) PromptData
@@ -73,6 +74,8 @@ concept StateConcept = requires( T state, const T cstate, const std::string cstr
   { state.set_has_queries( false ) };
   { state.set_has_kvs( false ) };
   { state.set_is_sharded( false ) };
+  { state.set_scatter() };
+  { state.set_gather() };
 
   { cstate.id() } -> std::same_as<uint64_t>;
   { cstate.batch_size() } -> std::same_as<uint32_t>;
@@ -85,6 +88,8 @@ concept StateConcept = requires( T state, const T cstate, const std::string cstr
   { cstate.has_queries() } -> std::same_as<bool>;
   { cstate.has_kvs() } -> std::same_as<bool>;
   { cstate.is_sharded() } -> std::same_as<bool>;
+  { cstate.gather() } -> std::same_as<bool>;
+  { cstate.scatter() } -> std::same_as<bool>;
   { cstate.all_rank_assigned() } -> std::same_as<bool>;
 
   { state.set_prompt( 0, {}, {}, 0, 0, 0.0f, 0, 0, 0 ) };
@@ -213,6 +218,8 @@ public:
   void set_has_queries( const bool has_queries ) { metadata_.has_queries = has_queries; }
   void set_has_kvs( const bool has_kvs ) { metadata_.has_kvs = has_kvs; }
   void set_is_sharded( const bool is_sharded ) { metadata_.is_sharded = is_shared; }
+  void set_scatter() { metadata_.to_parent = false; }
+  void set_gather() { metadata_.to_parent = true; }
 
   // metadata getters
   uint64_t id() const { return metadata_.id; }
@@ -226,6 +233,8 @@ public:
   bool has_queries() const { return metadata_.has_queries; }
   bool has_kvs() const { return metadata_.has_kvs; }
   bool is_sharded() const { return metadata_.is_sharded; }
+  bool scatter() const { return not metadata_.to_parent; }
+  bool gather() const { return metadata_.to_parent; }
   bool all_rank_assigned() const
   {
     for ( int i = 0; i < metadata_.batch_size; i++ ) {
@@ -373,8 +382,11 @@ public:
   void set_has_activations( const bool has_activations ) { state_.set_has_activations( has_activations ); }
   void set_has_queries( const bool has_queries ) { state_.set_has_queries( has_queries ); }
   void set_has_kvs( const bool has_kvs ) { state_.set_has_kvs( has_kvs ); }
-  // TODO(pouya): if spans share metadata with the original, this might break tier_router
+  // TODO(pouya): if spans share metadata with the original, is_sharded/scatter/gather might be broken and bug
+  // tier_router
   void set_is_sharded( const bool is_sharded ) { state_.set_is_sharded( is_sharded ); }
+  void set_scatter() { state_.set_scatter(); }
+  void set_gather() { state_.set_gather(); }
 
   uint64_t id() const { return state_.id(); }
   uint32_t batch_size() const { return n_; }
@@ -386,8 +398,11 @@ public:
   bool has_activations() const { return state_.has_activations(); }
   bool has_queries() const { return state_.has_queries(); }
   bool has_kvs() const { return state_.has_kvs(); }
-  // TODO(pouya): if spans share metadata with the original, is_sharded might be broken and bug tier_router
+  // TODO(pouya): if spans share metadata with the original, is_sharded/scatter/gather might be broken and bug
+  // tier_router
   bool is_sharded() const { return state_.is_sharded(); }
+  bool scatter() const { return state_.scatter(); }
+  bool gather() const { return state_.gather(); }
   bool all_rank_assigned() const
   {
     for ( int i = 0; i < n_; i++ ) {
@@ -494,6 +509,7 @@ BatchedInferenceState<Config>::BatchedInferenceState( uint32_t batch_size,
   metadata_.has_kvs = state_has_kvs;
   // TODO(pouya): check with sadjad if he prefers default initializations over this, or explicit initializations.
   metadata_.is_sharded = false;
+  metadata_.to_parent = true;
 
   prompts_.resize( metadata_.batch_size );
 
@@ -685,7 +701,6 @@ bool BatchedInferenceState<Config>::replenish_from( BatchedInferenceState& other
   CHECK_EQ( metadata_.has_activations, other.metadata_.has_activations ) << "States with different activation states";
   CHECK_EQ( metadata_.has_queries, other.metadata_.has_queries ) << "States with different query states";
   CHECK_EQ( metadata_.has_kvs, other.metadata_.has_kvs ) << "States with different key-value states";
-  CHECK_EQ( metadata_.is_sharded, other.metadata_.is_sharded ) << "Sharded and Monolithic states";
 
   size_t other_idx = 0;
   for ( size_t my_idx = 0; my_idx < prompts_.size(); my_idx++ ) {
@@ -906,6 +921,7 @@ void BatchedInferenceState<Config>::merge( BatchedInferenceState&& other )
   CHECK_EQ( metadata_.has_queries, other.metadata_.has_queries ) << "States with different query states";
   CHECK_EQ( metadata_.has_kvs, other.metadata_.has_kvs ) << "States with different key-value states";
   CHECK_EQ( metadata_.is_sharded, other.metadata_.is_sharded ) << "Sharded and Monolithic states";
+  CHECK_EQ( metadata_.to_parent, other.metadata_.to_parent ) << "States with different destinations";
 
   BatchedInferenceState new_state;
   new_state.metadata_ = metadata_;
@@ -1002,6 +1018,7 @@ static BatchedInferenceState&& BatchedInferenceState<Config>::merge_states(
     CHECK_EQ( new_state.metadata_.has_queries, other.metadata_.has_queries ) << "States with different query states";
     CHECK_EQ( new_state.metadata_.has_kvs, other.metadata_.has_kvs ) << "States with different key-value states";
     CHECK_EQ( new_state.metadata_.is_sharded, other.metadata_.is_sharded ) << "Sharded and Monolithic states";
+    CHECK_EQ( new_state.metadata_.to_parent, other.metadata_.to_parent ) << "States with different destinations";
 
     // copying prompt data
     for ( size_t j = 0; j < other.metadata_.batch_size; j++ ) {
@@ -1042,7 +1059,7 @@ std::string BatchedInferenceState<Config>::debug_string( const bool prompt_detai
       << "next_stage=" << metadata_.next_stage << ", " << "has_activations=" << metadata_.has_activations << ", "
       << "activations.len=" << activations_.len() << ", " << "has_queries=" << metadata_.has_queries << ", "
       << "queries.len=" << queries_.len() << ", " << "has_kvs=" << metadata_.has_kvs << ", " << "kvs.len=" << kvs_.len()
-      << ", " << "is_sharded=" << metadata_.is_sharded << ", ";
+      << ", " << "is_sharded=" << metadata_.is_sharded << ", " << "to_parent=" << metadata_.to_parent << ", ";
 
   if ( not prompt_details ) {
     oss << "prompts=[";

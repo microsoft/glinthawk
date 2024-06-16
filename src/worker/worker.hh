@@ -77,7 +77,7 @@ private:
 
 private:
   using BatchedState = glinthawk::models::BatchedInferenceState<ModelConfig>;
-  using RouteMap = std::map<std::pair<uint32_t, typename models::InferenceStage>, net::Address>;
+  using RouteMap = std::map<std::tuple<uint32_t, typename models::InferenceStage, uint8_t, uint8_t>, net::Address>;
 
   bool running_ { true };
   EventLoop event_loop_ {};
@@ -140,7 +140,10 @@ private:
 
   net::Address find_next_worker( const RouteMap& route, const BatchedState& state )
   {
-    auto it = route.find( { state.next_layer(), state.next_stage() } );
+    CHECK( state.is_sharded() ) << "Monoliths should never be sent across nodes";
+    uint8_t t1_rank = state.scatter() ? state.get_rank_tier_1( 0 ) : 0;
+    uint8_t t2_rank = state.scatter() ? state.get_rank_tier_2( 0 ) : -1;
+    auto it = route.find( { state.next_layer(), state.next_stage(), t1_rank, t2_rank } );
     CHECK( it != route.end() ) << "No worker found for layer " << state.next_layer() << ", stage "
                                << state.next_stage();
     return it->second;
@@ -470,9 +473,10 @@ bool BatchedWorker<ModelConfig, ComputeKernel>::handle_coordinator_message( core
           default: throw std::runtime_error( "invalid stage" );
         }
 
-        route_str << route.layer_num() << "[" << next_stage << "] -> " << route.ip() << ":" << route.port() << "; ";
+        route_str << route.layer_num() << "[" << next_stage << "]<" << route.t1_rank() << "," << route.t2_rank()
+                  << "> -> " << route.ip() << ":" << route.port() << "; ";
 
-        new_route.emplace( std::make_pair( route.layer_num(), next_stage ),
+        new_route.emplace( std::make_tuple( route.layer_num(), next_stage, route.t1_rank(), route.t2_rank() ),
                            net::Address { route.ip(), static_cast<uint16_t>( route.port() ) } );
       }
 
@@ -658,7 +662,8 @@ bool BatchedWorker<ModelConfig, ComputeKernel>::handle_peer_message( core::Messa
         LOG( FATAL ) << "No route with id=" << state.route_id() << " in route set.";
       }
 
-      if ( state.next_layer() == 0 and state.next_stage() == models::InferenceStage::PreAttention ) {
+      // TODO(pouya): bad hack for checking if this node is the parent
+      if ( state.next_layer() == 0 and state.next_stage() == models::InferenceStage::PreAttention and state.gather() ) {
         /* first worker in the chain */
         for ( size_t i = 0; i < state.batch_size(); i++ ) {
           const auto& prompt_id = state.prompt_id( i );

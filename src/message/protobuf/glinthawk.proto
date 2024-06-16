@@ -48,8 +48,10 @@ message SetRoute
 
     uint32 layer_num = 1;
     Stage stage = 2;
-    string ip = 3;
-    uint32 port = 4;
+    uint8 t1_rank = 3;
+    uint8 t2_rank = 4;
+    string ip = 5;
+    uint32 port = 6;
   }
 
   uint32 route_id = 1;

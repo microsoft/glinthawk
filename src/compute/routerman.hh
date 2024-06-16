@@ -80,8 +80,6 @@ protected:
 /// kernel has space for it.
 // TODO(pouya): where are TierRouter's initialized
 // TODO(pouya): fix incomplete states to be filled in worker
-// TODO(pouya): how does routing work?
-// TODO(pouya): how does worker know to send a shard back to its origin?
 // TODO(pouya): context pool in worker
 // TODO(pouya): can straggler's cause an unstable failure mode in dispersing work among tiers?
 // TODO(pouya): I'm forcing kernel to not have an outgoing queue. Talk to sadjad about this.
@@ -304,6 +302,7 @@ void ParentTierRouter<Model>::pull_from_kernel()
   compute_kernel_->event_fd().read_event();
   models::BatchedInferenceState<Model::ConfigType> state;
   while ( compute_kernel_->pop( state ) ) {
+    state.set_gather();
     process_shard( std::move( state ) );
   }
 }
@@ -415,6 +414,7 @@ StateType&& ParentTierRouter<Model>::form_monolith( const size_t layer, const St
   //  next. We can do an unlazify() func in compute_kernel->incoming thread for cases where it is going to the kernel.
   StateType monolith = StateType::merge_states( shards );
   monolith.set_is_sharded( false );
+  monolith.set_gather();
   return monolith;
 }
 
@@ -436,6 +436,7 @@ void ParentTierRouter<Model>::process_monolith( StateType&& state )
       = state.split_states( sharding_batch_sizes[util::to_underlying( state.next_stage() )], true );
     if ( concurrency_tier_1_.get( state.next_stage() ) > 0 ) {
       shards.front()->get().set_is_sharded( true );
+      shards.front()->get().set_scatter();
       compute_kernel_->push( std::move( shards.front() ) );
       shards.pop_front();
     }
@@ -443,7 +444,7 @@ void ParentTierRouter<Model>::process_monolith( StateType&& state )
       std::lock_guard lock { outgoing_.mutex };
       while ( shards.size() > 0 ) {
         shards.front()->get().set_is_sharded( true );
-        outgoing_.emplace( std::move( shards.front() ) );
+        shards.front()->get().set_scatter( false ) outgoing_.emplace( std::move( shards.front() ) );
         shards.pop_front();
       }
       event_fd_.write_event();
@@ -490,13 +491,13 @@ class StaticParentTierRouter : public ParentTierRouter
 {
 public:
   StaticParentTierRouter( const ComputeKernel& compute_kernel,
-                    const size_t n_tier_1,
-                    const Concurrency& concurrency_tier_1,
-                    const size_t kv_slots_tier_1,
-                    const size_t n_tier_2,
-                    const Concurrency& concurrency_tier_2,
-                    const size_t kv_slots_tier_2,
-                    const typename Model::SettingsType& settings );
+                          const size_t n_tier_1,
+                          const Concurrency& concurrency_tier_1,
+                          const size_t kv_slots_tier_1,
+                          const size_t n_tier_2,
+                          const Concurrency& concurrency_tier_2,
+                          const size_t kv_slots_tier_2,
+                          const typename Model::SettingsType& settings );
 
   virtual ~StaticParentTierRouter() override;
   virtual void pull_from_kernel() override;
@@ -526,13 +527,13 @@ protected:
 
 template<typename Model>
 void StaticParentTierRouter<Model>::StaticParentTierRouter( const ComputeKernel& compute_kernel,
-                                                const size_t n_tier_1,
-                                                const Concurrency& concurrency_tier_1,
-                                                const size_t kv_slots_tier_1,
-                                                const size_t n_tier_2,
-                                                const Concurrency& concurrency_tier_2,
-                                                const size_t kv_slots_tier_2,
-                                                const typename Model::SettingsType& settings )
+                                                            const size_t n_tier_1,
+                                                            const Concurrency& concurrency_tier_1,
+                                                            const size_t kv_slots_tier_1,
+                                                            const size_t n_tier_2,
+                                                            const Concurrency& concurrency_tier_2,
+                                                            const size_t kv_slots_tier_2,
+                                                            const typename Model::SettingsType& settings )
   : ParentTierRouter( compute_kernel,
                       n_tier_1,
                       concurrency_tier_1,
@@ -586,6 +587,7 @@ StateType&& StaticParentTierRouter<Model>::form_monolith( const size_t layer, co
   //  next. We can do an unlazify() func in compute_kernel->incoming thread for cases where it is going to the kernel.
   StateType monolith = StateType::merge_states( shards );
   monolith.set_is_sharded( false );
+  monolith.set_gather();
   return monolith;
 }
 
@@ -661,6 +663,7 @@ void ChildTierRouter<Model>::pull_from_kernel()
   compute_kernel_->event_fd().read_event();
   models::BatchedInferenceState<Model::ConfigType> state;
   while ( compute_kernel_->pop( state ) ) {
+    state.set_gather();
     outgoing_.emplace( std::move( state ) );
     event_fd_.write_event();
   }
@@ -784,6 +787,7 @@ void SingleTierRouter<Model>::pull_from_kernel()
     if ( is_served_in_this_slice( state ) ) {
       compute_kernel_->push( std::move( state ) );
     } else {
+      state.set_gather();
       {
         std::lock_guard lock { outgoing_.mutex };
         outgoing_.emplace( std::move( state ) );
@@ -811,6 +815,7 @@ void SingleTierRouter<Model>::push( models::BatchedInferenceState<Model::ConfigT
       }
     }
   }
+  state.set_scatter();
   compute_kernel_->push( std::move( state ) );
 }
 
