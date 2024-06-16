@@ -42,6 +42,8 @@ struct __attribute__( ( packed ) ) PromptData
   bool active { false };
 
   PromptID prompt_id {};
+  // TODO(pouya): should context id be made non-copyable?
+  // TODO(pouya): should context id be made const?
   ContextID context_id {};
   uint32_t token {};
   uint32_t token_pos {};

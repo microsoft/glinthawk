@@ -85,7 +85,7 @@ protected:
 // TODO(pouya): how does worker know to send a shard back to its origin?
 // TODO(pouya): I'm forcing kernel to not have an outgoing queue. Talk to sadjad about this.
 // TODO(pouya): context is guaranteed per some implicit BatchInferenceState ID. Maybe we should stop caring about
-//  mapping from prompt ID to context, and just get mapping from BIS ID to context vector.
+//  mapping from context ID to context, and just get mapping from BIS ID to context vector.
 template<typename Model>
 class ParentTierRouter : public TierRouter
 {
