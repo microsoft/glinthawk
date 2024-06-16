@@ -34,14 +34,14 @@ public:
 
 private:
   std::unique_ptr<Model> model_;
-  std::unique_ptr<ContextManager<Model>> context_manager_;
+  std::unique_ptr<PreallocatingContextManager<Model>> context_manager_;
 
   const bool is_serving_last_layer_ { model_->settings().end_layer_num == ModelConfig::n_layers - 1 };
 
   std::queue<BatchedState> incoming_ {}, waiting_ {}, outgoing_ {};
   std::queue<std::pair<BatchedState, std::vector<ContextPtr>>> processing_ {};
 
-  std::mutex incoming_mutex_ {}, ctx_mgr_mutex_ {}, processing_mutex_ {}, outgoing_mutex_ {};
+  std::mutex incoming_mutex_ {}, processing_mutex_ {}, outgoing_mutex_ {};
   std::condition_variable_any incoming_cv_ {}, processing_cv_ {};
 
   EventFD event_fd_ {};
@@ -68,11 +68,10 @@ private:
 
   void release_context( const PromptID& prompt_id )
   {
-    std::lock_guard lock( ctx_mgr_mutex_ );
     released = context_manager_->release( prompt_id );
   }
 
-  std::pair<bool, std::vector<ContextPtr>> assemble_contexts( const BatchedState& state )
+  std::vector<ContextPtr> assemble_contexts( const BatchedState& state )
   {
     bool all_contexts_assigned = true;
 
@@ -89,14 +88,14 @@ private:
 
     CHECK( all_contexts_assigned ) << "TierRouter has guaranteed context space, but compute kernel doesn't have any";
 
-    return { all_contexts_assigned, std::move( contexts ) };
+    return contexts;
   }
 
 public:
   template<typename... Args>
   BatchedComputeKernel( Args&&... args )
     : model_( std::make_unique<Model>( std::forward<Args>( args )... ) )
-    , context_manager_( std::make_unique<ContextManager<Model>>( model_->settings() ) )
+    , context_manager_( std::make_unique<PreallocatingContextManager<Model>>( model_->settings() ) )
     , execution_thread_( std::bind( &BatchedComputeKernel::execution_thread_func, this, std::placeholders::_1 ) )
     , bookkeeping_thread_( std::bind( &BatchedComputeKernel::bookkeeping_thread_func, this, std::placeholders::_1 ) )
   {
@@ -182,7 +181,6 @@ void BatchedComputeKernel<Model>::bookkeeping_thread_func( std::stop_token stoke
 
   BatchedState state;
   std::vector<ContextPtr> contexts;
-  bool all_contexts_assigned = false;
 
   while ( not stoken.stop_requested() ) {
     // let's get an action from the incoming_
@@ -196,13 +194,8 @@ void BatchedComputeKernel<Model>::bookkeeping_thread_func( std::stop_token stoke
       incoming_.pop();
     }
 
-    {
-      // let's get the contexts for this state
-      std::lock_guard lock( ctx_mgr_mutex_ );
-      std::tie( all_contexts_assigned, contexts ) = assemble_contexts( state );
-    }
-
-    CHECK( all_contexts_assigned ) << "TierRouter has guaranteed context space, but compute kernel doesn't have any";
+    // let's get the contexts for this state
+    contexts = std::move( assemble_contexts( state ) );
 
     {
       std::lock_guard lock( processing_mutex_ );

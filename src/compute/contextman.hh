@@ -9,6 +9,8 @@
 
 namespace glinthawk::compute {
 
+/// @brief
+/// WARNING: NOT THREAD SAFE
 template<typename Model>
 class ContextManager
 {
@@ -43,6 +45,8 @@ public:
   bool release( const glinthawk::PromptID& prompt_id ) { return contexts_.erase( prompt_id ) > 0; }
 };
 
+/// @brief
+/// WARNING: THREAD SAFE, DO NOT USE ANOTHER LOCK WHILE CALLING
 template<typename Model>
 class PreallocatingContextManager
 {
