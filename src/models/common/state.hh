@@ -783,8 +783,7 @@ std::deque<std::reference_wrapper<BatchedInferenceState>> BatchedInferenceState<
   bool ignore_empty )
 {
   // TODO(pouya): how about the discarded contexts?
-  std::deque<std::reference_wrapper<BatchedInferenceState>> pieces {};
-  CHECK_GT( vec_n.size(), 1 ) << "Splitting to empty or single-element list";
+  CHECK_GT( vec_n.size(), 0 ) << "Splitting to empty  list";
 
   size_t sum_n = 0;
   for ( int i = 0; i < vec_n.size(); i++ ) {
@@ -792,6 +791,13 @@ std::deque<std::reference_wrapper<BatchedInferenceState>> BatchedInferenceState<
     sum_n += vec_n[i];
   }
   CHECK_EQ( metadata_.batch_size, sum_n ) << "Requested batch sizes should sum up to this state's size";
+
+  std::deque<std::reference_wrapper<BatchedInferenceState>> pieces {};
+  if ( vec_n.size() == 1 ) {
+    // TODO(pouya): this sounds impossible, might have to make the function static, ask sadjad.
+    pieces.push_back( std::reference_wrapper<BatchedInferenceState<Config>>( std::move( this ) ) );
+    return pieces;
+  }
 
   DLOG( INFO ) << "Splitting state of size " << metadata_.batch_size << " into " << vec_n.size() << " states.";
 
@@ -998,7 +1004,12 @@ static BatchedInferenceState&& BatchedInferenceState<Config>::merge_states(
   std::vector<std::reference_wrapper<BatchedInferenceState>> vec_state )
 {
   // TODO(pouya): how about the discarded contexts?
-  CHECK_GT( vec_state.size(), 1 ) << "Merging empty or single-element list";
+  CHECK_GT( vec_state.size(), 0 ) << "Merging empty list";
+
+  if ( vec_state.size() == 1 ) {
+    auto state = std::move( vec_state.front()->get() );
+    return state;
+  }
 
   BatchedInferenceState new_state;
   new_state.metadata_ = vec_state[0]->get().metadata_;
