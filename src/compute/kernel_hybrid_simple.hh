@@ -77,14 +77,12 @@ private:
   ModelData<ModelA> a_;
   ModelData<ModelB> b_;
 
-  // a state with some empty slots
-  std::optional<StateType> incomplete_state_ {};
-
   // This file descriptor is used to notify the kernel user that there are new states in the outgoing queue.
   EventFD event_fd_ {};
   std::atomic<bool> running_ { true };
 
   // <context management>
+  // TODO(pouya): understand what this is
   uint64_t current_local_state_id_ {}; // keeping track of the populated contexts for the states
   void release_discarded_contexts( const StateType& state );
   // </context management>
@@ -119,9 +117,6 @@ private:
   std::array<StateType, 2> next_states_ {};
   std::array<std::vector<ContextPtrB>, 2> next_contexts_ {};
 
-  // Number of contexts that have been released, but not yet refilled
-  std::atomic<size_t> released_contexts_ {};
-
   // <threads>
   std::vector<std::thread> threads_;
 
@@ -129,7 +124,6 @@ private:
   void execution_thread_func( ModelData<M>& model_data );
 
   void bookkeeping_thread_func();
-  void backlog_thread_func();
   // </threads>
 
   void model_step_forward( StateType& state );
@@ -153,7 +147,6 @@ SimpleHybridComputeKernel<ModelA, ModelB>::SimpleHybridComputeKernel( const uint
   , a_( std::make_unique<ModelA>( std::forward<Args>( args )... ) )
   , b_( std::make_unique<ModelB>( std::forward<Args>( args )... ) )
 {
-  threads_.emplace_back( &SimpleHybridComputeKernel::backlog_thread_func, this );
   threads_.emplace_back( &SimpleHybridComputeKernel::bookkeeping_thread_func, this );
   threads_.emplace_back( &SimpleHybridComputeKernel::execution_thread_func<ModelA>, this, std::ref( a_ ) );
   threads_.emplace_back( &SimpleHybridComputeKernel::execution_thread_func<ModelB>, this, std::ref( b_ ) );
@@ -172,6 +165,7 @@ template<typename ModelA, typename ModelB>
 void SimpleHybridComputeKernel<ModelA, ModelB>::push( models::BatchedInferenceState<ConfigType>&& state )
 {
   auto push_to_queue = [this]( StateType&& s ) {
+    // TODO(pouya): this id doesn't seem to do anything here
     s.set_id( current_local_state_id_++ );
 
     {
@@ -192,32 +186,8 @@ void SimpleHybridComputeKernel<ModelA, ModelB>::push( models::BatchedInferenceSt
     state.clear_discards();
   }
 
-  // XXX maybe we should do all this outside of the kernel
-  // (3) do we have an incomplete state to merge this with?
-  if ( incomplete_state_.has_value() ) {
-    auto& new_state = incomplete_state_.value();
-    new_state.replenish_from( state );
-
-    if ( new_state.free_slots() == 0 ) {
-      push_to_queue( std::move( new_state ) );
-      incomplete_state_.reset();
-    } else {
-      // if there's a free slot, it means that the input state must be now empty and we can discard it
-      CHECK_EQ( state.free_slots(), state.batch_size() );
-      return;
-    }
-  }
-
-  // (4) there's something left in the input state; let's see if we can push it to the incoming queue
-  if ( state.free_slots() == 0 ) {
-    // all slots are filled; push it to the incoming queue
-    push_to_queue( std::move( state ) );
-  } else if ( state.free_slots() < state.batch_size() ) {
-    // some slots are filled; keep it as an incomplete state
-    incomplete_state_ = std::move( state );
-  } else {
-    // all slots are empty; discard it
-  }
+  // (3) push it to the incoming queue
+  push_to_queue( std::move( state ) );
 }
 
 template<typename ModelA, typename ModelB>
@@ -237,18 +207,9 @@ bool SimpleHybridComputeKernel<ModelA, ModelB>::pop( models::BatchedInferenceSta
 template<typename ModelA, typename ModelB>
 void SimpleHybridComputeKernel<ModelA, ModelB>::release_discarded_contexts( const StateType& state )
 {
-  size_t freed_contexts = 0;
-
   for ( size_t i = 0; i < state.discarded_contexts(); i++ ) {
     auto& prompt_id = state.discarded_prompt_id( i );
-    if ( b_.context_manager.release_context( prompt_id ) ) {
-      freed_contexts++;
-    }
-  }
-
-  if ( freed_contexts ) {
-    released_contexts_.fetch_add( freed_contexts );
-    waiting_.cv.notify_one();
+    b_.context_manager.release_context( prompt_id );
   }
 }
 
@@ -284,6 +245,8 @@ void SimpleHybridComputeKernel<ModelA, ModelB>::model_step_forward( StateType& s
     case Stage::Classification:
       timeit<IntDistributions::KernelClassificationForwardTime>( __stats__, [&] { model.forward_classify( state ); } );
       break;
+
+    case Stage::Attention: LOG( FATAL ) << "Invalid stage: " << next_stage; break;
   }
 }
 
@@ -322,7 +285,7 @@ void SimpleHybridComputeKernel<ModelA, ModelB>::execution_thread_func(
 
       // During even iterations, ModelA processes pre/post-attention for [0] and ModelB does attention for [1]. During
       // odd iterations, ModelA does pre/post-attention for [1] and ModelB does attention for [0].
-      const auto active_state_index = ( model_idx == 0 ) ? ( iteration % 2 ) : ( ( iteration + 1 ) % 2 );
+      constexpr auto active_state_index = ( model_idx == 0 ) ? ( iteration % 2 ) : ( ( iteration + 1 ) % 2 );
       StateType& input_state = active_states_[active_state_index];
 
       // run the corresponding forward function
@@ -382,20 +345,8 @@ void SimpleHybridComputeKernel<ModelA, ModelB>::bookkeeping_thread_func()
 
     for ( size_t i = 0; i < incoming_state.batch_size(); i++ ) {
       auto ctx = b_.context_manager.get_context( incoming_state.prompt_id( i ) );
-
-      if ( not ctx ) {
-        // We didn't have enough space for the contexts, this is going to the waiting queue.
-        break;
-      }
-
+      CHECK( ctx ) << "TierRouter has guaranteed context space, but compute kernel doesn't have any";
       incoming_contexts.push_back( std::move( ctx ) );
-    }
-
-    if ( incoming_contexts.size() != incoming_state.batch_size() ) {
-      // We didn't have enough space for the contexts, this is going to the waiting queue.
-      std::unique_lock lock { waiting_.mutex };
-      waiting_.queue.push( std::move( incoming_state ) );
-      continue;
     }
 
     // If we're processing the active_states_ at the moment, we prepare the next batch and put it in next_states_.
@@ -426,32 +377,6 @@ void SimpleHybridComputeKernel<ModelA, ModelB>::bookkeeping_thread_func()
     // Notify the processing threads that they can start processing the new batch
     is_processing_states_.store( true );
     is_processing_states_.notify_all();
-  }
-}
-
-template<typename ModelA, typename ModelB>
-void SimpleHybridComputeKernel<ModelA, ModelB>::backlog_thread_func()
-{
-  StateType waiting_state;
-
-  while ( running_ ) {
-    {
-      std::unique_lock lock { waiting_.mutex };
-      waiting_.cv.wait( lock, [this] {
-        return !waiting_.queue.empty() and waiting_.queue.front().batch_size() <= released_contexts_.load();
-      } );
-
-      waiting_state = std::move( waiting_.queue.front() );
-      waiting_.queue.pop();
-      released_contexts_.fetch_sub( waiting_state.batch_size() );
-    }
-
-    // We have enough space for the contexts; let's put this on the incoming queue so it gets processed.
-    {
-      std::lock_guard lock { incoming_.mutex };
-      incoming_.queue.push( std::move( waiting_state ) );
-      incoming_.cv.notify_one();
-    }
   }
 }
 
