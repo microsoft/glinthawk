@@ -45,11 +45,11 @@ public:
 
   EventFD& event_fd() { return event_fd_; }
 
-  // TODO(pouya): I have to separate push to from_worker and from_kernel, since the ChildTierRouter can't tell where
-  //  it is getting the state from. This is unclean. Talk to sadjad about this.
-  virtual void push_from_kernel( glinthawk::models::BatchedInferenceState<ConfigType>&& state ) = 0;
+  // TODO(pouya): I'm using a pull model from kernel to make kernel more isolated. Talk to sadjad about this.
+  // TODO(pouya): add an event_loop rule to pull this
+  virtual void pull_from_kernel() = 0;
 
-  virtual void push_from_worker( glinthawk::models::BatchedInferenceState<ConfigType>&& state ) = 0;
+  virtual void push( glinthawk::models::BatchedInferenceState<ConfigType>&& state ) = 0;
 
   virtual bool pop( glinthawk::models::BatchedInferenceState<ConfigType>& state ) = 0;
 
@@ -98,12 +98,12 @@ public:
 
   /// @brief
   /// 1. Push sharded state from kernel -> process_shard, may internally call process_monolith
-  virtual void push_from_kernel( glinthawk::models::BatchedInferenceState<ConfigType>&& state ) override;
+  virtual void pull_from_kernel() override;
 
   /// @brief
   /// 1. Push monolithic state from worker -> calls process_monolith
   /// 2. Push sharded state from worker -> process_shard, may internally call process_monolith
-  virtual void push_from_worker( glinthawk::models::BatchedInferenceState<ConfigType>&& state ) override;
+  virtual void push( glinthawk::models::BatchedInferenceState<ConfigType>&& state ) override;
 
   /// @brief
   /// pop is called by the worker to receive states, that are:
@@ -268,13 +268,17 @@ void ParentTierRouter<Model>::ParentTierRouter( const ComputeKernel& compute_ker
 }
 
 template<typename Model>
-void ParentTierRouter<Model>::push_from_kernel( models::BatchedInferenceState<ConfigType>&& state )
+void ParentTierRouter<Model>::pull_from_kernel( models::BatchedInferenceState<ConfigType>&& state )
 {
-  process_shard( std::move( state ) );
+  compute_kernel_->event_fd().read_event();
+  models::BatchedInferenceState<ConfigType> state;
+  while ( compute_kernel_->pop( state ) ) {
+    process_shard( std::move( state ) );
+  }
 }
 
 template<typename Model>
-void ParentTierRouter<Model>::push_from_worker( models::BatchedInferenceState<ConfigType>&& state )
+void ParentTierRouter<Model>::push( models::BatchedInferenceState<ConfigType>&& state )
 {
   if ( state.is_sharded() )
     process_shard( std::move( state ) );
@@ -459,11 +463,11 @@ public:
 
   /// @brief
   /// 1. Push sharded state from kernel -> send state to worker
-  virtual void push_from_kernel( glinthawk::models::BatchedInferenceState<ConfigType>&& state ) override;
+  virtual void pull_from_kernel() override;
 
   /// @brief
   /// 1. Push sharded state from worker -> send state to kernel
-  virtual void push_from_worker( glinthawk::models::BatchedInferenceState<ConfigType>&& state ) override;
+  virtual void push( glinthawk::models::BatchedInferenceState<ConfigType>&& state ) override;
 
   /// @brief
   /// Behaves similar to TierRouter
@@ -488,14 +492,18 @@ void ChildTierRouter<Model>::ChildTierRouter( const ComputeKernel& compute_kerne
 }
 
 template<typename Model>
-void ChildTierRouter<Model>::push_from_kernel( models::BatchedInferenceState<ConfigType>&& state )
+void ChildTierRouter<Model>::pull_from_kernel()
 {
-  outgoing_.emplace( std::move( state ) );
-  event_fd_.write_event();
+  compute_kernel_->event_fd().read_event();
+  models::BatchedInferenceState<ConfigType> state;
+  while ( compute_kernel_->pop( state ) ) {
+    outgoing_.emplace( std::move( state ) );
+    event_fd_.write_event();
+  }
 }
 
 template<typename Model>
-void ChildTierRouter<Model>::push_from_worker( models::BatchedInferenceState<ConfigType>&& state )
+void ChildTierRouter<Model>::push( models::BatchedInferenceState<ConfigType>&& state )
 {
   compute_kernel_->push( std::move( state ) );
 }
