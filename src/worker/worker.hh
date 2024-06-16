@@ -117,7 +117,7 @@ private:
   Measurement& __stats__ { global_measurement() };
   std::unique_ptr<monitoring::TelegrafLogger> telegraf_logger_ { nullptr };
   TimerFD stats_timer_ { std::chrono::seconds { 5 } };
-  uint64_t dummy_prompt_current_id_ { 0 };
+  uint64_t dummy_hash_current_id_ { 0 };
 
   void setup_peer( std::map<net::Address, Peer>::iterator peer_it );
   void setup_compute_kernel( const std::filesystem::path& model_root,
@@ -502,21 +502,21 @@ bool BatchedWorker<ModelConfig, ComputeKernel>::handle_coordinator_message( core
 
       std::vector<models::BatchedInferenceState<ModelConfig>> states {};
 
-      // prompt id is sha256( current_time || dummy_prompt_current_id_ )
-      auto generate_next_prompt_id = [this]() -> PromptID {
-        char prompt_id_buf[2 * sizeof( uint64_t )];
+      // prompt and context id is sha256( current_time || dummy_hash_current_id_ )
+      auto generate_next_hash_id = [this]() -> HashID {
+        char hash_id_buf[2 * sizeof( uint64_t )];
         const uint64_t current_time
           = std::chrono::duration_cast<std::chrono::nanoseconds>( std::chrono::system_clock::now().time_since_epoch() )
               .count();
 
-        memcpy( prompt_id_buf, &current_time, sizeof( uint64_t ) );
-        memcpy( prompt_id_buf + sizeof( uint64_t ), &( this->dummy_prompt_current_id_ ), sizeof( uint64_t ) );
+        memcpy( hash_id_buf, &current_time, sizeof( uint64_t ) );
+        memcpy( hash_id_buf + sizeof( uint64_t ), &( this->dummy_hash_current_id_ ), sizeof( uint64_t ) );
 
-        PromptID prompt_id;
-        util::digest::sha256( { prompt_id_buf, sizeof( prompt_id_buf ) }, prompt_id );
+        HashID hash_id;
+        util::digest::sha256( { hash_id_buf, sizeof( hash_id_buf ) }, hash_id );
 
-        this->dummy_prompt_current_id_++;
-        return prompt_id;
+        this->dummy_hash_current_id_++;
+        return hash_id;
       };
 
       // generating random temperatures
@@ -527,7 +527,7 @@ bool BatchedWorker<ModelConfig, ComputeKernel>::handle_coordinator_message( core
       const uint32_t batch_count = ( prompt_count + ( batch_size - 1 ) ) / batch_size;
 
       for ( size_t i = 0; i < batch_count; i++ ) {
-        // FIXME hardcoded float16
+        // TODO: FIXME hardcoded float16
         models::BatchedInferenceState<ModelConfig> state {
           batch_size, DataType::Float16, RouteID {}, ModelID {}, false, false, false
         };
@@ -541,8 +541,18 @@ bool BatchedWorker<ModelConfig, ComputeKernel>::handle_coordinator_message( core
             break;
           }
 
-          state.set_prompt( j, generate_next_prompt_id(), 1 /* TOKEN_BOS */, 0, temp_dist( temp_gen ), 1, -1, -1 );
+          state.set_prompt( j,
+                            generate_next_hash_id(),
+                            generate_next_hash_id(),
+                            1 /* TOKEN_BOS */,
+                            0,
+                            temp_dist( temp_gen ),
+                            1,
+                            -1,
+                            -1 );
         }
+
+        // TODO(pouya): have to check with tier router if we have space here
 
         DLOG( INFO ) << "Generated state: " << state.debug_string( true );
         this->compute_kernel_->push( std::move( state ) );
@@ -571,8 +581,16 @@ bool BatchedWorker<ModelConfig, ComputeKernel>::handle_coordinator_message( core
           PromptID prompt_id = prompt_queue_.front();
           prompt_queue_.pop();
           auto& prompt = prompt_store_.get( prompt_id );
-          state.set_prompt(
-            i, prompt_id, prompt.prompt().at( 0 ), 0, prompt.temperature(), prompt.prompt().count(), -1, -1 );
+          // TODO(pouya): this needs to be filled with a valid context id from some pool
+          state.set_prompt( i,
+                            prompt_id,
+                            "something",
+                            prompt.prompt().at( 0 ),
+                            0,
+                            prompt.temperature(),
+                            prompt.prompt().count(),
+                            -1,
+                            -1 );
         }
 
         this->compute_kernel_->push( std::move( state ) );
@@ -675,6 +693,7 @@ bool BatchedWorker<ModelConfig, ComputeKernel>::handle_peer_message( core::Messa
               auto& next_prompt = prompt_store_.get( next_prompt_id );
               state.set_prompt( i,
                                 next_prompt_id,
+                                state.get_context_id( i ),
                                 next_prompt.prompt().at( 0 ),
                                 0,
                                 next_prompt.temperature(),

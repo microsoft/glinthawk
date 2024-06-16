@@ -35,9 +35,9 @@ private:
 
   size_t auto_id_ { 0 };
 
-  PromptID next_prompt_id()
+  HashID next_hash_id()
   {
-    PromptID id;
+    HashID id;
     util::digest::sha256( to_string( auto_id_++ ), id );
     return id;
   }
@@ -54,8 +54,9 @@ private:
   {
     StateType st { batch_size_, DataType::_GLINTHAWK_DTYPE_NAME_, {}, {}, false, false, false };
 
+    // TODO: have to be careful with how many context ids we are making
     for ( size_t i = 0; i < batch_size_; ++i ) {
-      st.set_prompt( i, next_prompt_id(), 1 /* BOS */, 0, temp_, 1, 0, -1 );
+      st.set_prompt( i, next_hash_id(), next_hash_id(), 1 /* BOS */, 0, temp_, 1, 0, -1 );
     }
 
     st.set_next_layer( 0 );

@@ -84,8 +84,6 @@ private:
   // <context management>
   // TODO(pouya): understand what this is
   uint64_t current_local_state_id_ {}; // keeping track of the populated contexts for the states
-  void release_discarded_contexts( const StateType& state );
-  // </context management>
 
   // <queues>
   // global queues:
@@ -164,30 +162,15 @@ SimpleHybridComputeKernel<ModelA, ModelB>::~SimpleHybridComputeKernel()
 template<typename ModelA, typename ModelB>
 void SimpleHybridComputeKernel<ModelA, ModelB>::push( models::BatchedInferenceState<ConfigType>&& state )
 {
-  auto push_to_queue = [this]( StateType&& s ) {
-    // TODO(pouya): this id doesn't seem to do anything here
-    s.set_id( current_local_state_id_++ );
+  // TODO(pouya): this id doesn't seem to do anything here
+  state.set_id( current_local_state_id_++ );
 
-    {
-      std::lock_guard lock { incoming_.mutex };
-      incoming_.queue.push( std::move( s ) );
-    }
-
-    incoming_.cv.notify_one();
-  };
-
-  // (1) discard the contexts we have to discard
-  if ( state.discarded_contexts() ) {
-    release_discarded_contexts( state );
+  {
+    std::lock_guard lock { incoming_.mutex };
+    incoming_.queue.push( std::move( state ) );
   }
 
-  // (2) is this the last layer? if so, we can get rid of the discard list.
-  if ( a_.model->settings().end_layer_num == ConfigType::n_layers - 1 ) {
-    state.clear_discards();
-  }
-
-  // (3) push it to the incoming queue
-  push_to_queue( std::move( state ) );
+  incoming_.cv.notify_one();
 }
 
 template<typename ModelA, typename ModelB>
@@ -202,15 +185,6 @@ bool SimpleHybridComputeKernel<ModelA, ModelB>::pop( models::BatchedInferenceSta
   state = std::move( outgoing_.queue.front() );
   outgoing_.queue.pop();
   return true;
-}
-
-template<typename ModelA, typename ModelB>
-void SimpleHybridComputeKernel<ModelA, ModelB>::release_discarded_contexts( const StateType& state )
-{
-  for ( size_t i = 0; i < state.discarded_contexts(); i++ ) {
-    auto& prompt_id = state.discarded_prompt_id( i );
-    b_.context_manager.release_context( prompt_id );
-  }
 }
 
 template<typename ModelA, typename ModelB>
@@ -344,7 +318,7 @@ void SimpleHybridComputeKernel<ModelA, ModelB>::bookkeeping_thread_func()
     incoming_contexts.reserve( incoming_state.batch_size() );
 
     for ( size_t i = 0; i < incoming_state.batch_size(); i++ ) {
-      auto ctx = b_.context_manager.get_context( incoming_state.prompt_id( i ) );
+      auto ctx = b_.context_manager.get_context( incoming_state.context_id( i ) );
       CHECK( ctx ) << "TierRouter has guaranteed context space, but compute kernel doesn't have any";
       incoming_contexts.push_back( std::move( ctx ) );
     }

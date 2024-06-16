@@ -36,8 +36,6 @@ private:
   std::unique_ptr<Model> model_;
   std::unique_ptr<PreallocatingContextManager<Model>> context_manager_;
 
-  const bool is_serving_last_layer_ { model_->settings().end_layer_num == ModelConfig::n_layers - 1 };
-
   std::queue<BatchedState> incoming_ {}, waiting_ {}, outgoing_ {};
   std::queue<std::pair<BatchedState, std::vector<ContextPtr>>> processing_ {};
 
@@ -66,11 +64,6 @@ private:
     incoming_cv_.notify_one();
   }
 
-  void release_context( const PromptID& prompt_id )
-  {
-    released = context_manager_->release( prompt_id );
-  }
-
   std::vector<ContextPtr> assemble_contexts( const BatchedState& state )
   {
     bool all_contexts_assigned = true;
@@ -78,7 +71,7 @@ private:
     std::vector<ContextPtr> contexts;
     for ( size_t i = 0; i < state.batch_size(); i++ ) {
       if ( state.active( i ) ) {
-        auto context = context_manager_->get_context( state.prompt_id( i ) );
+        auto context = context_manager_->get_context( state.context_id( i ) );
         all_contexts_assigned = all_contexts_assigned && !context->empty();
         contexts.push_back( std::move( context ) );
       } else {
@@ -101,23 +94,7 @@ public:
   {
   }
 
-  void push( BatchedState&& state )
-  {
-    // (1) discard the contexts we have to discard
-    for ( size_t i = 0; i < state.discarded_contexts(); i++ ) {
-      auto& prompt_id = state.discarded_prompt_id( i );
-      release_context( prompt_id );
-    }
-
-    // TODO(pouya): this might bite us we have classification as a separate part.
-    // (2) is this the last layer? if so, we can get rid of the discard list.
-    if ( is_serving_last_layer_ ) {
-      state.clear_discards();
-    }
-
-    // (3) push it to the incoming queue
-    push_to_incoming( std::move( state ) );
-  }
+  void push( BatchedState&& state ) { push_to_incoming( std::move( state ) ); }
 
   bool pop( BatchedState& state )
   {

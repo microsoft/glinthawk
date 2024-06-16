@@ -80,7 +80,6 @@ protected:
 /// kernel has space for it.
 // TODO(pouya): where are TierRouter's initialized
 // TODO(pouya): fix incomplete states to be filled in worker
-// TODO(pouya): fix discarded states in merge and split
 // TODO(pouya): can straggler's cause an unstable failure mode in dispersing work among tiers?
 // TODO(pouya): how does routing work?
 // TODO(pouya): how does worker know to send a shard back to its origin?
@@ -297,7 +296,7 @@ void ParentTierRouter<Model>::ParentTierRouter( const ComputeKernel& compute_ker
 }
 
 template<typename Model>
-void ParentTierRouter<Model>::pull_from_kernel( )
+void ParentTierRouter<Model>::pull_from_kernel()
 {
   compute_kernel_->event_fd().read_event();
   models::BatchedInferenceState<Model::ConfigType> state;
@@ -643,7 +642,7 @@ void SingleTierRouter<Model>::SingleTierRouter( const ComputeKernel& compute_ker
 }
 
 template<typename Model>
-void SingleTierRouter<Model>::pull_from_kernel( )
+void SingleTierRouter<Model>::pull_from_kernel()
 {
   compute_kernel_->event_fd().read_event();
   models::BatchedInferenceState<Model::ConfigType> state;

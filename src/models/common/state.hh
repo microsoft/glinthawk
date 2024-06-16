@@ -16,7 +16,7 @@ namespace glinthawk::models {
 // TODO(pouya): double check if is_sharded implemented correctly.
 // TODO(pouya): double check if merge_states is implemented correctly.
 // TODO(pouya): double check if split_states is implemented correctly.
-// TODO(pouya): revamp how discarded context works.
+// TODO(pouya): double check if context_id is implemented correctly.
 // TODO(pouya): design a lazy merge.
 // TODO(pouya): revamp soft_split to be optimal for TierRouter.
 
@@ -35,15 +35,6 @@ struct __attribute__( ( packed ) ) StateMetadata
   bool has_queries { false };
   bool has_kvs { false };
   bool is_sharded { false };
-
-  uint32_t discarded_contexts { 0 };
-};
-
-/// @brief This struct is used to keep track of prompts that are done, and the workers can safely discard them.
-struct __attribute__( ( packed ) ) DiscardedContext
-{
-  // TODO(pouya): add tier ranks here
-  PromptID prompt_id {};
 };
 
 struct __attribute__( ( packed ) ) PromptData
@@ -51,6 +42,7 @@ struct __attribute__( ( packed ) ) PromptData
   bool active { false };
 
   PromptID prompt_id {};
+  ContextID context_id {};
   uint32_t token {};
   uint32_t token_pos {};
   uint8_t temperature {}; // compact temprature, between [0, 255]; has to be divided by 255.0f before use.
@@ -79,7 +71,6 @@ concept StateConcept = requires( T state, const T cstate, const std::string cstr
   { state.set_has_queries( false ) };
   { state.set_has_kvs( false ) };
   { state.set_is_sharded( false ) };
-  { state.clear_discards() };
 
   { cstate.id() } -> std::same_as<uint64_t>;
   { cstate.batch_size() } -> std::same_as<uint32_t>;
@@ -92,13 +83,11 @@ concept StateConcept = requires( T state, const T cstate, const std::string cstr
   { cstate.has_queries() } -> std::same_as<bool>;
   { cstate.has_kvs() } -> std::same_as<bool>;
   { cstate.is_sharded() } -> std::same_as<bool>;
-  { state.all_rank_assigned() } -> std::same_as<bool>;
-  { cstate.discarded_contexts() } -> std::same_as<uint32_t>;
+  { cstate.all_rank_assigned() } -> std::same_as<bool>;
 
-  { state.discarded_prompt_id( 0 ) } -> std::same_as<const PromptID&>;
-
-  { state.set_prompt( 0, {}, 0, 0, 0.0f, 0, 0, 0 ) };
+  { state.set_prompt( 0, {}, {}, 0, 0, 0.0f, 0, 0, 0 ) };
   { state.prompt_id( 0 ) } -> std::same_as<PromptID>;
+  { state.context_id( 0 ) } -> std::same_as<ContextID>;
   { state.token( 0 ) } -> std::same_as<uint32_t>;
   { state.token_pos( 0 ) } -> std::same_as<uint32_t>;
   { state.prompt_length( 0 ) } -> std::same_as<uint32_t>;
@@ -110,6 +99,7 @@ concept StateConcept = requires( T state, const T cstate, const std::string cstr
   { state.active( 0 ) } -> std::same_as<bool>;
 
   { state.set_prompt_id( 0, {} ) };
+  { state.set_context_id( 0, {} ) };
   { state.set_token( 0, 0 ) };
   { state.set_token_pos( 0, 0 ) };
   { state.set_prompt_length( 0, 0 ) };
@@ -168,7 +158,6 @@ class BatchedInferenceState
 {
 private:
   StateMetadata metadata_ {};
-  std::vector<DiscardedContext> discarded_contexts_ {};
   std::vector<PromptData> prompts_ {};
 
   // we use contiguous memory for activations, queries, and key-values; allowing one-shot copying.
@@ -222,7 +211,6 @@ public:
   void set_has_queries( const bool has_queries ) { metadata_.has_queries = has_queries; }
   void set_has_kvs( const bool has_kvs ) { metadata_.has_kvs = has_kvs; }
   void set_is_sharded( const bool is_sharded ) { metadata_.is_sharded = is_shared; }
-  void clear_discards();
 
   // metadata getters
   uint64_t id() const { return metadata_.id; }
@@ -245,13 +233,11 @@ public:
     }
     return true;
   }
-  uint32_t discarded_contexts() const { return metadata_.discarded_contexts; }
-
-  const PromptID& discarded_prompt_id( const size_t i ) const { return discarded_contexts_.at( i ).prompt_id; }
 
   // prompt setters
   void set_prompt( const size_t i,
                    PromptID prompt_id,
+                   ContextID context_id,
                    uint32_t token,
                    uint32_t token_pos,
                    float temperature,
@@ -261,6 +247,7 @@ public:
 
   // prompt getters
   PromptID prompt_id( const size_t i ) const { return prompts_[i].prompt_id; }
+  ContextID context_id( const size_t i ) const { return prompts_[i].context_id; }
   uint32_t token( const size_t i ) const { return prompts_[i].token; }
   uint32_t token_pos( const size_t i ) const { return prompts_[i].token_pos; }
   uint32_t prompt_length( const size_t i ) const { return prompts_[i].prompt_length; }
@@ -277,6 +264,7 @@ public:
 
   // prompt setters
   void set_prompt_id( const size_t i, PromptID prompt_id ) { prompts_[i].prompt_id = prompt_id; }
+  void set_context_id( const size_t i, ContextID context_id ) { prompts_[i].context_id = context_id; }
   void set_token( const size_t i, uint32_t token ) { prompts_[i].token = token; }
   void set_token_pos( const size_t i, uint32_t token_pos ) { prompts_[i].token_pos = token_pos; }
   void set_prompt_length( const size_t i, uint32_t prompt_length ) { prompts_[i].prompt_length = prompt_length; }
@@ -385,7 +373,6 @@ public:
   void set_has_kvs( const bool has_kvs ) { state_.set_has_kvs( has_kvs ); }
   // TODO(pouya): if spans share metadata with the original, this might break tier_router
   void set_is_sharded( const bool is_sharded ) { state_.set_is_sharded( is_sharded ); }
-  void clear_discards() { state_.clear_discards(); }
 
   uint64_t id() const { return state_.id(); }
   uint32_t batch_size() const { return n_; }
@@ -397,6 +384,7 @@ public:
   bool has_activations() const { return state_.has_activations(); }
   bool has_queries() const { return state_.has_queries(); }
   bool has_kvs() const { return state_.has_kvs(); }
+  // TODO(pouya): if spans share metadata with the original, is_sharded might be broken and bug tier_router
   bool is_sharded() const { return state_.is_sharded(); }
   bool all_rank_assigned() const
   {
@@ -406,13 +394,10 @@ public:
     }
     return true;
   }
-  // TODO(pouya): if spans share metadata with the original, this might break tier_router
-  uint32_t discarded_contexts() const { return state_.discarded_contexts(); }
-
-  const PromptID& discarded_prompt_id( const size_t i ) const { return state_.discarded_prompt_id( i ); }
 
   void set_prompt( const size_t i,
                    PromptID prompt_id,
+                   ContextID context_id,
                    uint32_t token,
                    uint32_t token_pos,
                    float temperature,
@@ -420,10 +405,12 @@ public:
                    uint8_t rank_tier_1,
                    uint8_t rank_tier_2 )
   {
-    state_.set_prompt( off_ + i, prompt_id, token, token_pos, temperature, prompt_length, rank_tier_1, rank_tier_2 );
+    state_.set_prompt(
+      off_ + i, prompt_id, context_id, token, token_pos, temperature, prompt_length, rank_tier_1, rank_tier_2 );
   }
 
   PromptID prompt_id( const size_t i ) const { return state_.prompt_id( off_ + i ); }
+  ContextID context_id( const size_t i ) const { return state_.context_id( off_ + i ); }
   uint32_t token( const size_t i ) const { return state_.token( off_ + i ); }
   uint32_t token_pos( const size_t i ) const { return state_.token_pos( off_ + i ); }
   uint32_t prompt_length( const size_t i ) const { return state_.prompt_length( off_ + i ); }
@@ -435,6 +422,7 @@ public:
   bool rank_assigned( const size_t i ) const { return state_.rank_assigned( off_ + i ); }
 
   void set_prompt_id( const size_t i, PromptID prompt_id ) { state_.set_prompt_id( off_ + i, prompt_id ); }
+  void set_context_id( const size_t i, ContextID context_id ) { state_.set_context_id( off_ + i, context_id ); }
   void set_token( const size_t i, uint32_t token ) { state_.set_token( off_ + i, token ); }
   void set_token_pos( const size_t i, uint32_t token_pos ) { state_.set_token_pos( off_ + i, token_pos ); }
   void set_prompt_length( const size_t i, uint32_t len ) { state_.set_prompt_length( off_ + i, len ); }
@@ -531,15 +519,7 @@ BatchedInferenceState<Config>::BatchedInferenceState( const std::string_view ser
 
   metadata_ = *reinterpret_cast<const StateMetadata*>( ptr );
   ptr += sizeof( StateMetadata );
-
-  expected_size += sizeof( DiscardedContext ) * metadata_.discarded_contexts;
   expected_size += sizeof( PromptData ) * metadata_.batch_size;
-
-  discarded_contexts_.resize( metadata_.discarded_contexts );
-  std::memcpy( reinterpret_cast<char*>( discarded_contexts_.data() ),
-               ptr,
-               metadata_.discarded_contexts * sizeof( DiscardedContext ) );
-  ptr += metadata_.discarded_contexts * sizeof( DiscardedContext );
 
   prompts_.resize( metadata_.batch_size );
 
@@ -582,7 +562,6 @@ std::string BatchedInferenceState<Config>::serialize() const
 {
   std::string serialized_state;
   const size_t expected_size = sizeof( StateMetadata )                                               /* metadata */
-                               + sizeof( DiscardedContext ) * discarded_contexts_.size()             /* discards */
                                + sizeof( PromptData ) * metadata_.batch_size                         /* prompts */
                                + ( has_activations() ? metadata_.batch_size * activation_len() : 0 ) /* activations */
                                + ( has_queries() ? metadata_.batch_size * q_len() : 0 )              /* queries */
@@ -592,9 +571,6 @@ std::string BatchedInferenceState<Config>::serialize() const
   serialized_state.reserve( expected_size );
 
   serialized_state.append( reinterpret_cast<const char*>( &metadata_ ), sizeof( StateMetadata ) );
-
-  serialized_state.append( reinterpret_cast<const char*>( discarded_contexts_.data() ),
-                           discarded_contexts_.size() * sizeof( DiscardedContext ) );
 
   serialized_state.append( reinterpret_cast<const char*>( prompts_.data() ),
                            metadata_.batch_size * sizeof( PromptData ) );
@@ -619,6 +595,7 @@ std::string BatchedInferenceState<Config>::serialize() const
 template<typename Config>
 void BatchedInferenceState<Config>::set_prompt( const size_t i,
                                                 PromptID prompt_id,
+                                                ContextID context_id,
                                                 uint32_t token,
                                                 uint32_t token_pos,
                                                 float temperature,
@@ -627,6 +604,7 @@ void BatchedInferenceState<Config>::set_prompt( const size_t i,
                                                 uint8_t rank_tier_2 )
 {
   prompts_[i].prompt_id = prompt_id;
+  prompts_[i].context_id = context_id;
   prompts_[i].token = token;
   prompts_[i].token_pos = token_pos;
   prompts_[i].temperature = static_cast<uint8_t>( temperature * 255.0f );
@@ -644,9 +622,10 @@ void BatchedInferenceState<Config>::discard( const size_t i )
   CHECK( metadata_.next_stage == InferenceStage::PreAttention ) << "Discarding prompts in a non-PreAttention stage";
   CHECK_EQ( metadata_.next_layer, 0 ) << "Discarding prompts in a non-0 layer";
 
-  discarded_contexts_.push_back( { prompts_[i].prompt_id } );
-  metadata_.discarded_contexts++;
+  // TODO(pouya): will this preserve context_id?
+  auto context_id = prompts_[i].context_id;
   prompts_[i] = {};
+  prompts_[i].context_id = context_id;
   prompts_[i].active = false;
 }
 
@@ -706,13 +685,6 @@ bool BatchedInferenceState<Config>::replenish_from( BatchedInferenceState& other
   CHECK_EQ( metadata_.has_kvs, other.metadata_.has_kvs ) << "States with different key-value states";
   CHECK_EQ( metadata_.is_sharded, other.metadata_.is_sharded ) << "Sharded and Monolithic states";
 
-  // copy the discard list
-  metadata_.discarded_contexts += other.metadata_.discarded_contexts;
-  discarded_contexts_.insert(
-    discarded_contexts_.end(), other.discarded_contexts_.begin(), other.discarded_contexts_.end() );
-
-  other.clear_discards();
-
   size_t other_idx = 0;
   for ( size_t my_idx = 0; my_idx < prompts_.size(); my_idx++ ) {
     auto& prompt = prompts_[my_idx];
@@ -731,18 +703,12 @@ bool BatchedInferenceState<Config>::replenish_from( BatchedInferenceState& other
       }
     }
 
-    // We can only replenish when (1) either the other prompt is not rank assigned, and we can assign it to whatever
-    // rank the discarded prompt had, or (2) they have the same rank.
-    // So this condition won't trigger if 'other' is entirely unassigned. The second condition should ideally never get
-    // triggered, since it is hard to reason about it before runtime.
-    if ( not other.prompts_[other_idx].rank_assigned ) {
-      other.prompts_[other_idx].tier_1_rank = prompt.tier_1_rank;
-      other.prompts_[other_idx].tier_2_rank = prompt.tier_2_rank;
-    } else {
-      CHECK_EQ( other.prompts_[other_idx].tier_1_rank, prompt.tier_1_rank );
-      CHECK_EQ( other.prompts_[other_idx].tier_2_rank, prompt.tier_2_rank );
-    }
+    CHECK_EQ( other.prompts_[other_idx].context_id, NULL_CONTEXT )
+      << "Replenish can only happen if the state which we are replenishing from does not have a context id";
+    CHECK_NE( prompt.context_id, NULL_CONTEXT )
+      << "Replenish can only happen if the state which we are replenishing does have a context id";
 
+    other.prompts_[other_idx].context_id = prompt.context_id;
     prompt = other.prompts_[other_idx];
 
     if ( metadata_.has_activations ) {
@@ -765,13 +731,6 @@ bool BatchedInferenceState<Config>::replenish_from( BatchedInferenceState& other
 }
 
 template<typename Config>
-void BatchedInferenceState<Config>::clear_discards()
-{
-  discarded_contexts_.clear();
-  metadata_.discarded_contexts = 0;
-}
-
-template<typename Config>
 size_t BatchedInferenceState<Config>::free_slots() const
 {
   return std::count_if( prompts_.begin(), prompts_.end(), []( const auto& p ) { return not p.active; } );
@@ -782,7 +741,6 @@ std::deque<std::reference_wrapper<BatchedInferenceState>> BatchedInferenceState<
   std::vector<size_t> vec_n,
   bool ignore_empty )
 {
-  // TODO(pouya): how about the discarded contexts?
   CHECK_GT( vec_n.size(), 0 ) << "Splitting to empty  list";
 
   size_t sum_n = 0;
@@ -878,13 +836,6 @@ std::pair<BatchedInferenceState<Config>, BatchedInferenceState<Config>> BatchedI
     state_b.allocate_kvs();
   }
 
-  // TODO(pouya): moving all discarded contexts to one state is bad
-  // moving all the discarded contexts to the first state
-  state_a.discarded_contexts_ = discarded_contexts_;
-  state_a.metadata_.discarded_contexts = metadata_.discarded_contexts;
-  state_b.discarded_contexts_.clear();
-  state_b.metadata_.discarded_contexts = 0;
-
   for ( size_t i = 0; i < size_a; i++ ) {
     state_a.prompts_[i] = prompts_[i];
   }
@@ -958,8 +909,6 @@ void BatchedInferenceState<Config>::merge( BatchedInferenceState&& other )
   new_state.metadata_ = metadata_;
   new_state.metadata_.batch_size += other.metadata_.batch_size;
 
-  // TODO(pouya): how about the discarded contexts?
-
   new_state.prompts_.resize( metadata_.batch_size + other.metadata_.batch_size );
 
   // copying prompt data
@@ -1003,7 +952,6 @@ template<typename Config>
 static BatchedInferenceState&& BatchedInferenceState<Config>::merge_states(
   std::vector<std::reference_wrapper<BatchedInferenceState>> vec_state )
 {
-  // TODO(pouya): how about the discarded contexts?
   CHECK_GT( vec_state.size(), 0 ) << "Merging empty list";
 
   if ( vec_state.size() == 1 ) {
@@ -1092,21 +1040,15 @@ std::string BatchedInferenceState<Config>::debug_string( const bool prompt_detai
       << "next_stage=" << metadata_.next_stage << ", " << "has_activations=" << metadata_.has_activations << ", "
       << "activations.len=" << activations_.len() << ", " << "has_queries=" << metadata_.has_queries << ", "
       << "queries.len=" << queries_.len() << ", " << "has_kvs=" << metadata_.has_kvs << ", " << "kvs.len=" << kvs_.len()
-      << ", " << "is_sharded=" << metadata_.is_sharded << "discarded_contexts=[ ";
-
-  for ( const auto& d : discarded_contexts_ ) {
-    oss << " " << d.prompt_id.base58digest().substr( 0, 8 );
-  }
-
-  oss << "], ";
+      << ", " << "is_sharded=" << metadata_.is_sharded << ", ";
 
   if ( not prompt_details ) {
     oss << "prompts=[";
 
     for ( const auto& p : prompts_ ) {
-      oss << " (" << p.prompt_id.base58digest().substr( 0, 8 ) << ", " << p.token << ", " << p.token_pos << ", "
-          << ( p.temperature / 255.0f ) << ", " << p.prompt_length << ", " << p.finished << ", {" << p.rank_tier_1
-          << ", " << p.rank_tier_2 << "}) ";
+      oss << " (" << p.prompt_id.base58digest().substr( 0, 8 ) << ", " << p.context_id.base58digest().substr( 0, 8 )
+          << ", " << p.token << ", " << p.token_pos << ", " << ( p.temperature / 255.0f ) << ", " << p.prompt_length
+          << ", " << p.finished << ", {" << p.rank_tier_1 << ", " << p.rank_tier_2 << "}) ";
     }
 
     oss << "]";

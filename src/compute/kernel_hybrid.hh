@@ -87,9 +87,6 @@ private:
   std::map<size_t, std::pair<std::vector<ContextPtrA>, std::vector<ContextPtrB>>> context_map_ {};
   std::mutex context_mutex_ {};
 
-  void release_discarded_contexts( const StateType& state );
-  // </context management>
-
   // incoming -> (waiting|{a,b}.processing) -> outgoing
   GlobalQueue incoming_;
   GlobalQueue waiting_;
@@ -144,31 +141,16 @@ HybridComputeKernel<ModelA, ModelB>::~HybridComputeKernel()
 template<typename ModelA, typename ModelB>
 void HybridComputeKernel<ModelA, ModelB>::push( models::BatchedInferenceState<ConfigType>&& state )
 {
-  auto push_to_incoming = [this]( StateType&& s ) {
-    s.set_id( current_local_state_id_++ );
+  state.set_id( current_local_state_id_++ );
 
-    DLOG( INFO ) << "Pushing state to incoming queue: " << s.debug_string( false );
+  DLOG( INFO ) << "Pushing state to incoming queue: " << state.debug_string( false );
 
-    {
-      std::lock_guard lock { incoming_.mutex };
-      incoming_.queue.push( std::move( s ) );
-    }
-
-    incoming_.cv.notify_one();
-  };
-
-  // (1) discard the contexts we have to discard
-  if ( state.discarded_contexts() ) {
-    release_discarded_contexts( state );
+  {
+    std::lock_guard lock { incoming_.mutex };
+    incoming_.queue.push( std::move( state ) );
   }
 
-  // (2) is this the last layer? if so, we can get rid of the discard list.
-  if ( a_.model->settings().end_layer_num == ConfigType::n_layers - 1 ) {
-    state.clear_discards();
-  }
-
-  // (3) push it to the incoming queue
-  push_to_incoming( std::move( state ) );
+  incoming_.cv.notify_one();
 }
 
 template<typename ModelA, typename ModelB>
@@ -183,16 +165,6 @@ bool HybridComputeKernel<ModelA, ModelB>::pop( models::BatchedInferenceState<Con
   state = std::move( outgoing_.queue.top().state );
   outgoing_.queue.pop();
   return true;
-}
-
-template<typename ModelA, typename ModelB>
-void HybridComputeKernel<ModelA, ModelB>::release_discarded_contexts( const StateType& state )
-{
-  for ( size_t i = 0; i < state.discarded_contexts(); i++ ) {
-    auto& prompt_id = state.discarded_prompt_id( i );
-    a_.context_manager.release_context( prompt_id );
-    b_.context_manager.release_context( prompt_id );
-  }
 }
 
 template<typename ModelA, typename ModelB>
@@ -322,11 +294,11 @@ void HybridComputeKernel<ModelA, ModelB>::bookkeeping_thread_func()
 
       for ( size_t i = 0; i < state.batch_size(); i++ ) {
         if ( i < a_.concurrency.get( Stage::Attention ) ) {
-          auto ctx = a_.context_manager.get_context( state.prompt_id( i ) );
+          auto ctx = a_.context_manager.get_context( state.context_id( i ) );
           CHECK( ctx ) << "TierRouter has guaranteed context space, but compute kernel doesn't have any";
           contexts_a.push_back( std::move( ctx ) );
         } else {
-          auto ctx = b_.context_manager.get_context( state.prompt_id( i ) );
+          auto ctx = b_.context_manager.get_context( state.context_id( i ) );
           CHECK( ctx ) << "TierRouter has guaranteed context space, but compute kernel doesn't have any";
           contexts_b.push_back( std::move( ctx ) );
         }

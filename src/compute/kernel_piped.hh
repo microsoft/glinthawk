@@ -79,9 +79,6 @@ private:
   std::map<size_t, std::vector<ContextPtr>> context_map_ {};
   std::mutex context_mutex_ {};
 
-  void release_discarded_contexts( const StateType& state );
-  // </context management>
-
   // incoming -> (waiting|{a,b}.processing) -> outgoing
   GlobalQueue incoming_;
   GlobalQueue waiting_;
@@ -127,31 +124,16 @@ PipedComputeKernel<Model>::~PipedComputeKernel()
 template<typename Model>
 void PipedComputeKernel<Model>::push( models::BatchedInferenceState<ConfigType>&& state )
 {
-  auto push_to_incoming = [this]( models::BatchedInferenceState<ConfigType>&& s ) {
-    s.set_id( current_local_state_id_++ );
+  state.set_id( current_local_state_id_++ );
 
-    DLOG( INFO ) << "Pushing state to incoming queue: " << s.debug_string( false );
+  DLOG( INFO ) << "Pushing state to incoming queue: " << state.debug_string( false );
 
-    {
-      std::lock_guard lock { incoming_.mutex };
-      incoming_.queue.push( std::move( s ) );
-    }
-
-    incoming_.cv.notify_one();
-  };
-
-  // (1) discard the contexts we have to discard
-  if ( state.discarded_contexts() ) {
-    release_discarded_contexts( state );
+  {
+    std::lock_guard lock { incoming_.mutex };
+    incoming_.queue.push( std::move( state ) );
   }
 
-  // (2) is this the last layer? if so, we can get rid of the discard list.
-  if ( model_.model->settings().end_layer_num == ConfigType::n_layers - 1 ) {
-    state.clear_discards();
-  }
-
-  // (3) push it to the incoming queue
-  push_to_incoming( std::move( state ) );
+  incoming_.cv.notify_one();
 }
 
 template<typename Model>
@@ -166,15 +148,6 @@ bool PipedComputeKernel<Model>::pop( models::BatchedInferenceState<ConfigType>& 
   state = std::move( outgoing_.queue.top().state );
   outgoing_.queue.pop();
   return true;
-}
-
-template<typename Model>
-void PipedComputeKernel<Model>::release_discarded_contexts( const StateType& state )
-{
-  for ( size_t i = 0; i < state.discarded_contexts(); i++ ) {
-    auto& prompt_id = state.discarded_prompt_id( i );
-    model_.context_manager.release_context( prompt_id );
-  }
 }
 
 template<typename Model>
@@ -261,7 +234,7 @@ void PipedComputeKernel<Model>::bookkeeping_thread_func()
 
       for ( size_t i = 0; i < state.batch_size(); i++ ) {
         // context_manager has an internal thread safety lock, we should never hold a lock while calling it
-        auto ctx = model_.context_manager.get_context( state.prompt_id( i ) );
+        auto ctx = model_.context_manager.get_context( state.context_id( i ) );
         CHECK( ctx ) << "TierRouter has guaranteed context space, but compute kernel doesn't have any";
         contexts.push_back( std::move( ctx ) );
       }

@@ -107,7 +107,7 @@ public:
       }
 
       for ( size_t i = 0; i < batch_size_; i++ ) {
-        state.set_prompt( i, PromptID {}, 1, token_pos_, 0.5, 1, 0, -1 );
+        state.set_prompt( i, PromptID {}, ContextID {}, 1, token_pos_, 0.5, 1, 0, -1 );
       }
     }
   }
