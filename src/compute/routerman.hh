@@ -77,6 +77,8 @@ protected:
 /// The worker reads an outgoing queue from ParentTierRouter to send out outbound states.
 /// ParentTierRouter fully handles context management, and guarantees that if a shard arrives at the kernel, that
 /// kernel has space for it.
+// TODO(pouya): fix incomplete states to be filled in worker
+// TODO(pouya): fix discarded states in merge and split
 // TODO(pouya): can straggler's cause an unstable failure mode in dispersing work among tiers?
 // TODO(pouya): how does routing work?
 // TODO(pouya): how does worker know to send a shard back to its origin?

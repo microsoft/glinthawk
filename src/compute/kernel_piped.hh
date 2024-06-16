@@ -111,8 +111,8 @@ template<typename... Args>
 PipedComputeKernel<Model>::PipedComputeKernel( const Concurrency& concurrency, Args&&... args )
   : model_( std::make_unique<Model>( std::forward<Args>( args )... ), concurrency )
 {
-  threads_.emplace_back( &HybridComputeKernel::bookkeeping_thread_func, this );
-  threads_.emplace_back( &HybridComputeKernel::execution_thread_func<Model>, this, std::ref( model_ ) );
+  threads_.emplace_back( &PipedComputeKernel::bookkeeping_thread_func, this );
+  threads_.emplace_back( &PipedComputeKernel::execution_thread_func<Model>, this, std::ref( model_ ) );
 }
 
 template<typename Model>
@@ -254,23 +254,22 @@ void PipedComputeKernel<Model>::bookkeeping_thread_func()
     CHECK_LE( model_.model->settings().start_layer_num, state.next_layer() );
     CHECK_EQ( model_.concurrency.get( state.next_stage() ), state.batch_size() );
 
-    switch ( state.next_stage() ) {
-      case Stage::Attention:
-        CHECK_EQ( context_map_.find( state.id() ), context_map_.end() );
-        std::vector<ContextPtr> contexts;
-        contexts.reserve( model_.concurrency.get( Stage::Attention ) );
+    if ( state.next_stage() == Stage::Attention ) {
+      CHECK_EQ( context_map_.find( state.id() ), context_map_.end() );
+      std::vector<ContextPtr> contexts;
+      contexts.reserve( model_.concurrency.get( Stage::Attention ) );
 
-        for ( size_t i = 0; i < state.batch_size(); i++ ) {
-          // context_manager has an internal thread safety lock, we should never hold a lock while calling it
-          auto ctx = model_.context_manager.get_context( state.prompt_id( i ) );
-          CHECK( ctx ) << "TierRouter has guaranteed context space, but compute kernel doesn't have any";
-          contexts.push_back( std::move( ctx ) );
-        }
-        {
-          std::lock_guard lock { context_mutex_ };
-          // TODO(pouya): why move vector of context? is context non-copyable? Will this line even work on a map?
-          context_map_[state.id()] = std::move( contexts );
-        }
+      for ( size_t i = 0; i < state.batch_size(); i++ ) {
+        // context_manager has an internal thread safety lock, we should never hold a lock while calling it
+        auto ctx = model_.context_manager.get_context( state.prompt_id( i ) );
+        CHECK( ctx ) << "TierRouter has guaranteed context space, but compute kernel doesn't have any";
+        contexts.push_back( std::move( ctx ) );
+      }
+      {
+        std::lock_guard lock { context_mutex_ };
+        // TODO(pouya): why move vector of context? is context non-copyable? Will this line even work on a map?
+        context_map_[state.id()] = std::move( contexts );
+      }
     }
 
     {

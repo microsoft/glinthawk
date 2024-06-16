@@ -230,6 +230,18 @@ void BatchedWorker<ModelConfig, ComputeKernel>::setup_compute_kernel( const std:
   if constexpr ( ComputeKernel::Type == compute::KernelType::Batched ) {
     compute_kernel_ = std::make_unique<ComputeKernel>(
       max_concurrency_size, model_root, start_layer, end_layer, max_concurrency_size, max_context_count, randomize );
+  } else if constexpr ( ComputeKernel::Type == compute::KernelType::SimplePiped ) {
+    compute_kernel_
+      = std::make_unique<ComputeKernel>( typename ComputeKernel::Concurrency { concurrency_size_pre_attention,
+                                                                               concurrency_size_attention,
+                                                                               concurrency_size_post_attention,
+                                                                               concurrency_size_classification },
+                                         model_root,
+                                         start_layer,
+                                         end_layer,
+                                         max_concurrency_size,
+                                         max_context_count,
+                                         randomize );
   } else if constexpr ( ComputeKernel::Type == compute::KernelType::Hybrid ) {
     compute_kernel_ = std::make_unique<ComputeKernel>(
       typename ComputeKernel::Concurrency {

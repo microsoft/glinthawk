@@ -74,9 +74,6 @@ private:
   ModelData<ModelA> a_;
   ModelData<ModelB> b_;
 
-  // a state with some empty slots
-  std::optional<StateType> incomplete_state_ {};
-
   EventFD event_fd_ {};
   std::atomic<bool> running_ { true };
 
@@ -104,7 +101,6 @@ private:
   void execution_thread_func( ModelData<M>& model_data );
 
   void bookkeeping_thread_func();
-  void backlog_thread_func();
 
   std::vector<std::thread> threads_;
   // </threads>
@@ -128,19 +124,9 @@ HybridComputeKernel<ModelA, ModelB>::HybridComputeKernel( const Concurrency& con
   : a_( std::make_unique<ModelA>( std::forward<Args>( args )... ), concurrency_a )
   , b_( std::make_unique<ModelB>( std::forward<Args>( args )... ), concurrency_b )
 {
-  // TODO(pouya): this stuff should be checked in tier router
-  // check the concurrency settings to be permissible
-  CHECK_EQ( a_.concurrency.get( Stage::PreAttention ) + b_.concurrency.get( Stage::PreAttention ),
-            a_.concurrency.get( Stage::Attention ) + b_.concurrency.get( Stage::Attention ) );
+  CHECK_GE( a_.model->settings().end_layer_num, b_.model->settings().end_layer_num );
+  CHECK_LE( a_.model->settings().start_layer_num, b_.model->settings().start_layer_num );
 
-  CHECK_EQ( a_.concurrency.get( Stage::Attention ) + b_.concurrency.get( Stage::Attention ),
-            a_.concurrency.get( Stage::PostAttention ) + b_.concurrency.get( Stage::PostAttention ) );
-
-  // Following is not always true; we need to figure it out before enabling it.
-  // CHECK_EQ( a_.concurrency.get( Stage::PostAttention ) + b_.concurrency.get( Stage::PostAttention ),
-  //           a_.concurrency.get( Stage::Classification ) + b_.concurrency.get( Stage::Classification ) );
-
-  threads_.emplace_back( &HybridComputeKernel::backlog_thread_func, this );
   threads_.emplace_back( &HybridComputeKernel::bookkeeping_thread_func, this );
   threads_.emplace_back( &HybridComputeKernel::execution_thread_func<ModelA>, this, std::ref( a_ ) );
   threads_.emplace_back( &HybridComputeKernel::execution_thread_func<ModelB>, this, std::ref( b_ ) );
@@ -181,33 +167,8 @@ void HybridComputeKernel<ModelA, ModelB>::push( models::BatchedInferenceState<Co
     state.clear_discards();
   }
 
-  // XXX maybe we should do all this outside of the kernel
-  // TODO(pouya): incomplete state breaks many core assumptions, we should get rid of it
-  // (3) do we have an incomplete state to merge this with?
-  if ( incomplete_state_.has_value() ) {
-    auto& new_state = incomplete_state_.value();
-    new_state.replenish_from( state );
-
-    if ( new_state.free_slots() == 0 ) {
-      push_to_incoming( std::move( new_state ) );
-      incomplete_state_.reset();
-    } else {
-      // if there's a free slot, it means that the input state must be now empty and we can discard it
-      CHECK_EQ( state.free_slots(), state.batch_size() );
-      return;
-    }
-  }
-
-  // (4) there's something left in the input state; let's see if we can push it to the incoming queue
-  if ( state.free_slots() == 0 ) {
-    // all slots are filled; push it to the incoming queue
-    push_to_incoming( std::move( state ) );
-  } else if ( state.free_slots() < state.batch_size() ) {
-    // some slots are filled; keep it as an incomplete state
-    incomplete_state_ = std::move( state );
-  } else {
-    // all slots are empty; discard it
-  }
+  // (3) push it to the incoming queue
+  push_to_incoming( std::move( state ) );
 }
 
 template<typename ModelA, typename ModelB>
@@ -259,12 +220,6 @@ void HybridComputeKernel<ModelA, ModelB>::execution_thread_func(
 
     const auto local_id = state.id();
     const auto next_stage = state.next_stage();
-    const auto next_layer = state.next_layer();
-    // TODO(pouya): fix this assumption: this machine serves all stages in one layer
-    const auto is_last_step
-      = ( next_stage == Stage::Classification )
-        or ( next_stage == Stage::PostAttention and next_layer == model_data.model->settings().end_layer_num
-             and next_layer < ConfigType::n_layers - 1 );
 
     // run the corresponding forward function
     switch ( next_stage ) {
@@ -315,35 +270,21 @@ void HybridComputeKernel<ModelA, ModelB>::execution_thread_func(
     }
 
     if ( merged_state.has_value() ) {
-      // was this the last layer and stage served by this kernel?
-      if ( is_last_step ) {
-        // yes; we need to send it to the outgoing queue
-        {
-          // remove the contexts from the context map
-          std::unique_lock lock { context_mutex_ };
-          // TODO(pouya): rethink context map cache
-          context_map_.erase( local_id );
-        }
-
-        DLOG( INFO ) << "Pushing state to outgoing queue: " << merged_state->debug_string( false );
-
-        {
-          std::lock_guard lock { outgoing_.mutex };
-          outgoing_.queue.push( std::move( *merged_state ) );
-        }
-
-        event_fd_.write_event();
-      } else {
-        // no; we need to keep processing it
-        DLOG( INFO ) << "Pushing state back to incoming queue: " << merged_state->debug_string( false );
-
-        {
-          std::lock_guard lock { incoming_.mutex };
-          incoming_.queue.push( std::move( *merged_state ) );
-        }
-
-        incoming_.cv.notify_one();
+      // we need to send it to the outgoing queue regardless of what it is
+      {
+        // remove the contexts from the context map
+        std::unique_lock lock { context_mutex_ };
+        context_map_.erase( local_id );
       }
+
+      DLOG( INFO ) << "Pushing state to outgoing queue: " << merged_state->debug_string( false );
+
+      {
+        std::lock_guard lock { outgoing_.mutex };
+        outgoing_.queue.push( std::move( *merged_state ) );
+      }
+
+      event_fd_.write_event();
     }
   }
 }
@@ -364,22 +305,14 @@ void HybridComputeKernel<ModelA, ModelB>::bookkeeping_thread_func()
       DLOG( INFO ) << "Popped state from incoming queue: " << state.debug_string( false );
     }
 
-    // TODO(sadjad): check if this state is even valid for this kernel
-
-    // TODO(sadjad): discard the finished prompts (state.discarded_contexts_)
+    CHECK_GE( a_.model->settings().end_layer_num, state.next_layer() );
+    CHECK_LE( a_.model->settings().start_layer_num, state.next_layer() );
+    CHECK_EQ( a_.concurrency.get( state.next_stage() ) + b_.concurrency.get( state.next_stage() ), state.batch_size() );
 
     // can we, or have we already, allocated the contexts for this state?
 
-    // TODO(pouya): how do we know we haven't already reserved context?
-    if ( context_map_.find( state.id() ) == context_map_.end() ) {
-      if ( a_.context_manager.free() < a_.concurrency.get( Stage::Attention )
-           or b_.context_manager.free() < b_.concurrency.get( Stage::Attention ) ) {
-        // we don't have enough space for these contexts, this is going to the waiting queue
-        DLOG( INFO ) << "Pushing state to waiting queue: " << state.debug_string( false );
-        std::unique_lock lock { waiting_.mutex };
-        waiting_.queue.push( std::move( state ) );
-        continue;
-      }
+    if ( state.next_stage() == Stage::Attention ) {
+      CHECK_EQ( context_map_.find( state.id() ), context_map_.end() );
 
       std::vector<ContextPtrA> contexts_a;
       std::vector<ContextPtrB> contexts_b;
@@ -390,25 +323,17 @@ void HybridComputeKernel<ModelA, ModelB>::bookkeeping_thread_func()
       for ( size_t i = 0; i < state.batch_size(); i++ ) {
         if ( i < a_.concurrency.get( Stage::Attention ) ) {
           auto ctx = a_.context_manager.get_context( state.prompt_id( i ) );
-          if ( not ctx ) {
-            LOG( FATAL ) << "Cannot allocate context.";
-            break;
-          }
+          CHECK( ctx ) << "TierRouter has guaranteed context space, but compute kernel doesn't have any";
           contexts_a.push_back( std::move( ctx ) );
-        } else if ( i < a_.concurrency.get( Stage::Attention ) + b_.concurrency.get( Stage::Attention ) ) {
-          auto ctx = b_.context_manager.get_context( state.prompt_id( i ) );
-          if ( not ctx ) {
-            LOG( FATAL ) << "Cannot allocate context.";
-            break;
-          }
-          contexts_b.push_back( std::move( ctx ) );
         } else {
-          LOG( FATAL ) << "Invalid state: " << state.debug_string( false );
+          auto ctx = b_.context_manager.get_context( state.prompt_id( i ) );
+          CHECK( ctx ) << "TierRouter has guaranteed context space, but compute kernel doesn't have any";
+          contexts_b.push_back( std::move( ctx ) );
         }
       }
-
       {
         std::lock_guard lock { context_mutex_ };
+        // TODO(pouya): why move vector of context? is context non-copyable? Will this line even work on a map?
         context_map_[state.id()] = std::make_pair( std::move( contexts_a ), std::move( contexts_b ) );
       }
     }
@@ -418,11 +343,6 @@ void HybridComputeKernel<ModelA, ModelB>::bookkeeping_thread_func()
 
     // do we need to split this state?
     if ( a_.concurrency.get( next_stage ) > 0 && b_.concurrency.get( next_stage ) > 0 ) {
-      // TODO(sadjad): check the batch size against concurrency settings
-
-      // XXX(sadjad): allow for incomplete states?
-      // I don't think incomplete states should happen inside the kernel at all.
-
       // split the state
       auto [state_a, state_b] = state.split( a_.concurrency.get( next_stage ) );
 
@@ -467,17 +387,9 @@ void HybridComputeKernel<ModelA, ModelB>::bookkeeping_thread_func()
           b_.processing.push( std::move( state ) );
         }
         b_.cv.notify_one();
-      } else {
-        LOG( FATAL ) << "State batch size and concurrency settings do not match";
       }
     }
   }
-}
-
-template<typename ModelA, typename ModelB>
-void HybridComputeKernel<ModelA, ModelB>::backlog_thread_func()
-{
-  // TODO(pouya): fix the waiting stuff
 }
 
 } // namespace glinthawk::compute
