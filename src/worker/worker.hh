@@ -12,6 +12,9 @@
 
 #include "compute/kernel.hh"
 #include "compute/kernel_hybrid.hh"
+#include "compute/kernel_hybrid_simple.hh.hh"
+#include "compute/kernel_piped.hh"
+#include "compute/routerman.hh"
 #include "message/handler.hh"
 #include "message/message.hh"
 #include "message/util.hh"
@@ -55,7 +58,7 @@ constexpr DataType get_datatype()
 
 } // anonymous namespace
 
-template<typename ModelConfig, typename ComputeKernel>
+template<typename ModelConfig, typename TierRouter, typename ComputeKernel>
 requires models::llama2::ModelConfig<ModelConfig>
          && compute::KernelConcept<ComputeKernel, models::BatchedInferenceState<ModelConfig>>
 class BatchedWorker
@@ -89,7 +92,7 @@ private:
   std::map<net::Address, Peer> peers_ {};
 
   std::filesystem::path model_root_;
-  std::unique_ptr<ComputeKernel> compute_kernel_ { nullptr };
+  std::unique_ptr<TierRouter<ComputeKernel, ModelConfig>> tier_router_ { nullptr };
 
   std::unordered_map<RouteID, RouteMap> route_set_ {};
   glinthawk::prompt::PromptStore prompt_store_ {};
@@ -112,7 +115,7 @@ private:
     .response = event_loop_.add_category( "Telegraf response" ),
   };
 
-  uint32_t concurrency_size_pre_attention_ { 0 };
+  uint32_t monolith_concurrency_size_ { 0 };
 
   Measurement& __stats__ { global_measurement() };
   std::unique_ptr<monitoring::TelegrafLogger> telegraf_logger_ { nullptr };
@@ -120,19 +123,29 @@ private:
   uint64_t dummy_hash_current_id_ { 0 };
 
   void setup_peer( std::map<net::Address, Peer>::iterator peer_it );
-  void setup_compute_kernel( const std::filesystem::path& model_root,
-                             const uint32_t start_layer,
-                             const uint32_t end_layer,
-                             const uint32_t concurrency_size_pre_attention,
-                             const uint32_t concurrency_size_attention,
-                             const uint32_t concurrency_size_post_attention,
-                             const uint32_t concurrency_size_classification,
-                             const uint32_t max_context_count,
-                             const bool randomize );
+  void setup_tier_router_and_compute_kernel( const std::filesystem::path& model_root,
+                                             const uint32_t start_layer,
+                                             const uint32_t end_layer,
+                                             const uint32_t n_tier_1,
+                                             const uint32_t concurrency_size_pre_attention_tier_1,
+                                             const uint32_t concurrency_size_attention_tier_1,
+                                             const uint32_t concurrency_size_post_attention_tier_1,
+                                             const uint32_t concurrency_size_classification_tier_1,
+                                             const uint32_t max_context_count_tier_1,
+                                             const uint32_t n_tier_2,
+                                             const uint32_t concurrency_size_pre_attention_tier_2,
+                                             const uint32_t concurrency_size_attention_tier_2,
+                                             const uint32_t concurrency_size_post_attention_tier_2,
+                                             const uint32_t concurrency_size_classification_tier_2,
+                                             const uint32_t max_context_count_tier_2,
+                                             const uint8_t tier_1_rank,
+                                             const uint8_t tier_2_rank,
+                                             const bool static_parent,
+                                             const bool randomize );
   void setup_stats_handler();
 
   void listen_callback();
-  void handle_compute_kernel_event();
+  void handle_tier_router_event();
   bool handle_coordinator_message( core::Message&& msg );
   bool handle_peer_message( core::Message&& msg );
   void handle_stats();
@@ -211,42 +224,69 @@ void BatchedWorker<ModelConfig, ComputeKernel>::setup_peer( std::map<net::Addres
 }
 
 template<typename ModelConfig, typename ComputeKernel>
-void BatchedWorker<ModelConfig, ComputeKernel>::setup_compute_kernel( const std::filesystem::path& model_root,
-                                                                      const uint32_t start_layer,
-                                                                      const uint32_t end_layer,
-                                                                      const uint32_t concurrency_size_pre_attention,
-                                                                      const uint32_t concurrency_size_attention,
-                                                                      const uint32_t concurrency_size_post_attention,
-                                                                      const uint32_t concurrency_size_classification,
-                                                                      const uint32_t max_context_count,
-                                                                      const bool randomize )
+void BatchedWorker<ModelConfig, ComputeKernel>::setup_tier_router_and_compute_kernel(
+  const std::filesystem::path& model_root,
+  const uint32_t start_layer,
+  const uint32_t end_layer,
+  const uint32_t n_tier_1,
+  const uint32_t concurrency_size_pre_attention_tier_1,
+  const uint32_t concurrency_size_attention_tier_1,
+  const uint32_t concurrency_size_post_attention_tier_1,
+  const uint32_t concurrency_size_classification_tier_1,
+  const uint32_t max_context_count_tier_1,
+  const uint32_t n_tier_2,
+  const uint32_t concurrency_size_pre_attention_tier_2,
+  const uint32_t concurrency_size_attention_tier_2,
+  const uint32_t concurrency_size_post_attention_tier_2,
+  const uint32_t concurrency_size_classification_tier_2,
+  const uint32_t max_context_count_tier_2,
+  const uint8_t tier_1_rank,
+  const uint8_t tier_2_rank,
+  const bool static_parent,
+  const bool randomize )
 {
   CHECK_LE( start_layer, end_layer ) << "start_layer must be less than or equal to end_layer";
+
+  if ( tier_2_rank == -1 ) {
+    const auto concurrency_size_pre_attention = concurrency_size_pre_attention_tier_1;
+    const auto concurrency_size_attention = concurrency_size_attention_tier_1;
+    const auto concurrency_size_post_attention = concurrency_size_post_attention_tier_1;
+    const auto concurrency_size_classification = concurrency_size_classification_tier_1;
+    const auto max_context_count = max_context_count_tier_1;
+  } else {
+    const auto concurrency_size_pre_attention = concurrency_size_pre_attention_tier_2;
+    const auto concurrency_size_attention = concurrency_size_attention_tier_2;
+    const auto concurrency_size_post_attention = concurrency_size_post_attention_tier_2;
+    const auto concurrency_size_classification = concurrency_size_classification_tier_2;
+    const auto max_context_count = max_context_count_tier_1;
+  }
+
+  monolith_concurrency_size_
+    = n_tier_1 * concurrency_size_pre_attention_tier_1 + n_tier_2 * concurrency_size_pre_attention_tier_2;
 
   const int max_concurrency_size = std::max( { concurrency_size_pre_attention,
                                                concurrency_size_attention,
                                                concurrency_size_post_attention,
                                                concurrency_size_classification } );
 
-  concurrency_size_pre_attention_ = concurrency_size_pre_attention;
+  ComputeKernel kernel_;
 
   if constexpr ( ComputeKernel::Type == compute::KernelType::Batched ) {
-    compute_kernel_ = std::make_unique<ComputeKernel>(
+    kernel_ = std::make_unique<ComputeKernel>(
       max_concurrency_size, model_root, start_layer, end_layer, max_concurrency_size, max_context_count, randomize );
   } else if constexpr ( ComputeKernel::Type == compute::KernelType::SimplePiped ) {
-    compute_kernel_
-      = std::make_unique<ComputeKernel>( typename ComputeKernel::Concurrency { concurrency_size_pre_attention,
-                                                                               concurrency_size_attention,
-                                                                               concurrency_size_post_attention,
-                                                                               concurrency_size_classification },
-                                         model_root,
-                                         start_layer,
-                                         end_layer,
-                                         max_concurrency_size,
-                                         max_context_count,
-                                         randomize );
+    kernel_ = std::make_unique<ComputeKernel>( typename ComputeKernel::Concurrency { concurrency_size_pre_attention,
+                                                                                     concurrency_size_attention,
+                                                                                     concurrency_size_post_attention,
+                                                                                     concurrency_size_classification },
+                                               model_root,
+                                               start_layer,
+                                               end_layer,
+                                               max_concurrency_size,
+                                               max_context_count,
+                                               randomize );
   } else if constexpr ( ComputeKernel::Type == compute::KernelType::Hybrid ) {
-    compute_kernel_ = std::make_unique<ComputeKernel>(
+    kernel_ = std::make_unique<ComputeKernel>(
       typename ComputeKernel::Concurrency {
         concurrency_size_pre_attention, 0, concurrency_size_post_attention, concurrency_size_classification },
       typename ComputeKernel::Concurrency { 0, concurrency_size_attention, 0, 0 },
@@ -257,23 +297,82 @@ void BatchedWorker<ModelConfig, ComputeKernel>::setup_compute_kernel( const std:
       max_context_count,
       randomize );
   } else if constexpr ( ComputeKernel::Type == compute::KernelType::SimpleHybrid ) {
-    compute_kernel_ = std::make_unique<ComputeKernel>( concurrency_size_attention,
-                                                       model_root,
-                                                       start_layer,
-                                                       end_layer,
-                                                       max_concurrency_size,
-                                                       max_context_count,
-                                                       randomize );
+    kernel_ = std::make_unique<ComputeKernel>( concurrency_size_attention,
+                                               model_root,
+                                               start_layer,
+                                               end_layer,
+                                               max_concurrency_size,
+                                               max_context_count,
+                                               randomize );
 
   } else {
     LOG( FATAL ) << "Invalid ComputeKernel type.";
   }
 
+  if ( n_tier_1 == 1 and n_tier_2 == 0 ) {
+    CHECK_EQ( tier_1_rank, 0 );
+    CHECK_EQ( tier_2_rank, -1 );
+    tier_router_
+      = std::make_unique<SingleTierRouter<ComputeKernel, ModelConfig>>( kernel_,
+                                                                        { concurrency_size_pre_attention_tier_1,
+                                                                          concurrency_size_attention_tier_1,
+                                                                          concurrency_size_post_attention_1,
+                                                                          concurrency_size_classification_1 },
+                                                                        max_context_count_tier_1,
+                                                                        start_layer,
+                                                                        end_layer );
+  } else if ( tier_1_rank == 0 ) {
+    if ( static_parent ) {
+      tier_router_
+        = std::make_unique<StaticParentTierRouter<ComputeKernel, ModelConfig>>( kernel_,
+                                                                                n_tier_1,
+                                                                                { concurrency_size_pre_attention_tier_1,
+                                                                                  concurrency_size_attention_tier_1,
+                                                                                  concurrency_size_post_attention_1,
+                                                                                  concurrency_size_classification_1 },
+                                                                                max_context_count_tier_1,
+                                                                                n_tier_2,
+                                                                                { concurrency_size_pre_attention_tier_2,
+                                                                                  concurrency_size_attention_tier_2,
+                                                                                  concurrency_size_post_attention_2,
+                                                                                  concurrency_size_classification_2 },
+                                                                                max_context_count_tier_2,
+                                                                                start_layer,
+                                                                                end_layer );
+    } else {
+      tier_router_
+        = std::make_unique<ParentTierRouter<ComputeKernel, ModelConfig>>( kernel_,
+                                                                          n_tier_1,
+                                                                          { concurrency_size_pre_attention_tier_1,
+                                                                            concurrency_size_attention_tier_1,
+                                                                            concurrency_size_post_attention_1,
+                                                                            concurrency_size_classification_1 },
+                                                                          max_context_count_tier_1,
+                                                                          n_tier_2,
+                                                                          { concurrency_size_pre_attention_tier_2,
+                                                                            concurrency_size_attention_tier_2,
+                                                                            concurrency_size_post_attention_2,
+                                                                            concurrency_size_classification_2 },
+                                                                          max_context_count_tier_2,
+                                                                          start_layer,
+                                                                          end_layer );
+    }
+  } else {
+    tier_router_ = std::make_unique<ChildTierRouter<ComputeKernel, ModelConfig>>( kernel_ );
+  }
+
+  event_loop_.add_rule( "Tier Router",
+                        Direction::In,
+                        tier_router_->event_fd(),
+                        std::bind( &BatchedWorker<ModelConfig, ComputeKernel>::handle_tier_router_event, this ),
+                        [this] { return this->compute_kernel_ != nullptr; } );
+
+  // TODO(pouya): get event loop working for the inner event_fd
   event_loop_.add_rule( "Compute Kernel",
                         Direction::In,
-                        compute_kernel_->event_fd(),
-                        std::bind( &BatchedWorker<ModelConfig, ComputeKernel>::handle_compute_kernel_event, this ),
-                        [this] { return this->compute_kernel_ != nullptr; } );
+                        tier_router_->compute_kernel_->event_fd(),
+                        std::bind( &TierRouter<ComputeKernel, ModelConfig>::pull_from_kernel, this ),
+                        [this] { return this->tier_router_ != nullptr; } );
 
   event_loop_.add_rule(
     "Commit completions",
@@ -397,15 +496,25 @@ bool BatchedWorker<ModelConfig, ComputeKernel>::handle_coordinator_message( core
       __stats__.tag( "platform", "cuda" );
 #endif
 
-      setup_compute_kernel( model_root_,
-                            proto.start_layer(),
-                            proto.end_layer(),
-                            proto.concurrency_pre_att_size(),
-                            proto.concurrency_att_size(),
-                            proto.concurrency_post_att_size(),
-                            proto.concurrency_cls_size(),
-                            proto.max_context_count(),
-                            proto.randomize() );
+      setup_tier_router_and_compute_kernel( model_root_,
+                                            proto.start_layer(),
+                                            proto.end_layer(),
+                                            proto.n_tier_1(),
+                                            proto.concurrency_pre_att_size_tier_1(),
+                                            proto.concurrency_att_size_tier_1(),
+                                            proto.concurrency_post_att_size_tier_1(),
+                                            proto.concurrency_cls_size_tier_1(),
+                                            proto.max_context_count_tier_1(),
+                                            proto.n_tier_2(),
+                                            proto.concurrency_pre_att_size_tier_2(),
+                                            proto.concurrency_att_size_tier_2(),
+                                            proto.concurrency_post_att_size_tier_2(),
+                                            proto.concurrency_cls_size_tier_2(),
+                                            proto.max_context_count_tier_2(),
+                                            proto.tier_1_rank(),
+                                            proto.tier_2_rank(),
+                                            proto.static_parent(),
+                                            proto.randomize() );
 
       LOG( INFO ) << "Worker initialized.";
       break;
@@ -415,9 +524,9 @@ bool BatchedWorker<ModelConfig, ComputeKernel>::handle_coordinator_message( core
       LOG( INFO ) << "Received Bye message; shutting down.";
 
       // things to do when shutting down:
-      // (1) stop the compute kernel right away
-      LOG( INFO ) << "Stopping compute kernel...";
-      this->compute_kernel_ = nullptr;
+      // (1) stop the tier router right away
+      LOG( INFO ) << "Stopping tier router...";
+      this->tier_router_ = nullptr;
 
       // (2) commit all finished completions
       handle_completions( false );
@@ -487,6 +596,7 @@ bool BatchedWorker<ModelConfig, ComputeKernel>::handle_coordinator_message( core
     }
 
     case Message::OpCode::PushDummyPrompts: {
+      // TODO(pouya): should we check if we are the parent? does the worker need to know that?
       // create some random inference states and feed them into the system
       protobuf::PushDummyPrompts proto;
       proto.ParseFromString( msg.payload() );
@@ -556,15 +666,16 @@ bool BatchedWorker<ModelConfig, ComputeKernel>::handle_coordinator_message( core
                             -1 );
         }
 
-        // TODO(pouya): have to check with tier router if we have space here
-
         DLOG( INFO ) << "Generated state: " << state.debug_string( true );
-        this->compute_kernel_->push( std::move( state ) );
+        // TODO(pouya): ugly workaround, we should have a "waiting" queue in worker for this.
+        CHECK( this->tier_router_->is_context_available() );
+        this->tier_router_->push( std::move( state ) );
       }
 
       break;
     }
 
+      // TODO(pouya): need to rethink what these commands mean
     case Message::OpCode::PushPrompts: {
       protobuf::PushPrompts proto;
       proto.ParseFromString( msg.payload() );
@@ -576,19 +687,35 @@ bool BatchedWorker<ModelConfig, ComputeKernel>::handle_coordinator_message( core
       }
 
       size_t added_prompt_count = 0;
-      while ( prompt_queue_.size() >= concurrency_size_pre_attention_ ) {
+      while ( prompt_queue_.size() >= monolith_concurrency_size_ ) {
         BatchedState state {
-          concurrency_size_pre_attention_, DataType::Float16, RouteID {}, ModelID {}, false, false, false
+          monolith_concurrency_size_, DataType::Float16, RouteID {}, ModelID {}, false, false, false
         };
 
-        for ( size_t i = 0; i < concurrency_size_pre_attention_; i++ ) {
+        auto generate_next_hash_id = [this]() -> HashID {
+          char hash_id_buf[2 * sizeof( uint64_t )];
+          const uint64_t current_time
+            = std::chrono::duration_cast<std::chrono::nanoseconds>( std::chrono::system_clock::now().time_since_epoch() )
+                .count();
+
+          memcpy( hash_id_buf, &current_time, sizeof( uint64_t ) );
+          memcpy( hash_id_buf + sizeof( uint64_t ), &( this->dummy_hash_current_id_ ), sizeof( uint64_t ) );
+
+          HashID hash_id;
+          util::digest::sha256( { hash_id_buf, sizeof( hash_id_buf ) }, hash_id );
+
+          this->dummy_hash_current_id_++;
+          return hash_id;
+        };
+
+        for ( size_t i = 0; i < monolith_concurrency_size_; i++ ) {
           PromptID prompt_id = prompt_queue_.front();
           prompt_queue_.pop();
           auto& prompt = prompt_store_.get( prompt_id );
           // TODO(pouya): this needs to be filled with a valid context id from some pool
           state.set_prompt( i,
                             prompt_id,
-                            "something",
+                            generate_next_hash_id(),
                             prompt.prompt().at( 0 ),
                             0,
                             prompt.temperature(),
@@ -597,12 +724,14 @@ bool BatchedWorker<ModelConfig, ComputeKernel>::handle_coordinator_message( core
                             -1 );
         }
 
-        this->compute_kernel_->push( std::move( state ) );
-        added_prompt_count += concurrency_size_pre_attention_;
+        // TODO(pouya): ugly workaround, we should have a "waiting" queue in worker for this.
+        CHECK( this->tier_router_->is_context_available() );
+        this->tier_router_->push( std::move( state ) );
+        added_prompt_count += monolith_concurrency_size_;
       }
 
       if ( added_prompt_count > 0 ) {
-        LOG( INFO ) << "Added " << added_prompt_count << " prompts to the compute kernel.";
+        LOG( INFO ) << "Added " << added_prompt_count << " prompts to the tier router.";
       }
     } break;
 
@@ -616,13 +745,13 @@ bool BatchedWorker<ModelConfig, ComputeKernel>::handle_coordinator_message( core
 }
 
 template<typename ModelConfig, typename ComputeKernel>
-void BatchedWorker<ModelConfig, ComputeKernel>::handle_compute_kernel_event()
+void BatchedWorker<ModelConfig, ComputeKernel>::handle_tier_router_event()
 {
-  this->compute_kernel_->event_fd().read_event();
+  this->tier_router_->event_fd().read_event();
 
   models::BatchedInferenceState<ModelConfig> state;
 
-  while ( this->compute_kernel_->pop( state ) ) {
+  while ( this->tier_router_->pop( state ) ) {
     __stats__.increment<Counters::StatesProcessed>( state.batch_size() );
 
     const auto next_worker = find_next_worker( route_set_.at( state.route_id() ), state );
@@ -710,7 +839,7 @@ bool BatchedWorker<ModelConfig, ComputeKernel>::handle_peer_message( core::Messa
         }
       }
 
-      this->compute_kernel_->push( std::move( state ) );
+      this->tier_router_->push( std::move( state ) );
       break;
     }
 

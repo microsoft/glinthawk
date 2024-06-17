@@ -20,14 +20,23 @@ message InitializeWorker
   string model_name = 1;
   uint32 start_layer = 2;
   uint32 end_layer = 3;
-  uint32 concurrency_size = 4;
-  uint32 concurrency_pre_att_size = 5;
-  uint32 concurrency_att_size = 6;
-  uint32 concurrency_post_att_size = 7;
-  uint32 concurrency_cls_size = 8;
-  uint32 max_context_count = 9;
-  bool randomize = 10;
-  string blobstore_uri = 11;
+  uint32 n_tier_1 = 4;
+  uint32 concurrency_pre_att_size_tier_1 = 5;
+  uint32 concurrency_att_size_tier_1 = 6;
+  uint32 concurrency_post_att_size_tier_1 = 7;
+  uint32 concurrency_cls_size_tier_1 = 8;
+  uint32 max_context_count_tier_1 = 9;
+  uint32 n_tier_2 = 10;
+  uint32 concurrency_pre_att_size_tier_2 = 11;
+  uint32 concurrency_att_size_tier_2 = 12;
+  uint32 concurrency_post_att_size_tier_2 = 13;
+  uint32 concurrency_cls_size_tier_2 = 14;
+  uint32 max_context_count_tier_2 = 15;
+  uint8 tier_1_rank = 16;
+  uint8 tier_2_rank = 17;
+  bool randomize = 18;
+  bool static_parent = 19;
+  string blobstore_uri = 20;
 }
 
 message ProcessPrompts { repeated string prompt_ids = 1; }

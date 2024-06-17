@@ -40,7 +40,7 @@ namespace glinthawk::compute {
 /// @brief
 /// TierRouter is a middle-man between the worker and kernel. Generally, it's job is to break down states between nodes,
 /// manage context and route states to/from kernel.
-template<typename Model>
+template<typename ComputeKernel, typename Model>
 class TierRouter
 {
 public:
@@ -85,7 +85,7 @@ protected:
 // TODO(pouya): I'm forcing kernel to not have an outgoing queue. Talk to sadjad about this.
 // TODO(pouya): context is guaranteed per some implicit BatchInferenceState ID. Maybe we should stop caring about
 //  mapping from context ID to context, and just get mapping from BIS ID to context vector.
-template<typename Model>
+template<typename ComputeKernel, typename Model>
 class ParentTierRouter : public TierRouter
 {
 public:
@@ -96,7 +96,8 @@ public:
                     const size_t n_tier_2,
                     const Concurrency& concurrency_tier_2,
                     const size_t kv_slots_tier_2,
-                    const typename Model::SettingsType& settings );
+                    const size_t start_layer,
+                    const size_t end_layer );
 
   virtual ~ParentTierRouter() override;
 
@@ -216,15 +217,16 @@ protected:
   void process_shard( StateType&& state );
 };
 
-template<typename Model>
-void ParentTierRouter<Model>::ParentTierRouter( const ComputeKernel& compute_kernel,
-                                                const size_t n_tier_1,
-                                                const Concurrency& concurrency_tier_1,
-                                                const size_t kv_slots_tier_1,
-                                                const size_t n_tier_2,
-                                                const Concurrency& concurrency_tier_2,
-                                                const size_t kv_slots_tier_2,
-                                                const typename Model::SettingsType& settings )
+template<typename ComputeKernel, typename Model>
+void ParentTierRouter<ComputeKernel, Model>::ParentTierRouter( const ComputeKernel& compute_kernel,
+                                                               const size_t n_tier_1,
+                                                               const Concurrency& concurrency_tier_1,
+                                                               const size_t kv_slots_tier_1,
+                                                               const size_t n_tier_2,
+                                                               const Concurrency& concurrency_tier_2,
+                                                               const size_t kv_slots_tier_2,
+                                                               const size_t start_layer,
+                                                               const size_t end_layer )
   : compute_kernel_( std::make_unique( compute_kernel ) )
   , n_tier_1_( n_tier_1 )
   , concurrency_tier_1_( concurrency_tier_1 )
@@ -232,8 +234,8 @@ void ParentTierRouter<Model>::ParentTierRouter( const ComputeKernel& compute_ker
   , n_tier_2_( n_tier_2 )
   , concurrency_tier_2_( concurrency_tier_2 )
   , free_contexts_tier_2_( n_tier_2, settings.start_layer_num == 0 ? kv_slots_tier_2 : 0 )
-  , start_layer_( settings.start_layer_num )
-  , end_layer_( settings.end_layer_num )
+  , start_layer_( start_layer )
+  , end_layer_( end_layer )
   , tier_1_idle_shards_( ( end_layer_ - start_layer_ + 1 ) * util::to_underlying( Stage::__COUNT__ ) )
   , tier_2_idle_shards_( ( end_layer_ - start_layer_ + 1 ) * util::to_underlying( Stage::__COUNT__ ) )
   , tier_1_idle_shard_counts_( ( end_layer_ - start_layer_ + 1 ) * util::to_underlying( Stage::__COUNT__ ), 0 )
@@ -296,8 +298,8 @@ void ParentTierRouter<Model>::ParentTierRouter( const ComputeKernel& compute_ker
   }
 }
 
-template<typename Model>
-void ParentTierRouter<Model>::pull_from_kernel()
+template<typename ComputeKernel, typename Model>
+void ParentTierRouter<ComputeKernel, Model>::pull_from_kernel()
 {
   compute_kernel_->event_fd().read_event();
   models::BatchedInferenceState<Model::ConfigType> state;
@@ -307,8 +309,8 @@ void ParentTierRouter<Model>::pull_from_kernel()
   }
 }
 
-template<typename Model>
-void ParentTierRouter<Model>::push( models::BatchedInferenceState<Model::ConfigType>&& state )
+template<typename ComputeKernel, typename Model>
+void ParentTierRouter<ComputeKernel, Model>::push( models::BatchedInferenceState<Model::ConfigType>&& state )
 {
   if ( state.is_sharded() )
     process_shard( std::move( state ) );
@@ -316,8 +318,8 @@ void ParentTierRouter<Model>::push( models::BatchedInferenceState<Model::ConfigT
     process_monolith( std::move( state ) );
 }
 
-template<typename Model>
-bool ParentTierRouter<Model>::pop( models::BatchedInferenceState<Model::ConfigType>& state )
+template<typename ComputeKernel, typename Model>
+bool ParentTierRouter<ComputeKernel, Model>::pop( models::BatchedInferenceState<Model::ConfigType>& state )
 {
   std::lock_guard lock { outgoing_.mutex };
 
@@ -330,8 +332,8 @@ bool ParentTierRouter<Model>::pop( models::BatchedInferenceState<Model::ConfigTy
   return true;
 }
 
-template<typename Model>
-bool ParentTierRouter<Model>::is_context_available() const
+template<typename ComputeKernel, typename Model>
+bool ParentTierRouter<ComputeKernel, Model>::is_context_available() const
 {
   std::lock_guard lock { ctx_mutex_ };
 
@@ -351,8 +353,8 @@ bool ParentTierRouter<Model>::is_context_available() const
   return true;
 }
 
-template<typename Model>
-bool ParentTierRouter<Model>::can_form_monolith( const size_t layer, const Stage stage ) const
+template<typename ComputeKernel, typename Model>
+bool ParentTierRouter<ComputeKernel, Model>::can_form_monolith( const size_t layer, const Stage stage ) const
 {
   std::lock_guard lock { shards_mutex_ };
 
@@ -360,8 +362,8 @@ bool ParentTierRouter<Model>::can_form_monolith( const size_t layer, const Stage
          and tier_2_idle_shard_counts_[vector_index( layer, stage )] > n_tier_2_ * concurrency_tier_2_.get( stage )
 }
 
-template<typename Model>
-void ParentTierRouter<Model>::assign_ranks( StateType& state )
+template<typename ComputeKernel, typename Model>
+void ParentTierRouter<ComputeKernel, Model>::assign_ranks( StateType& state )
 {
   CHECK( not state.is_sharded() );
   CHECK_EQ( state.batch_size(),
@@ -388,8 +390,8 @@ void ParentTierRouter<Model>::assign_ranks( StateType& state )
   }
 }
 
-template<typename Model>
-StateType&& ParentTierRouter<Model>::form_monolith( const size_t layer, const Stage stage )
+template<typename ComputeKernel, typename Model>
+StateType&& ParentTierRouter<ComputeKernel, Model>::form_monolith( const size_t layer, const Stage stage )
 {
   const auto vi = vector_index( layer, stage );
   std::vector<RefStateType> shards;
@@ -418,8 +420,8 @@ StateType&& ParentTierRouter<Model>::form_monolith( const size_t layer, const St
   return monolith;
 }
 
-template<typename Model>
-void ParentTierRouter<Model>::process_monolith( StateType&& state )
+template<typename ComputeKernel, typename Model>
+void ParentTierRouter<ComputeKernel, Model>::process_monolith( StateType&& state )
 {
   assign_ranks( state );
   if ( not is_served_in_this_slice( state ) ) {
@@ -452,8 +454,8 @@ void ParentTierRouter<Model>::process_monolith( StateType&& state )
   }
 }
 
-template<typename Model>
-void ParentTierRouter<Model>::place_shard( StateType&& state )
+template<typename ComputeKernel, typename Model>
+void ParentTierRouter<ComputeKernel, Model>::place_shard( StateType&& state )
 {
   CHECK( state.all_rank_assigned() ) << "Sharded states must always be already routed.";
 
@@ -472,8 +474,8 @@ void ParentTierRouter<Model>::place_shard( StateType&& state )
   }
 }
 
-template<typename Model>
-void ParentTierRouter<Model>::process_shard( StateType&& state )
+template<typename ComputeKernel, typename Model>
+void ParentTierRouter<ComputeKernel, Model>::process_shard( StateType&& state )
 {
   place_shard( std::move( state ) );
 
@@ -486,7 +488,7 @@ void ParentTierRouter<Model>::process_shard( StateType&& state )
 /// @brief
 /// StaticParentTierRouter is very similar to ParentTierRouter, but forces merge operations to be done across nodes
 /// rather than tiers, i.e., each node must contribute to a join.
-template<typename Model>
+template<typename ComputeKernel, typename Model>
 class StaticParentTierRouter : public ParentTierRouter
 {
 public:
@@ -497,7 +499,8 @@ public:
                           const size_t n_tier_2,
                           const Concurrency& concurrency_tier_2,
                           const size_t kv_slots_tier_2,
-                          const typename Model::SettingsType& settings );
+                          const size_t start_layer,
+                          const size_t end_layer );
 
   virtual ~StaticParentTierRouter() override;
   virtual void pull_from_kernel() override;
@@ -525,15 +528,16 @@ protected:
   StateType&& form_monolith( const size_t layer, const Stage stage ) override;
 };
 
-template<typename Model>
-void StaticParentTierRouter<Model>::StaticParentTierRouter( const ComputeKernel& compute_kernel,
-                                                            const size_t n_tier_1,
-                                                            const Concurrency& concurrency_tier_1,
-                                                            const size_t kv_slots_tier_1,
-                                                            const size_t n_tier_2,
-                                                            const Concurrency& concurrency_tier_2,
-                                                            const size_t kv_slots_tier_2,
-                                                            const typename Model::SettingsType& settings )
+template<typename ComputeKernel, typename Model>
+void StaticParentTierRouter<ComputeKernel, Model>::StaticParentTierRouter( const ComputeKernel& compute_kernel,
+                                                                           const size_t n_tier_1,
+                                                                           const Concurrency& concurrency_tier_1,
+                                                                           const size_t kv_slots_tier_1,
+                                                                           const size_t n_tier_2,
+                                                                           const Concurrency& concurrency_tier_2,
+                                                                           const size_t kv_slots_tier_2,
+                                                                           const size_t start_layer,
+                                                                           const size_t end_layer )
   : ParentTierRouter( compute_kernel,
                       n_tier_1,
                       concurrency_tier_1,
@@ -541,15 +545,16 @@ void StaticParentTierRouter<Model>::StaticParentTierRouter( const ComputeKernel&
                       n_tier_2,
                       concurrency_tier_2,
                       kv_slots_tier_2,
-                      settings )
+                      start_layer,
+                      end_layer )
   // TODO: will this initialize the inner vector?
   , tier_1_idle_shards_( ( end_layer_ - start_layer_ + 1 ) * util::to_underlying( Stage::__COUNT__ ), n_tier_1 )
   , tier_2_idle_shards_( ( end_layer_ - start_layer_ + 1 ) * util::to_underlying( Stage::__COUNT__ ), n_tier_2 )
 {
 }
 
-template<typename Model>
-bool StaticParentTierRouter<Model>::can_form_monolith( const size_t layer, const Stage stage ) const
+template<typename ComputeKernel, typename Model>
+bool StaticParentTierRouter<ComputeKernel, Model>::can_form_monolith( const size_t layer, const Stage stage ) const
 {
   std::lock_guard lock { shards_mutex_ };
 
@@ -563,8 +568,8 @@ bool StaticParentTierRouter<Model>::can_form_monolith( const size_t layer, const
                                  []( const auto& q ) { return not q.size() > 0; } ) );
 }
 
-template<typename Model>
-StateType&& StaticParentTierRouter<Model>::form_monolith( const size_t layer, const Stage stage )
+template<typename ComputeKernel, typename Model>
+StateType&& StaticParentTierRouter<ComputeKernel, Model>::form_monolith( const size_t layer, const Stage stage )
 {
   const auto vi = vector_index( layer, stage );
   std::vector<RefStateType> shards;
@@ -591,8 +596,8 @@ StateType&& StaticParentTierRouter<Model>::form_monolith( const size_t layer, co
   return monolith;
 }
 
-template<typename Model>
-void StaticParentTierRouter<Model>::place_shard( StateType&& state )
+template<typename ComputeKernel, typename Model>
+void StaticParentTierRouter<ComputeKernel, Model>::place_shard( StateType&& state )
 {
   CHECK( state.all_rank_assigned() ) << "Sharded states must always be already routed.";
 
@@ -612,7 +617,7 @@ void StaticParentTierRouter<Model>::place_shard( StateType&& state )
 /// @brief
 /// ChildTierRouter is an empty middle-man between the worker and kernel. It's job is to mimic the TierRouter do the
 /// worker is oblivious to which rank it has. DummyTierRouter that pass states through with no delay.
-template<typename Model>
+template<typename ComputeKernel, typename Model>
 class ChildTierRouter : public TierRouter
 {
 public:
@@ -644,21 +649,14 @@ public:
   virtual bool is_context_available() const override;
 };
 
-template<typename Model>
-void ChildTierRouter<Model>::ChildTierRouter( const ComputeKernel& compute_kernel,
-                                              const size_t n_tier_1,
-                                              const Concurrency& concurrency_tier_1,
-                                              const size_t kv_slots_tier_1,
-                                              const size_t n_tier_2,
-                                              const Concurrency& concurrency_tier_2,
-                                              const size_t kv_slots_tier_2,
-                                              const typename Model::SettingsType& settings )
+template<typename ComputeKernel, typename Model>
+void ChildTierRouter<ComputeKernel, Model>::ChildTierRouter( const ComputeKernel& compute_kernel )
   : compute_kernel_( std::make_unique( compute_kernel ) )
 {
 }
 
-template<typename Model>
-void ChildTierRouter<Model>::pull_from_kernel()
+template<typename ComputeKernel, typename Model>
+void ChildTierRouter<ComputeKernel, Model>::pull_from_kernel()
 {
   compute_kernel_->event_fd().read_event();
   models::BatchedInferenceState<Model::ConfigType> state;
@@ -669,14 +667,14 @@ void ChildTierRouter<Model>::pull_from_kernel()
   }
 }
 
-template<typename Model>
-void ChildTierRouter<Model>::push( models::BatchedInferenceState<Model::ConfigType>&& state )
+template<typename ComputeKernel, typename Model>
+void ChildTierRouter<ComputeKernel, Model>::push( models::BatchedInferenceState<Model::ConfigType>&& state )
 {
   compute_kernel_->push( std::move( state ) );
 }
 
-template<typename Model>
-bool ChildTierRouter<Model>::pop( models::BatchedInferenceState<Model::ConfigType>& state )
+template<typename ComputeKernel, typename Model>
+bool ChildTierRouter<ComputeKernel, Model>::pop( models::BatchedInferenceState<Model::ConfigType>& state )
 {
   std::lock_guard lock { outgoing_.mutex };
 
@@ -689,8 +687,8 @@ bool ChildTierRouter<Model>::pop( models::BatchedInferenceState<Model::ConfigTyp
   return true;
 }
 
-template<typename Model>
-bool ChildTierRouter<Model>::is_context_available() const
+template<typename ComputeKernel, typename Model>
+bool ChildTierRouter<ComputeKernel, Model>::is_context_available() const
 {
   LOG( FATAL ) << "DummyTierRouter should never receive new batches. That is only going to happen in slice0, tier1, "
                   "rank0.";
@@ -700,14 +698,15 @@ bool ChildTierRouter<Model>::is_context_available() const
 /// SingleTierRouter is a special case of ParentTierRouter, when we know Tier 2 is empty and Tier 1 has one node. It is
 /// only different from ChildTierRouter in that (1) it does manage context, and (2) it can immediately send states back
 /// to compute_kernel if they are still served by this slice.
-template<typename Model>
+template<typename ComputeKernel, typename Model>
 class SingleTierRouter : public TierRouter
 {
 public:
   SingleTierRouter( const ComputeKernel& compute_kernel,
                     const Concurrency& concurrency,
                     const kv_slots,
-                    const typename Model::SettingsType& settings );
+                    const size_t start_layer,
+                    const size_t end_layer );
 
   virtual ~SingleTierRouter() override;
 
@@ -756,16 +755,17 @@ protected:
   }
 };
 
-template<typename Model>
-void SingleTierRouter<Model>::SingleTierRouter( const ComputeKernel& compute_kernel,
-                                                const Concurrency& concurrency,
-                                                const kv_slots,
-                                                const typename Model::SettingsType& settings )
+template<typename ComputeKernel, typename Model>
+void SingleTierRouter<ComputeKernel, Model>::SingleTierRouter( const ComputeKernel& compute_kernel,
+                                                               const Concurrency& concurrency,
+                                                               const kv_slots,
+                                                               const size_t start_layer,
+                                                               const size_t end_layer )
   : compute_kernel_( std::make_unique( compute_kernel ) )
   , concurrency_all_stages_( concurrency.get( glinthawk::models::InferenceStage::PreAttention ) )
   , free_contexts_( settings.start_layer_num == 0 ? kv_slots_tier_1 : 0 )
-  , start_layer_( settings.start_layer_num )
-  , end_layer_( settings.end_layer_num )
+  , start_layer_( start_layer )
+  , end_layer_( end_layer )
 {
   // TODO(pouya): if there is only one slice, a generated batch never gets pushed to worker to report generations.
   CHECK( start_layer_ != 0 or end_layer_ != Model::ConfigType::n_layers - 1 );
@@ -778,8 +778,8 @@ void SingleTierRouter<Model>::SingleTierRouter( const ComputeKernel& compute_ker
             concurrency.get( glinthawk::models::InferenceStage::Classification ) );
 }
 
-template<typename Model>
-void SingleTierRouter<Model>::pull_from_kernel()
+template<typename ComputeKernel, typename Model>
+void SingleTierRouter<ComputeKernel, Model>::pull_from_kernel()
 {
   compute_kernel_->event_fd().read_event();
   models::BatchedInferenceState<Model::ConfigType> state;
@@ -797,8 +797,8 @@ void SingleTierRouter<Model>::pull_from_kernel()
   }
 }
 
-template<typename Model>
-void SingleTierRouter<Model>::push( models::BatchedInferenceState<Model::ConfigType>&& state )
+template<typename ComputeKernel, typename Model>
+void SingleTierRouter<ComputeKernel, Model>::push( models::BatchedInferenceState<Model::ConfigType>&& state )
 {
   CHECK_EQ( state.batch_size(), concurrency_all_stages_ );
   bool already_assigned = state.rank_assigned( 0 );
@@ -819,8 +819,8 @@ void SingleTierRouter<Model>::push( models::BatchedInferenceState<Model::ConfigT
   compute_kernel_->push( std::move( state ) );
 }
 
-template<typename Model>
-bool SingleTierRouter<Model>::pop( models::BatchedInferenceState<Model::ConfigType>& state )
+template<typename ComputeKernel, typename Model>
+bool SingleTierRouter<ComputeKernel, Model>::pop( models::BatchedInferenceState<Model::ConfigType>& state )
 {
   std::lock_guard lock { outgoing_.mutex };
 
@@ -833,8 +833,8 @@ bool SingleTierRouter<Model>::pop( models::BatchedInferenceState<Model::ConfigTy
   return true;
 }
 
-template<typename Model>
-bool SingleTierRouter<Model>::is_context_available() const
+template<typename ComputeKernel, typename Model>
+bool SingleTierRouter<ComputeKernel, Model>::is_context_available() const
 {
   std::lock_guard lock { ctx_mutex_ };
   return free_contexts_ >= concurrency_all_stages_;
