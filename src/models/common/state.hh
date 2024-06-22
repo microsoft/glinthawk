@@ -51,7 +51,7 @@ struct __attribute__( ( packed ) ) PromptData
   uint8_t temperature {}; // compact temprature, between [0, 255]; has to be divided by 255.0f before use.
   uint32_t prompt_length {};
   bool finished { false };
-  int8_t tier { 0 }; // Denotes which tier this prompt needs to be forwarded to, 0-indexed, -1 means unassigned
+  int8_t tier { -1 }; // Denotes which tier this prompt needs to be forwarded to, 0-indexed, -1 means unassigned
   uint8_t rank { 0 }; // Denotes which rank in tier this prompt needs to be forwarded to, 0-indexed
 };
 
@@ -98,7 +98,7 @@ concept StateConcept = requires( T state, const T cstate, const std::string cstr
   { state.prompt_length( 0 ) } -> std::same_as<uint32_t>;
   { state.temperature( 0 ) } -> std::same_as<float>;
   { state.finished( 0 ) } -> std::same_as<bool>;
-  { state.tier( 0 ) } -> std::same_as<uint8_t>;
+  { state.tier( 0 ) } -> std::same_as<int8_t>;
   { state.rank( 0 ) } -> std::same_as<uint8_t>;
   { state.assigned_to_node( 0 ) } -> std::same_as<bool>;
   { state.active( 0 ) } -> std::same_as<bool>;
@@ -245,7 +245,7 @@ public:
                    uint32_t token_pos,
                    float temperature,
                    uint32_t prompt_length,
-                   uint8_t tier,
+                   int8_t tier,
                    uint8_t rank );
 
   // prompt getters
@@ -256,7 +256,7 @@ public:
   uint32_t prompt_length( const size_t i ) const { return prompts_[i].prompt_length; }
   float temperature( const size_t i ) const { return prompts_[i].temperature / 255.0f; }
   bool finished( const size_t i ) const { return prompts_[i].finished; }
-  uint8_t tier( const size_t i ) const { return prompts_[i].tier; }
+  int8_t tier( const size_t i ) const { return prompts_[i].tier; }
   uint8_t rank( const size_t i ) const { return prompts_[i].rank; }
   bool assigned_to_node( const size_t i ) const { return prompts_[i].tier != -1; }
   bool active( const size_t i ) const { return prompts_[i].active; }
@@ -269,7 +269,7 @@ public:
   void set_prompt_length( const size_t i, uint32_t prompt_length ) { prompts_[i].prompt_length = prompt_length; }
   void set_temperature( const size_t i, float t ) { prompts_[i].temperature = static_cast<uint8_t>( t * 255.0f ); }
   void set_finished( const size_t i ) { prompts_[i].finished = true; }
-  void set_tier( const size_t i, uint8_t tier ) { prompts_[i].tier = tier; }
+  void set_tier( const size_t i, int8_t tier ) { prompts_[i].tier = tier; }
   void set_rank( const size_t i, uint8_t rank ) { prompts_[i].rank = rank; }
 
   void discard( const size_t i );
@@ -370,7 +370,7 @@ public:
   void set_has_queries( const bool has_queries ) { state_.set_has_queries( has_queries ); }
   void set_has_kvs( const bool has_kvs ) { state_.set_has_kvs( has_kvs ); }
   // TODO(pouya): if spans share metadata with the original, is_sharded/scatter/gather might be broken and bug
-  // tier_router
+  //  tier_router
   void set_is_sharded( const bool is_sharded ) { state_.set_is_sharded( is_sharded ); }
   void set_scatter() { state_.set_scatter(); }
   void set_gather() { state_.set_gather(); }
@@ -386,7 +386,7 @@ public:
   bool has_queries() const { return state_.has_queries(); }
   bool has_kvs() const { return state_.has_kvs(); }
   // TODO(pouya): if spans share metadata with the original, is_sharded/scatter/gather might be broken and bug
-  // tier_router
+  //  tier_router
   bool is_sharded() const { return state_.is_sharded(); }
   bool scatter() const { return state_.scatter(); }
   bool gather() const { return state_.gather(); }
@@ -406,7 +406,7 @@ public:
                    uint32_t token_pos,
                    float temperature,
                    uint32_t prompt_length,
-                   uint8_t tier,
+                   int8_t tier,
                    uint8_t rank )
   {
     state_.set_prompt( off_ + i, prompt_id, context_id, token, token_pos, temperature, prompt_length, tier, rank );
@@ -420,7 +420,7 @@ public:
   float temperature( const size_t i ) const { return state_.temperature( off_ + i ); }
   bool finished( const size_t i ) const { return state_.finished( off_ + i ); }
   bool active( const size_t i ) const { return state_.active( off_ + i ); }
-  uint8_t tier( const size_t i ) const { return state_.tier( off_ + i ); }
+  int8_t tier( const size_t i ) const { return state_.tier( off_ + i ); }
   uint8_t rank( const size_t i ) const { return state_.rank( off_ + i ); }
   bool assigned_to_node( const size_t i ) const { return state_.assigned_to_node( off_ + i ); }
 
@@ -431,7 +431,7 @@ public:
   void set_prompt_length( const size_t i, uint32_t len ) { state_.set_prompt_length( off_ + i, len ); }
   void set_temperature( const size_t i, float t ) { state_.set_temperature( off_ + i, t ); }
   void set_finished( const size_t i ) { state_.set_finished( off_ + i ); }
-  void set_tier( const size_t i, uint8_t tier ) { state_.set_tier( off_ + i, tier ); }
+  void set_tier( const size_t i, int8_t tier ) { state_.set_tier( off_ + i, tier ); }
   void set_rank( const size_t i, uint8_t rank ) { state_.set_rank( off_ + i, rank ); }
 
   void discard( const size_t i ) { state_.discard( off_ + i ); }
@@ -595,7 +595,7 @@ void BatchedInferenceState<Config>::set_prompt( const size_t i,
                                                 uint32_t token_pos,
                                                 float temperature,
                                                 uint32_t prompt_length,
-                                                uint8_t tier,
+                                                int8_t tier,
                                                 uint8_t rank )
 {
   prompts_[i].prompt_id = prompt_id;
