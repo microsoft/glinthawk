@@ -35,7 +35,7 @@ struct __attribute__( ( packed ) ) StateMetadata
   bool has_queries { false };
   bool has_kvs { false };
   bool is_sharded { false };
-  bool to_parent { false };
+  bool to_parent { true };
 };
 
 struct __attribute__( ( packed ) ) PromptData
@@ -51,10 +51,8 @@ struct __attribute__( ( packed ) ) PromptData
   uint8_t temperature {}; // compact temprature, between [0, 255]; has to be divided by 255.0f before use.
   uint32_t prompt_length {};
   bool finished { false };
-  uint8_t rank_tier_1 {}; // Denotes which group in tier 1 this prompt needs to be forwarded to, 0-indexed, -1
-                          // means it belongs in tier 2, if both are -1 this prompt has not been routed yet
-  uint8_t rank_tier_2 {}; // Denotes which group in tier 2 this prompt needs to be forwarded to, 0-indexed, -1
-                          // means it belongs in tier 1, if both are -1 this prompt has not been routed yet
+  int8_t tier { 0 }; // Denotes which tier this prompt needs to be forwarded to, 0-indexed, -1 means unassigned
+  uint8_t rank { 0 }; // Denotes which rank in tier this prompt needs to be forwarded to, 0-indexed
 };
 
 template<typename T>
@@ -90,7 +88,7 @@ concept StateConcept = requires( T state, const T cstate, const std::string cstr
   { cstate.is_sharded() } -> std::same_as<bool>;
   { cstate.gather() } -> std::same_as<bool>;
   { cstate.scatter() } -> std::same_as<bool>;
-  { cstate.all_rank_assigned() } -> std::same_as<bool>;
+  { cstate.all_assigned_to_nodes() } -> std::same_as<bool>;
 
   { state.set_prompt( 0, {}, {}, 0, 0, 0.0f, 0, 0, 0 ) };
   { state.prompt_id( 0 ) } -> std::same_as<PromptID>;
@@ -100,9 +98,9 @@ concept StateConcept = requires( T state, const T cstate, const std::string cstr
   { state.prompt_length( 0 ) } -> std::same_as<uint32_t>;
   { state.temperature( 0 ) } -> std::same_as<float>;
   { state.finished( 0 ) } -> std::same_as<bool>;
-  { state.rank_tier_1( 0 ) } -> std::same_as<uint8_t>;
-  { state.rank_tier_2( 0 ) } -> std::same_as<uint8_t>;
-  { state.rank_assigned( 0 ) } -> std::same_as<bool>;
+  { state.tier( 0 ) } -> std::same_as<uint8_t>;
+  { state.rank( 0 ) } -> std::same_as<uint8_t>;
+  { state.assigned_to_node( 0 ) } -> std::same_as<bool>;
   { state.active( 0 ) } -> std::same_as<bool>;
 
   { state.set_prompt_id( 0, {} ) };
@@ -112,8 +110,8 @@ concept StateConcept = requires( T state, const T cstate, const std::string cstr
   { state.set_prompt_length( 0, 0 ) };
   { state.set_temperature( 0, 0.0f ) };
   { state.set_finished( 0 ) };
-  { state.set_rank_tier_1( 0, 0 ) };
-  { state.set_rank_tier_2( 0, 0 ) };
+  { state.set_tier( 0, 0 ) };
+  { state.set_rank( 0, 0 ) };
 
   { state.discard( 0 ) };
 
@@ -181,13 +179,7 @@ private:
   uint8_t* kv_ptr( const size_t i ) { return kvs_.data() + i * kv_len(); }
 
 public:
-  BatchedInferenceState( uint32_t batch_size,
-                         DataType dtype,
-                         RouteID route_id,
-                         ModelID model_id,
-                         const bool state_has_activations,
-                         const bool state_has_queries,
-                         const bool state_has_kvs );
+  BatchedInferenceState( uint32_t batch_size, DataType dtype, RouteID route_id, ModelID model_id );
 
   // TODO(sadjad) eventually we got to get rid of the default constructor.
   BatchedInferenceState()
@@ -235,10 +227,10 @@ public:
   bool is_sharded() const { return metadata_.is_sharded; }
   bool scatter() const { return not metadata_.to_parent; }
   bool gather() const { return metadata_.to_parent; }
-  bool all_rank_assigned() const
+  bool all_assigned_to_nodes() const
   {
     for ( int i = 0; i < metadata_.batch_size; i++ ) {
-      if ( not rank_assigned( i ) ) {
+      if ( not assigned_to_node( i ) ) {
         return false;
       }
     }
@@ -253,8 +245,8 @@ public:
                    uint32_t token_pos,
                    float temperature,
                    uint32_t prompt_length,
-                   uint8_t rank_tier_1,
-                   uint8_t rank_tier_2 );
+                   uint8_t tier,
+                   uint8_t rank );
 
   // prompt getters
   PromptID prompt_id( const size_t i ) const { return prompts_[i].prompt_id; }
@@ -264,13 +256,9 @@ public:
   uint32_t prompt_length( const size_t i ) const { return prompts_[i].prompt_length; }
   float temperature( const size_t i ) const { return prompts_[i].temperature / 255.0f; }
   bool finished( const size_t i ) const { return prompts_[i].finished; }
-  uint8_t rank_tier_1( const size_t i ) const { return prompts_[i].rank_tier_1; }
-  uint8_t rank_tier_2( const size_t i ) const { return prompts_[i].rank_tier_2; }
-  bool rank_assigned( const size_t i ) const
-  {
-    // TODO(pouya): -1 on uint8_t is bad practice!
-    return prompts_[i].rank_tier_1 != -1 or prompts_[i].rank_tier_2 != -1;
-  }
+  uint8_t tier( const size_t i ) const { return prompts_[i].tier; }
+  uint8_t rank( const size_t i ) const { return prompts_[i].rank; }
+  bool assigned_to_node( const size_t i ) const { return prompts_[i].tier != -1; }
   bool active( const size_t i ) const { return prompts_[i].active; }
 
   // prompt setters
@@ -281,8 +269,8 @@ public:
   void set_prompt_length( const size_t i, uint32_t prompt_length ) { prompts_[i].prompt_length = prompt_length; }
   void set_temperature( const size_t i, float t ) { prompts_[i].temperature = static_cast<uint8_t>( t * 255.0f ); }
   void set_finished( const size_t i ) { prompts_[i].finished = true; }
-  void set_rank_tier_1( const size_t i, uint8_t rank_tier_1 ) { prompts_[i].rank_tier_1 = rank_tier_1; }
-  void set_rank_tier_2( const size_t i, uint8_t rank_tier_2 ) { prompts_[i].rank_tier_2 = rank_tier_2; }
+  void set_tier( const size_t i, uint8_t tier ) { prompts_[i].tier = tier; }
+  void set_rank( const size_t i, uint8_t rank ) { prompts_[i].rank = rank; }
 
   void discard( const size_t i );
 
@@ -324,8 +312,7 @@ public:
   /// @return A pair of states.
   std::pair<BatchedInferenceState, BatchedInferenceState> split( const size_t n );
 
-  std::deque<std::reference_wrapper<BatchedInferenceState>> split_states( std::vector<size_t> vec_n,
-                                                                          bool ignore_empty );
+  static std::deque<BatchedInferenceState<Config>> split_states( std::vector<size_t> vec_n, bool ignore_empty );
 
   /// @brief Like `split`, but creates spans of the current state instead of a new state.
   /// @param n The size of the first state span.
@@ -339,7 +326,7 @@ public:
   /// @return The merged state.
   void merge( BatchedInferenceState&& other );
 
-  static BatchedInferenceState&& merge_states( std::vector<std::reference_wrapper<BatchedInferenceState>> vec_state );
+  static BatchedInferenceState<Config>&& merge_states( std::deque<BatchedInferenceState<Config>> vec_state );
 
   std::string debug_string( const bool prompt_details = false ) const;
 };
@@ -403,10 +390,10 @@ public:
   bool is_sharded() const { return state_.is_sharded(); }
   bool scatter() const { return state_.scatter(); }
   bool gather() const { return state_.gather(); }
-  bool all_rank_assigned() const
+  bool all_assigned_to_nodes() const
   {
     for ( int i = 0; i < n_; i++ ) {
-      if ( not state_.rank_assigned( off_ + i ) )
+      if ( not state_.assigned_to_node( off_ + i ) )
         return false;
     }
     return true;
@@ -419,11 +406,10 @@ public:
                    uint32_t token_pos,
                    float temperature,
                    uint32_t prompt_length,
-                   uint8_t rank_tier_1,
-                   uint8_t rank_tier_2 )
+                   uint8_t tier,
+                   uint8_t rank )
   {
-    state_.set_prompt(
-      off_ + i, prompt_id, context_id, token, token_pos, temperature, prompt_length, rank_tier_1, rank_tier_2 );
+    state_.set_prompt( off_ + i, prompt_id, context_id, token, token_pos, temperature, prompt_length, tier, rank );
   }
 
   PromptID prompt_id( const size_t i ) const { return state_.prompt_id( off_ + i ); }
@@ -434,9 +420,9 @@ public:
   float temperature( const size_t i ) const { return state_.temperature( off_ + i ); }
   bool finished( const size_t i ) const { return state_.finished( off_ + i ); }
   bool active( const size_t i ) const { return state_.active( off_ + i ); }
-  uint8_t rank_tier_1( const size_t i ) const { return state_.rank_tier_1( off_ + i ); }
-  uint8_t rank_tier_2( const size_t i ) const { return state_.rank_tier_2( off_ + i ); }
-  bool rank_assigned( const size_t i ) const { return state_.rank_assigned( off_ + i ); }
+  uint8_t tier( const size_t i ) const { return state_.tier( off_ + i ); }
+  uint8_t rank( const size_t i ) const { return state_.rank( off_ + i ); }
+  bool assigned_to_node( const size_t i ) const { return state_.assigned_to_node( off_ + i ); }
 
   void set_prompt_id( const size_t i, PromptID prompt_id ) { state_.set_prompt_id( off_ + i, prompt_id ); }
   void set_context_id( const size_t i, ContextID context_id ) { state_.set_context_id( off_ + i, context_id ); }
@@ -445,8 +431,8 @@ public:
   void set_prompt_length( const size_t i, uint32_t len ) { state_.set_prompt_length( off_ + i, len ); }
   void set_temperature( const size_t i, float t ) { state_.set_temperature( off_ + i, t ); }
   void set_finished( const size_t i ) { state_.set_finished( off_ + i ); }
-  void set_rank_tier_1( const size_t i, uint8_t rank_tier_1 ) { state_.set_rank_tier_1( off_ + i, rank_tier_1 ); }
-  void set_rank_tier_2( const size_t i, uint8_t rank_tier_2 ) { state_.set_rank_tier_2( off_ + i, rank_tier_2 ); }
+  void set_tier( const size_t i, uint8_t tier ) { state_.set_tier( off_ + i, tier ); }
+  void set_rank( const size_t i, uint8_t rank ) { state_.set_rank( off_ + i, rank ); }
 
   void discard( const size_t i ) { state_.discard( off_ + i ); }
 
@@ -495,21 +481,12 @@ template<typename Config>
 BatchedInferenceState<Config>::BatchedInferenceState( uint32_t batch_size,
                                                       DataType dtype,
                                                       RouteID route_id,
-                                                      ModelID model_id,
-                                                      const bool state_has_activations,
-                                                      const bool state_has_queries,
-                                                      const bool state_has_kvs )
+                                                      ModelID model_id )
 {
   metadata_.batch_size = batch_size;
   metadata_.dtype = dtype;
   metadata_.route_id = route_id;
   metadata_.model_id = model_id;
-  metadata_.has_activations = state_has_activations;
-  metadata_.has_queries = state_has_queries;
-  metadata_.has_kvs = state_has_kvs;
-  // TODO(pouya): check with sadjad if he prefers default initializations over this, or explicit initializations.
-  metadata_.is_sharded = false;
-  metadata_.to_parent = true;
 
   prompts_.resize( metadata_.batch_size );
 
@@ -618,8 +595,8 @@ void BatchedInferenceState<Config>::set_prompt( const size_t i,
                                                 uint32_t token_pos,
                                                 float temperature,
                                                 uint32_t prompt_length,
-                                                uint8_t rank_tier_1,
-                                                uint8_t rank_tier_2 )
+                                                uint8_t tier,
+                                                uint8_t rank )
 {
   prompts_[i].prompt_id = prompt_id;
   prompts_[i].context_id = context_id;
@@ -629,8 +606,8 @@ void BatchedInferenceState<Config>::set_prompt( const size_t i,
   prompts_[i].prompt_length = prompt_length;
   prompts_[i].finished = false;
   prompts_[i].active = true;
-  prompts_[i].rank_tier_1 = rank_tier_1;
-  prompts_[i].rank_tier_2 = rank_tier_2;
+  prompts_[i].tier = tier;
+  prompts_[i].rank = rank;
 }
 
 template<typename Config>
@@ -754,7 +731,8 @@ size_t BatchedInferenceState<Config>::free_slots() const
 }
 
 template<typename Config>
-std::deque<std::reference_wrapper<BatchedInferenceState>> BatchedInferenceState<Config>::split_states(
+static std::deque<BatchedInferenceState<Config>>&& BatchedInferenceState<Config>::split_states(
+  BatchedInferenceState<Config>&& state,
   std::vector<size_t> vec_n,
   bool ignore_empty )
 {
@@ -762,19 +740,18 @@ std::deque<std::reference_wrapper<BatchedInferenceState>> BatchedInferenceState<
 
   size_t sum_n = 0;
   for ( int i = 0; i < vec_n.size(); i++ ) {
-    CHECK_LE( vec_n[i], metadata_.batch_size ) << "Requested batch sizes should not exceed this state's size";
+    CHECK_LE( vec_n[i], state.metadata_.batch_size ) << "Requested batch sizes should not exceed this state's size";
     sum_n += vec_n[i];
   }
-  CHECK_EQ( metadata_.batch_size, sum_n ) << "Requested batch sizes should sum up to this state's size";
+  CHECK_EQ( state.metadata_.batch_size, sum_n ) << "Requested batch sizes should sum up to this state's size";
 
-  std::deque<std::reference_wrapper<BatchedInferenceState>> pieces {};
+  std::deque<BatchedInferenceState> pieces {};
   if ( vec_n.size() == 1 ) {
-    // TODO(pouya): this sounds impossible, might have to make the function static, ask sadjad.
-    pieces.push_back( std::reference_wrapper<BatchedInferenceState<Config>>( std::move( this ) ) );
+    pieces.push_back( std::move( state ) );
     return pieces;
   }
 
-  DLOG( INFO ) << "Splitting state of size " << metadata_.batch_size << " into " << vec_n.size() << " states.";
+  DLOG( INFO ) << "Splitting state of size " << state.metadata_.batch_size << " into " << vec_n.size() << " states.";
 
   size_t last_bi = 0;
   for ( int i = 0; i < vec_n.size(); i++ ) {
@@ -783,36 +760,40 @@ std::deque<std::reference_wrapper<BatchedInferenceState>> BatchedInferenceState<
     }
     BatchedInferenceState<Config> state_new;
 
-    state_new.metadata_ = metadata_;
+    state_new.metadata_ = state.metadata_;
     state_new.metadata_.batch_size = vec_n[i];
     state_new.prompts_.resize( vec_n[i] );
 
     for ( size_t i = 0; i < vec_n[i]; i++ ) {
-      state_new.prompts_[i] = prompts_[last_bi + i];
+      state_new.prompts_[i] = state.prompts_[last_bi + i];
     }
 
-    if ( this->has_activations() ) {
+    if ( state.has_activations() ) {
       state_new.allocate_activations();
-      std::memcpy(
-        state_new.activations_.data(), activations_.data() + last_bi * activation_len(), vec_n[i] * activation_len() );
+      std::memcpy( state_new.activations_.data(),
+                   state.activations_.data() + last_bi * state.activation_len(),
+                   vec_n[i] * state.activation_len() );
     }
 
-    if ( this->has_queries() ) {
+    if ( state.has_queries() ) {
       state_new.allocate_queries();
-      std::memcpy( state_new.queries_.data(), queries_.data() + last_bi * q_len(), vec_n[i] * q_len() );
+      std::memcpy(
+        state_new.queries_.data(), state.queries_.data() + last_bi * state.q_len(), vec_n[i] * state.q_len() );
     }
 
-    if ( this->has_kvs() ) {
+    if ( state.has_kvs() ) {
       state_new.allocate_kvs();
       std::memcpy( state_new.kvs_.data(), kvs_.data() + last_bi * kv_len(), vec_n[i] * kv_len() );
     }
 
     last_bi += vec_n[i];
 
-    pieces.push_back( std::reference_wrapper<BatchedInferenceState<Config>>( std::move( state_new ) ) );
+    pieces.push_back( std::move( state_new ) );
   }
 
-  return pieces;
+  state = {};
+
+  return std::move( pieces );
 }
 
 template<typename Config>
@@ -967,21 +948,21 @@ void BatchedInferenceState<Config>::merge( BatchedInferenceState&& other )
 }
 
 template<typename Config>
-static BatchedInferenceState&& BatchedInferenceState<Config>::merge_states(
-  std::vector<std::reference_wrapper<BatchedInferenceState>> vec_state )
+static BatchedInferenceState<Config>&& BatchedInferenceState<Config>::merge_states(
+  std::deque<BatchedInferenceState>&& vec_state )
 {
   CHECK_GT( vec_state.size(), 0 ) << "Merging empty list";
 
   if ( vec_state.size() == 1 ) {
-    auto state = std::move( vec_state.front()->get() );
-    return state;
+    return std::move( vec_state.front() );
   }
 
   BatchedInferenceState new_state;
-  new_state.metadata_ = vec_state[0]->get().metadata_;
+  new_state.metadata_ = vec_state.front().metadata_;
   new_state.metadata_.batch_size = 0;
-  for ( int i = 0; i < vec_state.size(); i++ ) {
-    new_state.metadata_.batch_size += vec_state[i]->get().metadata_.batch_size;
+  for ( const BatchedInferenceState<Config>& state : vec_state ) {
+    new_state.metadata_.batch_size += state.metadata_.batch_size;
+    CHECK_GT( vec_state.size(), 0 ) << "Merging empty list";
   }
   CHECK_GT( new_state.metadata_.batch_size, 0 ) << "Merging empty states";
   new_state.prompts_.resize( new_state.metadata_.batch_size );
@@ -999,9 +980,7 @@ static BatchedInferenceState&& BatchedInferenceState<Config>::merge_states(
   }
 
   size_t last_bi = 0;
-  for ( int i = 0; i < vec_state.size(); i++ ) {
-    const auto other = std::move( vec_state[i]->get() );
-
+  for ( BatchedInferenceState<Config>& other : vec_state ) {
     // merging an empty state
     if ( other.metadata_.batch_size == 0 ) {
       other = {};
@@ -1046,7 +1025,7 @@ static BatchedInferenceState&& BatchedInferenceState<Config>::merge_states(
 
     other = {};
   }
-  return new_state;
+  return std::move( new_state );
 }
 
 template<typename Config>
@@ -1067,7 +1046,7 @@ std::string BatchedInferenceState<Config>::debug_string( const bool prompt_detai
     for ( const auto& p : prompts_ ) {
       oss << " (" << p.prompt_id.base58digest().substr( 0, 8 ) << ", " << p.context_id.base58digest().substr( 0, 8 )
           << ", " << p.token << ", " << p.token_pos << ", " << ( p.temperature / 255.0f ) << ", " << p.prompt_length
-          << ", " << p.finished << ", {" << p.rank_tier_1 << ", " << p.rank_tier_2 << "}) ";
+          << ", " << p.finished << ", {" << p.tier << ", " << p.rank << "}) ";
     }
 
     oss << "]";

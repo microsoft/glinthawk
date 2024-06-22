@@ -11,7 +11,7 @@ namespace glinthawk {
 
 using HashID = glinthawk::util::digest::SHA256Hash;
 using PromptID = glinthawk::util::digest::SHA256Hash;
-using ContextID = glinthawk::util::digest::SHA256Hash;
+using ContextID = uint32_t;
 using RouteID = uint32_t;
 using ModelID = uint32_t;
 

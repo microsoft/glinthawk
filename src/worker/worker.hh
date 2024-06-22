@@ -93,6 +93,7 @@ private:
 
   std::filesystem::path model_root_;
   std::unique_ptr<TierRouter<ComputeKernel, ModelConfig>> tier_router_ { nullptr };
+  ContextID next_context_id_ { 0 };
 
   std::unordered_map<RouteID, RouteMap> route_set_ {};
   glinthawk::prompt::PromptStore prompt_store_ {};
@@ -138,8 +139,8 @@ private:
                                              const uint32_t concurrency_size_post_attention_tier_2,
                                              const uint32_t concurrency_size_classification_tier_2,
                                              const uint32_t max_context_count_tier_2,
-                                             const uint8_t tier_1_rank,
-                                             const uint8_t tier_2_rank,
+                                             const int8_t tier,
+                                             const uint8_t rank,
                                              const bool static_parent,
                                              const bool randomize );
   void setup_stats_handler();
@@ -154,9 +155,9 @@ private:
   net::Address find_next_worker( const RouteMap& route, const BatchedState& state )
   {
     CHECK( state.is_sharded() ) << "Monoliths should never be sent across nodes";
-    uint8_t t1_rank = state.scatter() ? state.get_rank_tier_1( 0 ) : 0;
-    uint8_t t2_rank = state.scatter() ? state.get_rank_tier_2( 0 ) : -1;
-    auto it = route.find( { state.next_layer(), state.next_stage(), t1_rank, t2_rank } );
+    int8_t tier = state.scatter() ? state.tier( 0 ) : 0;
+    uint8_t rank = state.scatter() ? state.rank( 0 ) : 0;
+    auto it = route.find( { state.next_layer(), state.next_stage(), tier, rank } );
     CHECK( it != route.end() ) << "No worker found for layer " << state.next_layer() << ", stage "
                                << state.next_stage();
     return it->second;
@@ -223,6 +224,9 @@ void BatchedWorker<ModelConfig, ComputeKernel>::setup_peer( std::map<net::Addres
     [peer_it] { return not peer_it->second.outgoing_states.empty(); } );
 }
 
+// TODO(pouya): this is a mess, create SliceConcurrency/TierConcurrency/NodeConcurrency class that involves all these
+//  things, refactor prior concurrency to ThreadConcurrency. Then get rid of StaticParentTierRouter, which can just be
+//  represented with n+1 tiers of size 1 each.
 template<typename ModelConfig, typename ComputeKernel>
 void BatchedWorker<ModelConfig, ComputeKernel>::setup_tier_router_and_compute_kernel(
   const std::filesystem::path& model_root,
@@ -240,25 +244,28 @@ void BatchedWorker<ModelConfig, ComputeKernel>::setup_tier_router_and_compute_ke
   const uint32_t concurrency_size_post_attention_tier_2,
   const uint32_t concurrency_size_classification_tier_2,
   const uint32_t max_context_count_tier_2,
-  const uint8_t tier_1_rank,
-  const uint8_t tier_2_rank,
+  const int8_t tier,
+  const uint8_t rank,
   const bool static_parent,
   const bool randomize )
 {
   CHECK_LE( start_layer, end_layer ) << "start_layer must be less than or equal to end_layer";
 
-  if ( tier_2_rank == -1 ) {
+  if ( tier == 0 ) {
     const auto concurrency_size_pre_attention = concurrency_size_pre_attention_tier_1;
     const auto concurrency_size_attention = concurrency_size_attention_tier_1;
     const auto concurrency_size_post_attention = concurrency_size_post_attention_tier_1;
     const auto concurrency_size_classification = concurrency_size_classification_tier_1;
     const auto max_context_count = max_context_count_tier_1;
-  } else {
+  } else if ( tier == 1 ) {
     const auto concurrency_size_pre_attention = concurrency_size_pre_attention_tier_2;
     const auto concurrency_size_attention = concurrency_size_attention_tier_2;
     const auto concurrency_size_post_attention = concurrency_size_post_attention_tier_2;
     const auto concurrency_size_classification = concurrency_size_classification_tier_2;
     const auto max_context_count = max_context_count_tier_1;
+  } else {
+    // TODO(pouya): check if throwing an exception isn't a better option here
+    LOG( FATAL ) << "Tier " << tier << " is unrecognized, exiting...";
   }
 
   monolith_concurrency_size_
@@ -310,8 +317,8 @@ void BatchedWorker<ModelConfig, ComputeKernel>::setup_tier_router_and_compute_ke
   }
 
   if ( n_tier_1 == 1 and n_tier_2 == 0 ) {
-    CHECK_EQ( tier_1_rank, 0 );
-    CHECK_EQ( tier_2_rank, -1 );
+    CHECK_EQ( tier, 0 );
+    CHECK_EQ( rank, 0 );
     tier_router_
       = std::make_unique<SingleTierRouter<ComputeKernel, ModelConfig>>( kernel_,
                                                                         { concurrency_size_pre_attention_tier_1,
@@ -321,7 +328,7 @@ void BatchedWorker<ModelConfig, ComputeKernel>::setup_tier_router_and_compute_ke
                                                                         max_context_count_tier_1,
                                                                         start_layer,
                                                                         end_layer );
-  } else if ( tier_1_rank == 0 ) {
+  } else if ( tier == 0 and rank == 0 ) {
     if ( static_parent ) {
       tier_router_
         = std::make_unique<StaticParentTierRouter<ComputeKernel, ModelConfig>>( kernel_,
@@ -367,12 +374,7 @@ void BatchedWorker<ModelConfig, ComputeKernel>::setup_tier_router_and_compute_ke
                         std::bind( &BatchedWorker<ModelConfig, ComputeKernel>::handle_tier_router_event, this ),
                         [this] { return this->compute_kernel_ != nullptr; } );
 
-  // TODO(pouya): get event loop working for the inner event_fd
-  event_loop_.add_rule( "Compute Kernel",
-                        Direction::In,
-                        tier_router_->compute_kernel_->event_fd(),
-                        std::bind( &TierRouter<ComputeKernel, ModelConfig>::pull_from_kernel, this ),
-                        [this] { return this->tier_router_ != nullptr; } );
+  tier_router_.set_up_event_loop( event_loop_ );
 
   event_loop_.add_rule(
     "Commit completions",
@@ -511,8 +513,8 @@ bool BatchedWorker<ModelConfig, ComputeKernel>::handle_coordinator_message( core
                                             proto.concurrency_post_att_size_tier_2(),
                                             proto.concurrency_cls_size_tier_2(),
                                             proto.max_context_count_tier_2(),
-                                            proto.tier_1_rank(),
-                                            proto.tier_2_rank(),
+                                            proto.tier(),
+                                            proto.rank(),
                                             proto.static_parent(),
                                             proto.randomize() );
 
@@ -582,10 +584,10 @@ bool BatchedWorker<ModelConfig, ComputeKernel>::handle_coordinator_message( core
           default: throw std::runtime_error( "invalid stage" );
         }
 
-        route_str << route.layer_num() << "[" << next_stage << "]<" << route.t1_rank() << "," << route.t2_rank()
-                  << "> -> " << route.ip() << ":" << route.port() << "; ";
+        route_str << route.layer_num() << "[" << next_stage << "]<" << route.tier() << "," << route.rank() << "> -> "
+                  << route.ip() << ":" << route.port() << "; ";
 
-        new_route.emplace( std::make_tuple( route.layer_num(), next_stage, route.t1_rank(), route.t2_rank() ),
+        new_route.emplace( std::make_tuple( route.layer_num(), next_stage, route.tier(), route.rank() ),
                            net::Address { route.ip(), static_cast<uint16_t>( route.port() ) } );
       }
 
@@ -596,7 +598,6 @@ bool BatchedWorker<ModelConfig, ComputeKernel>::handle_coordinator_message( core
     }
 
     case Message::OpCode::PushDummyPrompts: {
-      // TODO(pouya): should we check if we are the parent? does the worker need to know that?
       // create some random inference states and feed them into the system
       protobuf::PushDummyPrompts proto;
       proto.ParseFromString( msg.payload() );
@@ -614,9 +615,7 @@ bool BatchedWorker<ModelConfig, ComputeKernel>::handle_coordinator_message( core
         break;
       }
 
-      std::vector<models::BatchedInferenceState<ModelConfig>> states {};
-
-      // prompt and context id is sha256( current_time || dummy_hash_current_id_ )
+      // hash id is sha256( current_time || dummy_hash_current_id_ )
       auto generate_next_hash_id = [this]() -> HashID {
         char hash_id_buf[2 * sizeof( uint64_t )];
         const uint64_t current_time
@@ -638,44 +637,49 @@ bool BatchedWorker<ModelConfig, ComputeKernel>::handle_coordinator_message( core
       std::mt19937 temp_gen { rd() };
       std::uniform_real_distribution<float> temp_dist { 0.0f, 1.0f };
 
-      const uint32_t batch_count = ( prompt_count + ( batch_size - 1 ) ) / batch_size;
-
       for ( size_t i = 0; i < batch_count; i++ ) {
-        // TODO: FIXME hardcoded float16
-        models::BatchedInferenceState<ModelConfig> state {
-          batch_size, DataType::Float16, RouteID {}, ModelID {}, false, false, false
+        Prompt new_prompt { generate_next_hash_id(), temp_dist( temp_gen ), 1, { 1 /* TOKEN_BOS */ } };
+        prompt_queue_.push( new_prompt.id() );
+        prompt_store_.add( new_prompt.id(), std::move( new_prompt ) );
+      }
+
+      // TODO(pouya): fix the copy paste
+      size_t added_prompt_count = 0;
+      while ( prompt_queue_.size() >= monolith_concurrency_size_ and tier_router_->is_context_available() ) {
+        // TODO(pouya): fix hardcoded datatype
+        BatchedState state {
+          monolith_concurrency_size_, DataType::Float16, RouteID {}, ModelID {}, false, false, false
         };
 
-        DLOG( INFO ) << "Pushing dummy prompts: " << i * batch_size << " to " << ( ( i + 1 ) * batch_size - 1 );
-
-        for ( size_t j = 0; j < batch_size; j++ ) {
-          const auto idx = i * batch_size + j;
-
-          if ( idx >= prompt_count ) {
-            break;
-          }
-
-          state.set_prompt( j,
-                            generate_next_hash_id(),
-                            generate_next_hash_id(),
-                            1 /* TOKEN_BOS */,
+        for ( size_t i = 0; i < monolith_concurrency_size_; i++ ) {
+          PromptID prompt_id = prompt_queue_.front();
+          prompt_queue_.pop();
+          auto& prompt = prompt_store_.get( prompt_id );
+          state.set_prompt( i,
+                            prompt_id,
+                            next_context_id_,
+                            prompt.prompt().at( 0 ),
                             0,
-                            temp_dist( temp_gen ),
-                            1,
+                            prompt.temperature(),
+                            prompt.prompt().count(),
                             -1,
                             -1 );
+          // TODO: either use uint32_t directly instead of ContextID, or require some add-ability concept.
+          next_context_id_++;
+          added_prompt_count++;
         }
 
-        DLOG( INFO ) << "Generated state: " << state.debug_string( true );
-        // TODO(pouya): ugly workaround, we should have a "waiting" queue in worker for this.
-        CHECK( this->tier_router_->is_context_available() );
         this->tier_router_->push( std::move( state ) );
+        added_prompt_count += monolith_concurrency_size_;
+      }
+
+      if ( added_prompt_count > 0 ) {
+        LOG( INFO ) << "Added " << added_prompt_count << " prompts to the tier router.";
       }
 
       break;
     }
 
-      // TODO(pouya): need to rethink what these commands mean
     case Message::OpCode::PushPrompts: {
       protobuf::PushPrompts proto;
       proto.ParseFromString( msg.payload() );
@@ -687,45 +691,28 @@ bool BatchedWorker<ModelConfig, ComputeKernel>::handle_coordinator_message( core
       }
 
       size_t added_prompt_count = 0;
-      while ( prompt_queue_.size() >= monolith_concurrency_size_ ) {
+      while ( prompt_queue_.size() >= monolith_concurrency_size_ and tier_router_->is_context_available() ) {
         BatchedState state {
           monolith_concurrency_size_, DataType::Float16, RouteID {}, ModelID {}, false, false, false
-        };
-
-        auto generate_next_hash_id = [this]() -> HashID {
-          char hash_id_buf[2 * sizeof( uint64_t )];
-          const uint64_t current_time
-            = std::chrono::duration_cast<std::chrono::nanoseconds>( std::chrono::system_clock::now().time_since_epoch() )
-                .count();
-
-          memcpy( hash_id_buf, &current_time, sizeof( uint64_t ) );
-          memcpy( hash_id_buf + sizeof( uint64_t ), &( this->dummy_hash_current_id_ ), sizeof( uint64_t ) );
-
-          HashID hash_id;
-          util::digest::sha256( { hash_id_buf, sizeof( hash_id_buf ) }, hash_id );
-
-          this->dummy_hash_current_id_++;
-          return hash_id;
         };
 
         for ( size_t i = 0; i < monolith_concurrency_size_; i++ ) {
           PromptID prompt_id = prompt_queue_.front();
           prompt_queue_.pop();
           auto& prompt = prompt_store_.get( prompt_id );
-          // TODO(pouya): this needs to be filled with a valid context id from some pool
           state.set_prompt( i,
                             prompt_id,
-                            generate_next_hash_id(),
+                            next_context_id_,
                             prompt.prompt().at( 0 ),
                             0,
                             prompt.temperature(),
                             prompt.prompt().count(),
                             -1,
                             -1 );
+          next_context_id_++;
+          added_prompt_count++;
         }
 
-        // TODO(pouya): ugly workaround, we should have a "waiting" queue in worker for this.
-        CHECK( this->tier_router_->is_context_available() );
         this->tier_router_->push( std::move( state ) );
         added_prompt_count += monolith_concurrency_size_;
       }
@@ -817,10 +804,10 @@ bool BatchedWorker<ModelConfig, ComputeKernel>::handle_peer_message( core::Messa
             __stats__.add_point<IntDistributions::PromptLength>( state.token_pos( i ) );
             __stats__.increment<Counters::PromptsCompleted>();
 
+            // TODO(pouya): make sure discarded prompts ar ignored in context manager and forward calls
             state.discard( i );
 
             // let's replace this with the next prompt, if one is available
-            // TODO(sadjad): remove the "incomplete state" functionality from the kernels
             if ( not prompt_queue_.empty() ) {
               auto next_prompt_id = prompt_queue_.front();
               prompt_queue_.pop();
@@ -832,8 +819,8 @@ bool BatchedWorker<ModelConfig, ComputeKernel>::handle_peer_message( core::Messa
                                 0,
                                 next_prompt.temperature(),
                                 next_prompt.prompt().count(),
-                                state.get_tier_2_routing_group(),
-                                state.get_tier_1_routing_group() );
+                                state.tier(),
+                                state.rank() );
             }
           }
         }

@@ -32,8 +32,8 @@ message InitializeWorker
   uint32 concurrency_post_att_size_tier_2 = 13;
   uint32 concurrency_cls_size_tier_2 = 14;
   uint32 max_context_count_tier_2 = 15;
-  uint8 tier_1_rank = 16;
-  uint8 tier_2_rank = 17;
+  int8 tier = 16;
+  uint8 rank = 17;
   bool randomize = 18;
   bool static_parent = 19;
   string blobstore_uri = 20;
@@ -57,8 +57,8 @@ message SetRoute
 
     uint32 layer_num = 1;
     Stage stage = 2;
-    uint8 t1_rank = 3;
-    uint8 t2_rank = 4;
+    int8 tier = 3;
+    uint8 rank = 4;
     string ip = 5;
     uint32 port = 6;
   }
