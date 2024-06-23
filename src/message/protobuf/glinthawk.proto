@@ -20,23 +20,20 @@ message InitializeWorker
   string model_name = 1;
   uint32 start_layer = 2;
   uint32 end_layer = 3;
-  uint32 n_tier_1 = 4;
-  uint32 concurrency_pre_att_size_tier_1 = 5;
-  uint32 concurrency_att_size_tier_1 = 6;
-  uint32 concurrency_post_att_size_tier_1 = 7;
-  uint32 concurrency_cls_size_tier_1 = 8;
-  uint32 max_context_count_tier_1 = 9;
-  uint32 n_tier_2 = 10;
-  uint32 concurrency_pre_att_size_tier_2 = 11;
-  uint32 concurrency_att_size_tier_2 = 12;
-  uint32 concurrency_post_att_size_tier_2 = 13;
-  uint32 concurrency_cls_size_tier_2 = 14;
-  uint32 max_context_count_tier_2 = 15;
-  int8 tier = 16;
-  uint8 rank = 17;
-  bool randomize = 18;
-  bool static_parent = 19;
-  string blobstore_uri = 20;
+  message TierConcurrency
+    {
+      uint8_t ranks = 1;
+      uint32 concurrency_pre_att_size = 2;
+      uint32 concurrency_att_size = 3;
+      uint32 concurrency_post_att_size = 4;
+      uint32 concurrency_cls_size = 5;
+      uint32 max_context_count = 6;
+    }
+  repeated TierConcurrency tier_concurrency_s = 3;
+  int8 tier = 4;
+  uint8 rank = 5;
+  bool randomize = 6;
+  string blobstore_uri = 7;
 }
 
 message ProcessPrompts { repeated string prompt_ids = 1; }
@@ -84,7 +81,6 @@ message WorkerStats
 message PushDummyPrompts
 {
   uint32 count = 1;
-  uint32 batch_size = 2;
 }
 
 message Prompt

@@ -1,9 +1,9 @@
 #pragma once
 
+#include "util/eventfd.hh"
 #include <concepts>
 #include <type_traits>
 #include <utility>
-#include "util/eventfd.hh"
 
 namespace glinthawk::compute {
 
@@ -23,6 +23,23 @@ concept KernelConcept = requires( Kernel k, StateType s, EventFD e ) {
   { k.set_event_fd( e ) };
 };
 
+class NodeConcurrency
+{
+private:
+  std::array<size_t, util::to_underlying( models::InferenceStage::__COUNT__ )> v_;
+
+public:
+  NodeConcurrency( const size_t pre, const size_t att, const size_t post, const size_t classify )
+    : v_ { pre, att, post, classify }
+  {
+    CHECK_GT( pre + att + post + classify, 0 ) << "At least one stage must be enabled";
+  }
+
+  void set( const models::InferenceStage stage, const size_t value ) { v_[util::to_underlying( stage )] = value; }
+  size_t get( const models::InferenceStage stage ) const { return v_[util::to_underlying( stage )]; }
+  size_t max() const { return std::max( v_ ); }
+};
+
 class SliceConcurrency
 {
 private:
@@ -34,7 +51,7 @@ private:
   std::array<std::vector<uint8_t>, util::to_underlying( models::InferenceStage::__COUNT__ )> rank_index_cache_;
 
 public:
-  SliceConcurrency( std::vector<size_t> n_tier_s,
+  SliceConcurrency( std::vector<uint8_t> n_tier_s,
                     std::vector<std::array<size_t, util::to_underlying( models::InferenceStage::__COUNT__ )>> v )
     : n_tier_s_( n_tier_s )
     , v_( v )
@@ -55,7 +72,7 @@ public:
           if ( v_[tier_i][stage_i] > 0 ) {
             shard_cut_cache_[stage_i].push_back( v_[tier_i][stage_i] );
           }
-          for ( int batch_i = 0; bi < v_[tier_i][stage_i]; batch_i++ ) {
+          for ( int batch_i = 0; batch_i < v_[tier_i][stage_i]; batch_i++ ) {
             tier_index_cache_[stage_i].push_back( tier_i );
             rank_index_cache_[stage_i].push_back( rank_i );
           }
@@ -63,7 +80,7 @@ public:
       }
     }
     monolith_batch_size_ = std::accumulate( shard_cut_cache_[0].begin(), shard_cut_cache_[0].end(), 0 );
-    for ( int i = 1; i < util::to_underlying( Stage::__COUNT__ ); i++ ) {
+    for ( int i = 1; i < util::to_underlying( models::InferenceStage::__COUNT__ ); i++ ) {
       CHECK_EQ( monolith_batch_size_, std::accumulate( shard_cut_cache_[i].begin(), shard_cut_cache_[i].end(), 0 ) );
     }
   }
@@ -91,22 +108,11 @@ public:
   }
 
   size_t full_batch() const { return monolith_batch_size_; }
-};
 
-class NodeConcurrency
-{
-private:
-  std::array<size_t, util::to_underlying( models::InferenceStage::__COUNT__ )> v_;
-
-public:
-  NodeConcurrency( const size_t pre, const size_t att, const size_t post, const size_t classify )
-    : v_ { pre, att, post, classify }
+  NodeConcurrency& node_concurrency( const int8_t tier_i ) const
   {
-    CHECK_GT( pre + att + post + classify, 0 ) << "At least one stage must be enabled";
+    return { v_[tier_i][0], v_[tier_i][1], v_[tier_i][2], v_[tier_i][3] }
   }
-
-  void set( const models::InferenceStage stage, const size_t value ) { v_[util::to_underlying( stage )] = value; }
-  size_t get( const models::InferenceStage stage ) const { return v_[util::to_underlying( stage )]; }
 };
 
 // std::priority_queue does not allow for moving elements, so we need to wrap the state in a struct
