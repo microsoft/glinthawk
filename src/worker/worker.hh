@@ -229,9 +229,9 @@ void BatchedWorker<ModelConfig, ComputeKernel>::setup_tier_router_and_compute_ke
 
   monolith_concurrency_size_ = concurrency.full_batch();
   first_parent_ = start_layer == 0 and tier == 0 and rank == 0;
-  const auto kernel_concurrency = concurrency.node_concurrency( tier );
-  const auto kernel_max_context_count = max_context_counts[tier];
-  const int kernel_max_concurrency_size = kernel_concurrency.max();
+  const compute::NodeConcurrency kernel_concurrency = concurrency.node_concurrency( tier );
+  const size_t kernel_max_context_count = max_context_counts[tier];
+  const size_t kernel_max_concurrency_size = kernel_concurrency.max();
 
   ComputeKernel kernel_;
 

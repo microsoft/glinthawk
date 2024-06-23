@@ -19,7 +19,7 @@ private:
   const typename Model::SettingsType settings_ {};
 
 public:
-  ContextManager( const typename Model::SettingsType& settings )
+  explicit ContextManager( const typename Model::SettingsType& settings )
     : settings_( settings )
   {
   }
@@ -60,7 +60,7 @@ public:
   using StateType = glinthawk::models::BatchedInferenceState<typename Model::ConfigType>;
   using ContextPtr = std::shared_ptr<typename Model::ContextType>;
 
-  PreallocatingContextManager( const typename Model::SettingsType& settings );
+  explicit PreallocatingContextManager( const typename Model::SettingsType& settings );
 
   ContextPtr get_context( const ContextID& context_id );
 
@@ -73,9 +73,9 @@ public:
 
   bool release_context( const ContextID& context_id );
 
-  size_t free() const { return free_contexts_.size(); }
-  size_t allocated() const { return allocated_contexts_.size(); }
-  size_t total() const { return free() + allocated(); }
+  [[nodiscard]] size_t free() const { return free_contexts_.size(); }
+  [[nodiscard]] size_t allocated() const { return allocated_contexts_.size(); }
+  [[nodiscard]] size_t total() const { return free() + allocated(); }
 
 private:
   std::mutex mutex_ {};

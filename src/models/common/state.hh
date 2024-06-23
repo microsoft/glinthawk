@@ -210,7 +210,7 @@ public:
   void set_has_activations( const bool has_activations ) { metadata_.has_activations = has_activations; }
   void set_has_queries( const bool has_queries ) { metadata_.has_queries = has_queries; }
   void set_has_kvs( const bool has_kvs ) { metadata_.has_kvs = has_kvs; }
-  void set_is_sharded( const bool is_sharded ) { metadata_.is_sharded = is_shared; }
+  void set_is_sharded( const bool is_sharded ) { metadata_.is_sharded = is_sharded; }
   void set_scatter() { metadata_.to_parent = false; }
   void set_gather() { metadata_.to_parent = true; }
 
@@ -490,18 +490,6 @@ BatchedInferenceState<Config>::BatchedInferenceState( uint32_t batch_size,
   metadata_.model_id = model_id;
 
   prompts_.resize( metadata_.batch_size );
-
-  if ( state_has_activations ) {
-    allocate_activations();
-  }
-
-  if ( state_has_queries ) {
-    allocate_queries();
-  }
-
-  if ( state_has_kvs ) {
-    allocate_kvs();
-  }
 }
 
 template<typename Config>
@@ -732,7 +720,7 @@ size_t BatchedInferenceState<Config>::free_slots() const
 }
 
 template<typename Config>
-static std::deque<BatchedInferenceState<Config>>&& BatchedInferenceState<Config>::split_states(
+std::deque<BatchedInferenceState<Config>>&& BatchedInferenceState<Config>::split_states(
   BatchedInferenceState<Config>&& state,
   std::vector<size_t> vec_n,
   bool ignore_empty )
@@ -740,9 +728,9 @@ static std::deque<BatchedInferenceState<Config>>&& BatchedInferenceState<Config>
   CHECK_GT( vec_n.size(), 0 ) << "Splitting to empty  list";
 
   size_t sum_n = 0;
-  for ( int i = 0; i < vec_n.size(); i++ ) {
-    CHECK_LE( vec_n[i], state.metadata_.batch_size ) << "Requested batch sizes should not exceed this state's size";
-    sum_n += vec_n[i];
+  for ( size_t n : vec_n ) {
+    CHECK_LE( n, state.metadata_.batch_size ) << "Requested batch sizes should not exceed this state's size";
+    sum_n += n;
   }
   CHECK_EQ( state.metadata_.batch_size, sum_n ) << "Requested batch sizes should sum up to this state's size";
 
@@ -765,8 +753,8 @@ static std::deque<BatchedInferenceState<Config>>&& BatchedInferenceState<Config>
     state_new.metadata_.batch_size = vec_n[i];
     state_new.prompts_.resize( vec_n[i] );
 
-    for ( size_t i = 0; i < vec_n[i]; i++ ) {
-      state_new.prompts_[i] = state.prompts_[last_bi + i];
+    for ( size_t pi = 0; pi < vec_n[i]; pi++ ) {
+      state_new.prompts_[pi] = state.prompts_[last_bi + pi];
     }
 
     if ( state.has_activations() ) {
@@ -949,7 +937,7 @@ void BatchedInferenceState<Config>::merge( BatchedInferenceState&& other )
 }
 
 template<typename Config>
-static BatchedInferenceState<Config>&& BatchedInferenceState<Config>::merge_states(
+BatchedInferenceState<Config>&& BatchedInferenceState<Config>::merge_states(
   std::deque<BatchedInferenceState>&& vec_state )
 {
   CHECK_GT( vec_state.size(), 0 ) << "Merging empty list";
@@ -1045,9 +1033,9 @@ std::string BatchedInferenceState<Config>::debug_string( const bool prompt_detai
     oss << "prompts=[";
 
     for ( const auto& p : prompts_ ) {
-      oss << " (" << p.prompt_id.base58digest().substr( 0, 8 ) << ", " << p.context_id.base58digest().substr( 0, 8 )
-          << ", " << p.token << ", " << p.token_pos << ", " << ( p.temperature / 255.0f ) << ", " << p.prompt_length
-          << ", " << p.finished << ", {" << p.tier << ", " << p.rank << "}) ";
+      oss << " (" << p.prompt_id.base58digest().substr( 0, 8 ) << ", " << p.context_id << ", " << p.token << ", "
+          << p.token_pos << ", " << ( static_cast<float>( p.temperature ) / 255.0f ) << ", " << p.prompt_length << ", "
+          << p.finished << ", {" << p.tier << ", " << p.rank << "}) ";
     }
 
     oss << "]";

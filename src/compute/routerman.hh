@@ -144,7 +144,7 @@ protected:
   std::mutex ctx_mutex_;
   std::mutex shards_mutex_;
 
-  GlobalQueue outgoing_;
+  GlobalQueue<typename Model::ConfigType> outgoing_;
 
   [[nodiscard]] inline size_t vector_index( const size_t layer, const Stage stage ) const
   {
@@ -309,7 +309,7 @@ ParentTierRouter<ComputeKernel, Model>::form_monolith( const size_t layer, const
   std::deque<StateType> shards;
   {
     std::lock_guard lock { shards_mutex_ };
-    for ( int tier_i = 0; tier_i < concurrency_.num_tiers(); tier_i++ ) {
+    for ( int8_t tier_i = 0; tier_i < concurrency_.num_tiers(); tier_i++ ) {
       if ( concurrency_.get( tier_i, stage ) > 0 and idle_shards_[vi].size() < concurrency_.num_ranks( tier_i ) ) {
         return std::nullopt;
       }
@@ -489,7 +489,7 @@ protected:
 
   std::mutex ctx_mutex_;
 
-  GlobalQueue outgoing_;
+  GlobalQueue<typename Model::ConfigType> outgoing_;
 
   [[nodiscard]] bool inline is_served_in_this_slice( const StateType& state ) const
   {

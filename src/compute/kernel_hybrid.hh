@@ -55,7 +55,8 @@ public:
 private:
   using Stage = glinthawk::models::InferenceStage;
   using StateType = glinthawk::models::BatchedInferenceState<ConfigType>;
-  using StatePriorityQueue = std::priority_queue<StateQueueItem, std::deque<StateQueueItem>, StateCompOp>;
+  using StatePriorityQueue
+    = std::priority_queue<StateQueueItem<ConfigType>, std::deque<StateQueueItem<ConfigType>>, StateCompOp<ConfigType>>;
 
   template<typename M>
   requires std::same_as<M, ModelA> || std::same_as<M, ModelB>
@@ -90,9 +91,9 @@ private:
   std::mutex context_mutex_ {};
 
   // incoming -> (waiting|{a,b}.processing) -> outgoing
-  GlobalQueue incoming_;
-  GlobalQueue waiting_;
-  GlobalQueue outgoing_;
+  GlobalQueue<ConfigType> incoming_;
+  GlobalQueue<ConfigType> waiting_;
+  GlobalQueue<ConfigType> outgoing_;
   // </queues>
 
   // <threads>
