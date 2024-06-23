@@ -19,6 +19,7 @@ namespace glinthawk::models {
 // TODO(pouya): double check if context_id is implemented correctly.
 // TODO(pouya): design a lazy merge.
 // TODO(pouya): revamp soft_split to be optimal for TierRouter.
+// TODO(pouya): design a transactional merge/split state
 
 struct __attribute__( ( packed ) ) StateMetadata
 {

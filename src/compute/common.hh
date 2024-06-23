@@ -79,8 +79,16 @@ public:
     return shard_cut_cache_[util::to_underlying( stage )];
   }
 
-  void set( const models::InferenceStage stage, const size_t value ) { v_[util::to_underlying( stage )] = value; }
-  size_t get( const models::InferenceStage stage ) const { return v_[util::to_underlying( stage )]; }
+  int8_t num_tiers() const { return n_tier_s_.size(); }
+
+  uint8_t num_ranks( const int8_t tier_i ) const { return n_tier_s_[tier_i]; }
+
+  size_t get( const int8_t tier_i, const models::InferenceStage stage ) const
+  {
+    return v_[tier_i][util::to_underlying( stage )];
+  }
+
+  size_t full_batch() const { return monolith_batch_size_; }
 };
 
 class NodeConcurrency

@@ -51,6 +51,8 @@ public:
 
 /// @brief
 /// WARNING: THREAD SAFE, DO NOT USE ANOTHER LOCK WHILE CALLING
+// TODO(pouya): context is guaranteed. Maybe we should stop caring about mapping from context ID to context, and just
+//  use an array lookup.
 template<typename Model>
 class PreallocatingContextManager
 {
