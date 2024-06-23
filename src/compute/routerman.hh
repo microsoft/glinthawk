@@ -48,15 +48,7 @@ public:
 
   EventFD& event_fd() { return event_fd_; }
 
-  void set_up_event_loop( EventLoop event_loop )
-  {
-    event_loop_.add_rule( "Compute Kernel",
-                          Direction::In,
-                          this->compute_kernel_->event_fd(),
-                          std::bind( &TierRouter<ComputeKernel, ModelConfig>::pull_from_kernel, this ) );
-  }
-
-  virtual void pull_from_kernel() = 0;
+  virtual void set_up_event_loop( EventLoop event_loop ) = 0;
 
   virtual void push( glinthawk::models::BatchedInferenceState<Model::ConfigType>&& state ) = 0;
 
@@ -69,7 +61,6 @@ protected:
   std::unique_ptr<ComputeKernel> compute_kernel_;
 
   EventFD event_fd_ {};
-  GlobalQueue outgoing_;
 };
 
 /// @brief
@@ -98,9 +89,13 @@ public:
 
   virtual ~ParentTierRouter() override;
 
-  /// @brief
-  /// 1. Push sharded state from kernel -> process_shard, may internally call process_monolith
-  virtual void pull_from_kernel() override;
+  virtual void set_up_event_loop( EventLoop event_loop )
+  {
+    event_loop_.add_rule( "Compute Kernel",
+                          Direction::In,
+                          this->compute_kernel_->event_fd(),
+                          std::bind( &TierRouter<ComputeKernel, ModelConfig>::pull_from_kernel, this ) );
+  }
 
   /// @brief
   /// 1. Push monolithic state from worker -> calls process_monolith
@@ -147,6 +142,8 @@ protected:
   std::mutex ctx_mutex_;
   std::mutex shards_mutex_;
 
+  GlobalQueue outgoing_;
+
   inline size_t vector_index( const size_t layer, const Stage stage ) const
   {
     return ( layer - start_layer_ ) * util::to_underlying( models::InferenceStage::__COUNT__ )
@@ -158,6 +155,10 @@ protected:
     // TODO(pouya): this is assuming classification is done on the same machine doing pre-att-post
     return state.next_layer() >= start_layer_ and state.next_layer() <= end_layer_;
   }
+
+  /// @brief
+  /// 1. Push sharded state from kernel -> process_shard, may internally call process_monolith
+  void pull_from_kernel();
 
   void place_shard( StateType&& state );
 
@@ -386,9 +387,8 @@ public:
 
   virtual ChildTierRouter() override;
 
-  /// @brief
-  /// 1. Push sharded state from kernel -> send state to worker
-  virtual void pull_from_kernel() override;
+  // We ignore the event_loop, since pull_from_kernel does not need to be called by it for ChildTierRouter
+  virtual void set_up_event_loop( EventLoop event_loop ) = 0;
 
   /// @brief
   /// 1. Push sharded state from worker -> send state to kernel
@@ -407,41 +407,26 @@ template<typename ComputeKernel, typename Model>
 void ChildTierRouter<ComputeKernel, Model>::ChildTierRouter( const ComputeKernel& compute_kernel )
   : compute_kernel_( std::make_unique( compute_kernel ) )
 {
-}
-
-template<typename ComputeKernel, typename Model>
-void ChildTierRouter<ComputeKernel, Model>::pull_from_kernel()
-{
-  // TODO: optimize
-  compute_kernel_->event_fd().read_event();
-  models::BatchedInferenceState<Model::ConfigType> state;
-  while ( compute_kernel_->pop( state ) ) {
-    state.set_gather();
-    outgoing_.emplace( std::move( state ) );
-    event_fd_.write_event();
-  }
+  // Override the kernel event fd, so that when the kernel pushes something to outgoing, the worker is directly called.
+  // TODO(pouya): while it will never be an issue, this is technically thread unsafe
+  compute_kernel_->set_event_fd( event_fd_ );
 }
 
 template<typename ComputeKernel, typename Model>
 void ChildTierRouter<ComputeKernel, Model>::push( models::BatchedInferenceState<Model::ConfigType>&& state )
 {
-  // TODO: optimize
   compute_kernel_->push( std::move( state ) );
 }
 
 template<typename ComputeKernel, typename Model>
 bool ChildTierRouter<ComputeKernel, Model>::pop( models::BatchedInferenceState<Model::ConfigType>& state )
 {
-  // TODO: optimize
-  std::lock_guard lock { outgoing_.mutex };
-
-  if ( outgoing_.queue.empty() ) {
+  if ( compute_kernel_->pop( state ) ) {
+    state.set_gather();
+    return true;
+  } else {
     return false;
   }
-
-  state = std::move( outgoing_.queue.top().state );
-  outgoing_.queue.pop();
-  return true;
 }
 
 template<typename ComputeKernel, typename Model>
@@ -467,9 +452,13 @@ public:
 
   virtual ~SingleTierRouter() override;
 
-  /// @brief
-  /// called by an event loop to pull states from kernel.outgoing. May send them back in kernel or send them to worker.
-  virtual void pull_from_kernel() override;
+  virtual void set_up_event_loop( EventLoop event_loop )
+  {
+    event_loop_.add_rule( "Compute Kernel",
+                          Direction::In,
+                          this->compute_kernel_->event_fd(),
+                          std::bind( &TierRouter<ComputeKernel, ModelConfig>::pull_from_kernel, this ) );
+  }
 
   /// @brief
   /// called by worker to send state to kernel
@@ -497,7 +486,7 @@ protected:
   /// 3. Batch sizes are equal across stages
   /// The SingleTierRouter does not need to know if the kernel is hybrid or not. It treats hybrid kernels as a sum of
   /// two concurrencies.
-  const concurrency_all_stages_;
+  const concurrency_;
   size_t free_contexts_;
 
   const size_t start_layer_;
@@ -510,6 +499,10 @@ protected:
     // TODO(pouya): this is assuming classification is done on the same machine doing pre-att-post
     return state.next_layer() >= start_layer_ and state.next_layer() <= end_layer_;
   }
+
+  /// @brief
+  /// 1. Push state from kernel -> kernel/worker
+  void pull_from_kernel();
 };
 
 template<typename ComputeKernel, typename Model>
@@ -519,7 +512,7 @@ void SingleTierRouter<ComputeKernel, Model>::SingleTierRouter( const ComputeKern
                                                                const size_t start_layer,
                                                                const size_t end_layer )
   : compute_kernel_( std::make_unique( compute_kernel ) )
-  , concurrency_all_stages_( concurrency.get( glinthawk::models::InferenceStage::PreAttention ) )
+  , concurrency_( concurrency.get( glinthawk::models::InferenceStage::PreAttention ) )
   , free_contexts_( settings.start_layer_num == 0 ? kv_slots_tier_1 : 0 )
   , start_layer_( start_layer )
   , end_layer_( end_layer )
@@ -538,7 +531,6 @@ void SingleTierRouter<ComputeKernel, Model>::SingleTierRouter( const ComputeKern
 template<typename ComputeKernel, typename Model>
 void SingleTierRouter<ComputeKernel, Model>::pull_from_kernel()
 {
-  // TODO: optimize
   compute_kernel_->event_fd().read_event();
   models::BatchedInferenceState<Model::ConfigType> state;
   while ( compute_kernel_->pop( state ) ) {
@@ -558,7 +550,8 @@ void SingleTierRouter<ComputeKernel, Model>::pull_from_kernel()
 template<typename ComputeKernel, typename Model>
 void SingleTierRouter<ComputeKernel, Model>::push( models::BatchedInferenceState<Model::ConfigType>&& state )
 {
-  CHECK_EQ( state.batch_size(), concurrency_all_stages_ );
+  CHECK_EQ( state.batch_size(), concurrency_ );
+
   bool already_assigned = state.rank_assigned( 0 );
   for ( size_t i = 0; i < state.batch_size(); i++ ) {
     CHECK_EQ( already_assigned, state.rank_assigned( i ) )

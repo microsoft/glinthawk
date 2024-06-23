@@ -3,6 +3,7 @@
 #include <concepts>
 #include <type_traits>
 #include <utility>
+#include "util/eventfd.hh"
 
 namespace glinthawk::compute {
 
@@ -15,10 +16,11 @@ enum class KernelType
 };
 
 template<typename Kernel, typename StateType>
-concept KernelConcept = requires( Kernel k, StateType s ) {
+concept KernelConcept = requires( Kernel k, StateType s, EventFD e ) {
   std::is_same_v<typename std::decay<decltype( Kernel::Type )>::type, KernelType>;
   { k.push( std::move( s ) ) } -> std::same_as<void>;
   { k.pop( s ) } -> std::same_as<bool>;
+  { k.set_event_fd( e ) };
 };
 
 class SliceConcurrency

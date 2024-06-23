@@ -55,6 +55,8 @@ public:
   bool pop( glinthawk::models::BatchedInferenceState<ConfigType>& state );
   EventFD& event_fd() { return event_fd_; }
 
+  void set_event_fd( EventFD& event_fd ) { event_fd_ = event_fd; }
+
 private:
   template<typename M>
   requires std::same_as<M, ModelA> || std::same_as<M, ModelB>

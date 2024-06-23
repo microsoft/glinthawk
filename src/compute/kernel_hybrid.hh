@@ -50,6 +50,8 @@ public:
 
   EventFD& event_fd() { return event_fd_; }
 
+  void set_event_fd( EventFD& event_fd ) { event_fd_ = event_fd; }
+
 private:
   using Stage = glinthawk::models::InferenceStage;
   using StateType = glinthawk::models::BatchedInferenceState<ConfigType>;
