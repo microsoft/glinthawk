@@ -147,6 +147,7 @@ SimpleHybridComputeKernel<ModelA, ModelB>::SimpleHybridComputeKernel( const uint
   , a_( std::make_unique<ModelA>( std::forward<Args>( args )... ) )
   , b_( std::make_unique<ModelB>( std::forward<Args>( args )... ) )
 {
+  CHECK( concurrency % 2 == 0 );
   threads_.emplace_back( &SimpleHybridComputeKernel::bookkeeping_thread_func, this );
   threads_.emplace_back( &SimpleHybridComputeKernel::execution_thread_func<ModelA>, this, std::ref( a_ ) );
   threads_.emplace_back( &SimpleHybridComputeKernel::execution_thread_func<ModelB>, this, std::ref( b_ ) );
