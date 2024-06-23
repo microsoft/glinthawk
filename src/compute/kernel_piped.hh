@@ -39,7 +39,7 @@ public:
 
 public:
   template<typename... Args>
-  PipedComputeKernel( const Concurrency& concurrency, Args&&... args );
+  PipedComputeKernel( const NodeConcurrency& concurrency, Args&&... args );
 
   ~PipedComputeKernel();
 

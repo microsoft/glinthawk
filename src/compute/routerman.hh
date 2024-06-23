@@ -96,10 +96,10 @@ class ParentTierRouter : public TierRouter
 public:
   ParentTierRouter( const ComputeKernel& compute_kernel,
                     const size_t n_tier_1,
-                    const Concurrency& concurrency_tier_1,
+                    const NodeConcurrency& concurrency_tier_1,
                     const size_t kv_slots_tier_1,
                     const size_t n_tier_2,
-                    const Concurrency& concurrency_tier_2,
+                    const NodeConcurrency& concurrency_tier_2,
                     const size_t kv_slots_tier_2,
                     const size_t start_layer,
                     const size_t end_layer );
@@ -148,10 +148,10 @@ protected:
   /// The ParentTierRouter does not need to know if the kernel is hybrid or not. It treats hybrid kernels as a sum of
   /// two concurrencies.
   const size_t n_tier_1_;
-  const Concurrency concurrency_tier_1_;
+  const NodeConcurrency concurrency_tier_1_;
   std::vector<size_t> free_contexts_tier_1_;
   const size_t n_tier_2_;
-  const Concurrency concurrency_tier_2_;
+  const NodeConcurrency concurrency_tier_2_;
   std::vector<size_t> free_contexts_tier_2_;
 
   std::array<std::vector<size_t>, util::to_underlying( Stage::__COUNT__ )> sharding_batch_sizes;

@@ -41,7 +41,7 @@ public:
 
 public:
   template<typename... Args>
-  HybridComputeKernel( const Concurrency& concurrency_a, const Concurrency& concurrency_b, Args&&... args );
+  HybridComputeKernel( const NodeConcurrency& concurrency_a, const NodeConcurrency& concurrency_b, Args&&... args );
 
   ~HybridComputeKernel();
 
