@@ -5,6 +5,7 @@
 #include <concepts>
 #include <type_traits>
 #include <utility>
+#include <numeric>
 
 namespace glinthawk::compute {
 
@@ -44,7 +45,7 @@ public:
 class SliceConcurrency
 {
 private:
-  size_t monolith_batch_size_;
+  size_t monolith_batch_size_ {};
   std::vector<uint8_t> n_tier_s_;
   std::vector<std::array<size_t, util::to_underlying( models::InferenceStage::__COUNT__ )>> v_;
   std::array<std::vector<size_t>, util::to_underlying( models::InferenceStage::__COUNT__ )> shard_cut_cache_{};
@@ -146,9 +147,9 @@ template<typename ConfigType>
 struct GlobalQueue
 {
   std::priority_queue<StateQueueItem<ConfigType>, std::deque<StateQueueItem<ConfigType>>, StateCompOp<ConfigType>>
-    queue;
-  std::mutex mutex;
-  std::condition_variable cv;
+    queue {};
+  std::mutex mutex {};
+  std::condition_variable cv {};
 };
 
 } // namespace glinthawk::compute

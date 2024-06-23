@@ -22,18 +22,18 @@ message InitializeWorker
   uint32 end_layer = 3;
   message TierConcurrency
     {
-      uint8_t ranks = 1;
+      uint32 ranks = 1;
       uint32 concurrency_pre_att_size = 2;
       uint32 concurrency_att_size = 3;
       uint32 concurrency_post_att_size = 4;
       uint32 concurrency_cls_size = 5;
       uint32 max_context_count = 6;
     }
-  repeated TierConcurrency tier_concurrency_s = 3;
-  int8 tier = 4;
-  uint8 rank = 5;
-  bool randomize = 6;
-  string blobstore_uri = 7;
+  repeated TierConcurrency tier_concurrency_s = 4;
+  int32 tier = 5;
+  uint32 rank = 6;
+  bool randomize = 7;
+  string blobstore_uri = 8;
 }
 
 message ProcessPrompts { repeated string prompt_ids = 1; }
@@ -54,8 +54,8 @@ message SetRoute
 
     uint32 layer_num = 1;
     Stage stage = 2;
-    int8 tier = 3;
-    uint8 rank = 4;
+    int32 tier = 3;
+    uint32 rank = 4;
     string ip = 5;
     uint32 port = 6;
   }

@@ -81,10 +81,9 @@ public:
   {
     for ( size_t r = 0; r < REPEATS; r++ ) {
       auto& state = all_states_[r];
-      state = StateType { batch_size_, ( sizeof( ModelDataType ) == 2 ? DataType::Float16 : DataType::Float32 ),
-                          RouteID {},  ModelID {},
-                          true,        true,
-                          true };
+      state = StateType {
+        batch_size_, ( sizeof( ModelDataType ) == 2 ? DataType::Float16 : DataType::Float32 ), RouteID {}, ModelID {}
+      };
 
       state.set_next_layer( ConfigType::n_layers - 1 );
       state.set_next_stage( stage_ );
@@ -107,7 +106,7 @@ public:
       }
 
       for ( size_t i = 0; i < batch_size_; i++ ) {
-        state.set_prompt( i, PromptID {}, ContextID {}, 1, token_pos_, 0.5, 1, 0, -1 );
+        state.set_prompt( i, PromptID {}, ContextID {}, 1, token_pos_, 0.5, 1, 0, 0 );
       }
     }
   }
@@ -116,10 +115,9 @@ public:
   {
     const auto end_time = std::chrono::steady_clock::now() + duration_;
 
-    StateType state { batch_size_, ( sizeof( ModelDataType ) == 2 ? DataType::Float16 : DataType::Float32 ),
-                      RouteID {},  ModelID {},
-                      true,        true,
-                      true };
+    StateType state {
+      batch_size_, ( sizeof( ModelDataType ) == 2 ? DataType::Float16 : DataType::Float32 ), RouteID {}, ModelID {}
+    };
 
     for ( auto now = std::chrono::steady_clock::now(); now < end_time; now = std::chrono::steady_clock::now() ) {
       const auto sleep_util = now + std::chrono::microseconds( 1000 );

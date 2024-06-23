@@ -41,22 +41,22 @@ namespace glinthawk::compute {
 /// @brief
 /// TierRouter is a middle-man between the worker and kernel. Generally, it's job is to break down states between nodes,
 /// manage context and route states to/from kernel.
-template<typename ComputeKernel, typename Model>
+template<typename ComputeKernel, typename ModelConfig>
 class TierRouter
 {
 public:
-  explicit TierRouter( ComputeKernel compute_kernel )
-    : compute_kernel_( std::make_unique<ComputeKernel>( compute_kernel ) ) {};
+  explicit TierRouter( std::unique_ptr<ComputeKernel> compute_kernel )
+    : compute_kernel_( std::move( compute_kernel ) ) {};
 
   virtual ~TierRouter() = 0;
 
   EventFD& event_fd() { return event_fd_; }
 
-  virtual void set_up_event_loop( EventLoop event_loop ) = 0;
+  virtual void set_up_event_loop( EventLoop& event_loop ) = 0;
 
-  virtual void push( glinthawk::models::BatchedInferenceState<typename Model::ConfigType>&& state ) = 0;
+  virtual void push( glinthawk::models::BatchedInferenceState<ModelConfig>&& state ) = 0;
 
-  [[nodiscard]] virtual bool pop( glinthawk::models::BatchedInferenceState<typename Model::ConfigType>& state ) = 0;
+  [[nodiscard]] virtual bool pop( glinthawk::models::BatchedInferenceState<ModelConfig>& state ) = 0;
 
   [[nodiscard]] virtual bool is_context_available() const = 0;
 
@@ -81,35 +81,35 @@ protected:
 /// ParentTierRouter fully handles context management, and guarantees that if a shard arrives at the kernel, that
 /// kernel has space for it.
 // TODO(pouya): can straggler's cause an unstable failure mode in dispersing work among tiers?
-template<typename ComputeKernel, typename Model>
-class ParentTierRouter : public TierRouter<ComputeKernel, Model>
+template<typename ComputeKernel, typename ModelConfig>
+class ParentTierRouter : public TierRouter<ComputeKernel, ModelConfig>
 {
 public:
-  ParentTierRouter( const ComputeKernel& compute_kernel,
+  ParentTierRouter( std::unique_ptr<ComputeKernel> compute_kernel,
                     const SliceConcurrency& concurrency_s,
                     std::vector<size_t>& kv_slots_tier_s,
                     size_t start_layer,
                     size_t end_layer );
 
-  virtual void set_up_event_loop( EventLoop event_loop )
+  void set_up_event_loop( EventLoop& event_loop ) override
   {
     event_loop.add_rule( "Compute Kernel",
                          Direction::In,
                          this->compute_kernel_->event_fd(),
-                         std::bind( &ParentTierRouter<ComputeKernel, Model>::pull_from_kernel, this ) );
+                         std::bind( &ParentTierRouter<ComputeKernel, ModelConfig>::pull_from_kernel, this ) );
   }
 
   /// @brief
   /// 1. Push monolithic state from worker -> calls process_monolith
   /// 2. Push sharded state from worker -> process_shard, may internally call process_monolith
-  void push( glinthawk::models::BatchedInferenceState<typename Model::ConfigType>&& state ) override;
+  void push( glinthawk::models::BatchedInferenceState<ModelConfig>&& state ) override;
 
   /// @brief
   /// pop is called by the worker to receive states, that are:
   /// 1. monoliths that are no longer local to the node.
   /// 2. shards that the compute kernel processed.
   /// 3. shards that resulted from a monolith being broken.
-  [[nodiscard]] bool pop( glinthawk::models::BatchedInferenceState<typename Model::ConfigType>& state ) override;
+  [[nodiscard]] bool pop( glinthawk::models::BatchedInferenceState<ModelConfig>& state ) override;
 
   /// @brief
   /// is_context_available checks if we have context available for attention for all layers in this slice. It returns
@@ -123,7 +123,7 @@ public:
 
 protected:
   using Stage = glinthawk::models::InferenceStage;
-  using StateType = typename glinthawk::models::BatchedInferenceState<typename Model::ConfigType>;
+  using StateType = typename glinthawk::models::BatchedInferenceState<ModelConfig>;
 
   /// @brief
   /// For now we assume:
@@ -141,10 +141,10 @@ protected:
 
   std::vector<std::vector<std::deque<StateType>>> idle_shards_ {};
 
-  std::mutex ctx_mutex_;
-  std::mutex shards_mutex_;
+  std::mutex ctx_mutex_ {};
+  std::mutex shards_mutex_ {};
 
-  GlobalQueue<typename Model::ConfigType> outgoing_;
+  GlobalQueue<ModelConfig> outgoing_ {};
 
   [[nodiscard]] inline size_t vector_index( const size_t layer, const Stage stage ) const
   {
@@ -192,26 +192,27 @@ protected:
   void process_shard( StateType&& state );
 };
 
-template<typename ComputeKernel, typename Model>
-ParentTierRouter<ComputeKernel, Model>::ParentTierRouter( const ComputeKernel& compute_kernel,
-                                                          const SliceConcurrency& concurrency,
-                                                          std::vector<size_t>& kv_slots_tier_s,
-                                                          size_t start_layer,
-                                                          size_t end_layer )
-  : TierRouter<ComputeKernel, Model>( compute_kernel )
+template<typename ComputeKernel, typename ModelConfig>
+ParentTierRouter<ComputeKernel, ModelConfig>::ParentTierRouter( std::unique_ptr<ComputeKernel> compute_kernel,
+                                                                const SliceConcurrency& concurrency,
+                                                                std::vector<size_t>& kv_slots_tier_s,
+                                                                size_t start_layer,
+                                                                size_t end_layer )
+  : TierRouter<ComputeKernel, ModelConfig>( std::move( compute_kernel ) )
   , concurrency_( concurrency )
-  , free_contexts_( start_layer == 0 ? kv_slots_tier_s : std::vector<size_t> { concurrency_.num_tiers(), 0 } )
+  , free_contexts_( start_layer == 0 ? kv_slots_tier_s
+                                     : std::vector<size_t> { static_cast<size_t>( concurrency_.num_tiers() ), 0 } )
   , start_layer_( start_layer )
   , end_layer_( end_layer )
-  , idle_shards_( concurrency_.num_tiers(),
-                  ( end_layer_ - start_layer_ + 1 ) * util::to_underlying( Stage::__COUNT__ ) )
+  , idle_shards_( static_cast<size_t>( concurrency_.num_tiers() ) )
 {
   // TODO(pouya): if there is only one slice, a generated batch never gets pushed to worker to report generations.
-  CHECK( start_layer_ != 0 or end_layer_ != Model::ConfigType::n_layers - 1 );
+  CHECK( start_layer_ != 0 or end_layer_ != ModelConfig::n_layers - 1 );
 
   for ( int tier_i = 0; tier_i < concurrency_.num_tiers(); tier_i++ ) {
     CHECK( kv_slots_tier_s[tier_i] > 0
            or concurrency_.get( tier_i, glinthawk::models::InferenceStage::Attention ) == 0 );
+    idle_shards_[tier_i].emplace_back( ( end_layer_ - start_layer_ + 1 ) * util::to_underlying( Stage::__COUNT__ ) );
   }
 
   if constexpr ( ComputeKernel::Type == KernelType::Batched or ComputeKernel::Type == KernelType::SimpleHybrid ) {
@@ -228,20 +229,20 @@ ParentTierRouter<ComputeKernel, Model>::ParentTierRouter( const ComputeKernel& c
   }
 }
 
-template<typename ComputeKernel, typename Model>
-void ParentTierRouter<ComputeKernel, Model>::pull_from_kernel()
+template<typename ComputeKernel, typename ModelConfig>
+void ParentTierRouter<ComputeKernel, ModelConfig>::pull_from_kernel()
 {
-  TierRouter<ComputeKernel, Model>::compute_kernel_->event_fd().read_event();
-  models::BatchedInferenceState<typename Model::ConfigType> state;
-  while ( TierRouter<ComputeKernel, Model>::compute_kernel_->pop( state ) ) {
+  TierRouter<ComputeKernel, ModelConfig>::compute_kernel_->event_fd().read_event();
+  models::BatchedInferenceState<ModelConfig> state;
+  while ( TierRouter<ComputeKernel, ModelConfig>::compute_kernel_->pop( state ) ) {
     // Shards will not be merge-able if they are not of the same (state/gather, shard/monolith)
     state.set_gather();
     process_shard( std::move( state ) );
   }
 }
 
-template<typename ComputeKernel, typename Model>
-void ParentTierRouter<ComputeKernel, Model>::push( models::BatchedInferenceState<typename Model::ConfigType>&& state )
+template<typename ComputeKernel, typename ModelConfig>
+void ParentTierRouter<ComputeKernel, ModelConfig>::push( models::BatchedInferenceState<ModelConfig>&& state )
 {
   if ( state.is_sharded() ) {
     CHECK( state.gather() );
@@ -250,8 +251,8 @@ void ParentTierRouter<ComputeKernel, Model>::push( models::BatchedInferenceState
     process_monolith( std::move( state ) );
 }
 
-template<typename ComputeKernel, typename Model>
-bool ParentTierRouter<ComputeKernel, Model>::pop( models::BatchedInferenceState<typename Model::ConfigType>& state )
+template<typename ComputeKernel, typename ModelConfig>
+bool ParentTierRouter<ComputeKernel, ModelConfig>::pop( models::BatchedInferenceState<ModelConfig>& state )
 {
   std::lock_guard lock { outgoing_.mutex };
 
@@ -264,8 +265,8 @@ bool ParentTierRouter<ComputeKernel, Model>::pop( models::BatchedInferenceState<
   return true;
 }
 
-template<typename ComputeKernel, typename Model>
-bool ParentTierRouter<ComputeKernel, Model>::is_context_available() const
+template<typename ComputeKernel, typename ModelConfig>
+bool ParentTierRouter<ComputeKernel, ModelConfig>::is_context_available() const
 {
   std::lock_guard lock { ctx_mutex_ };
 
@@ -278,8 +279,8 @@ bool ParentTierRouter<ComputeKernel, Model>::is_context_available() const
   return true;
 }
 
-template<typename ComputeKernel, typename Model>
-void ParentTierRouter<ComputeKernel, Model>::assign_ranks( StateType& state )
+template<typename ComputeKernel, typename ModelConfig>
+void ParentTierRouter<ComputeKernel, ModelConfig>::assign_ranks( StateType& state )
 {
   CHECK( not state.is_sharded() ) << "Cannot assign ranks to shards since sharding is done after assinging ranks!";
   CHECK_EQ( state.batch_size(), concurrency_.full_batch() );
@@ -301,9 +302,9 @@ void ParentTierRouter<ComputeKernel, Model>::assign_ranks( StateType& state )
   }
 }
 
-template<typename ComputeKernel, typename Model>
-std::optional<typename ParentTierRouter<ComputeKernel, Model>::StateType>&&
-ParentTierRouter<ComputeKernel, Model>::form_monolith( const size_t layer, const Stage stage )
+template<typename ComputeKernel, typename ModelConfig>
+std::optional<typename ParentTierRouter<ComputeKernel, ModelConfig>::StateType>&&
+ParentTierRouter<ComputeKernel, ModelConfig>::form_monolith( const size_t layer, const Stage stage )
 {
   const auto vi = vector_index( layer, stage );
   std::deque<StateType> shards;
@@ -324,37 +325,37 @@ ParentTierRouter<ComputeKernel, Model>::form_monolith( const size_t layer, const
       }
     }
   }
-  StateType monolith = StateType::merge_states( shards );
+  StateType monolith = std::move( StateType::merge_states( std::move( shards ) ) );
   monolith.set_is_sharded( false );
-  return std::move( { monolith } );
+  return std::move( std::make_optional<StateType>( monolith ) );
 }
 
-template<typename ComputeKernel, typename Model>
-void ParentTierRouter<ComputeKernel, Model>::process_monolith( StateType&& state )
+template<typename ComputeKernel, typename ModelConfig>
+void ParentTierRouter<ComputeKernel, ModelConfig>::process_monolith( StateType&& state )
 {
   assign_ranks( state );
   CHECK( is_served_in_this_slice( state ) );
 
   // TODO(pouya): the ranks only make sense for attention, routing should not be tied to rank for other stages
   std::deque<StateType> shards
-    = StateType::split_states( state, concurrency_.cutting_plan( state.next_stage() ), true );
+    = std::move( StateType::split_states( std::move( state ), concurrency_.cutting_plan( state.next_stage() ), true ) );
   for ( StateType& shard : shards ) {
     shard.set_is_sharded( true );
     shard.set_scatter();
     if ( shard.tier( 0 ) == 0 and shard.rank( 0 ) == 0 ) {
-      TierRouter<ComputeKernel, Model>::compute_kernel_->push( std::move( shard ) );
+      TierRouter<ComputeKernel, ModelConfig>::compute_kernel_->push( std::move( shard ) );
     } else {
       std::lock_guard lock { outgoing_.mutex };
       outgoing_.queue.emplace( std::move( shard ) );
     };
   }
-  TierRouter<ComputeKernel, Model>::event_fd_.write_event();
+  TierRouter<ComputeKernel, ModelConfig>::event_fd_.write_event();
 }
 
-template<typename ComputeKernel, typename Model>
-void ParentTierRouter<ComputeKernel, Model>::place_shard( StateType&& state )
+template<typename ComputeKernel, typename ModelConfig>
+void ParentTierRouter<ComputeKernel, ModelConfig>::place_shard( StateType&& state )
 {
-  CHECK( state.all_rank_assigned() ) << "Sharded states must always be already routed.";
+  CHECK( state.all_assigned_to_nodes() ) << "Sharded states must always be already routed.";
   const auto vi = vector_index( state.next_layer(), state.next_stage() );
   {
     std::lock_guard lock { shards_mutex_ };
@@ -362,11 +363,11 @@ void ParentTierRouter<ComputeKernel, Model>::place_shard( StateType&& state )
   }
 }
 
-template<typename ComputeKernel, typename Model>
-void ParentTierRouter<ComputeKernel, Model>::process_shard( StateType&& state )
+template<typename ComputeKernel, typename ModelConfig>
+void ParentTierRouter<ComputeKernel, ModelConfig>::process_shard( StateType&& state )
 {
   auto layer = state.next_layer();
-  auto stage = state.next_layer();
+  auto stage = state.next_stage();
   place_shard( std::move( state ) );
   std::optional<StateType> monolithic_state = std::move( form_monolith( layer, stage ) );
 
@@ -378,45 +379,48 @@ void ParentTierRouter<ComputeKernel, Model>::process_shard( StateType&& state )
 /// @brief
 /// ChildTierRouter is an empty middle-man between the worker and kernel. It's job is to mimic the TierRouter do the
 /// worker is oblivious to which rank it has. DummyTierRouter that pass states through with no delay.
-template<typename ComputeKernel, typename Model>
-class ChildTierRouter : public TierRouter<ComputeKernel, Model>
+template<typename ComputeKernel, typename ModelConfig>
+class ChildTierRouter : public TierRouter<ComputeKernel, ModelConfig>
 {
 public:
-  explicit ChildTierRouter( const ComputeKernel& compute_kernel );
+  explicit ChildTierRouter( std::unique_ptr<ComputeKernel> compute_kernel );
+
+  void set_up_event_loop( [[maybe_unused]] EventLoop& event_loop ) override {}
 
   /// @brief
   /// 1. Push sharded state from worker -> send state to kernel
-  void push( glinthawk::models::BatchedInferenceState<typename Model::ConfigType>&& state ) override;
+  void push( glinthawk::models::BatchedInferenceState<ModelConfig>&& state ) override;
 
   /// @brief
   /// Behaves similar to TierRouter
-  [[nodiscard]] bool pop( glinthawk::models::BatchedInferenceState<typename Model::ConfigType>& state ) override;
+  [[nodiscard]] bool pop( glinthawk::models::BatchedInferenceState<ModelConfig>& state ) override;
 
   /// @brief
   /// This should never be called.
   [[nodiscard]] bool is_context_available() const override;
 };
 
-template<typename ComputeKernel, typename Model>
-ChildTierRouter<ComputeKernel, Model>::ChildTierRouter( const ComputeKernel& compute_kernel )
-  : TierRouter<ComputeKernel, Model>( compute_kernel )
+template<typename ComputeKernel, typename ModelConfig>
+ChildTierRouter<ComputeKernel, ModelConfig>::ChildTierRouter( std::unique_ptr<ComputeKernel> compute_kernel )
+  : TierRouter<ComputeKernel, ModelConfig>( std::move( compute_kernel ) )
 {
   // Override the kernel event fd, so that when the kernel pushes something to outgoing, the worker is directly called.
   // TODO(pouya): while it will never be an issue, this is technically thread unsafe
-  TierRouter<ComputeKernel, Model>::compute_kernel_->set_event_fd( TierRouter<ComputeKernel, Model>::event_fd_ );
+  TierRouter<ComputeKernel, ModelConfig>::compute_kernel_->set_event_fd(
+    TierRouter<ComputeKernel, ModelConfig>::event_fd_ );
 }
 
-template<typename ComputeKernel, typename Model>
-void ChildTierRouter<ComputeKernel, Model>::push( models::BatchedInferenceState<typename Model::ConfigType>&& state )
+template<typename ComputeKernel, typename ModelConfig>
+void ChildTierRouter<ComputeKernel, ModelConfig>::push( models::BatchedInferenceState<ModelConfig>&& state )
 {
   CHECK( state.scatter() );
-  TierRouter<ComputeKernel, Model>::compute_kernel_->push( std::move( state ) );
+  TierRouter<ComputeKernel, ModelConfig>::compute_kernel_->push( std::move( state ) );
 }
 
-template<typename ComputeKernel, typename Model>
-bool ChildTierRouter<ComputeKernel, Model>::pop( models::BatchedInferenceState<typename Model::ConfigType>& state )
+template<typename ComputeKernel, typename ModelConfig>
+bool ChildTierRouter<ComputeKernel, ModelConfig>::pop( models::BatchedInferenceState<ModelConfig>& state )
 {
-  if ( TierRouter<ComputeKernel, Model>::compute_kernel_->pop( state ) ) {
+  if ( TierRouter<ComputeKernel, ModelConfig>::compute_kernel_->pop( state ) ) {
     state.set_gather();
     return true;
   } else {
@@ -424,42 +428,43 @@ bool ChildTierRouter<ComputeKernel, Model>::pop( models::BatchedInferenceState<t
   }
 }
 
-template<typename ComputeKernel, typename Model>
-bool ChildTierRouter<ComputeKernel, Model>::is_context_available() const
+template<typename ComputeKernel, typename ModelConfig>
+bool ChildTierRouter<ComputeKernel, ModelConfig>::is_context_available() const
 {
   LOG( FATAL ) << "DummyTierRouter should never receive new batches. That is only going to happen in slice0, tier1, "
                   "rank0.";
+  return false;
 }
 
 /// @brief
 /// SingleTierRouter is a special case of ParentTierRouter, when we know Tier 2 is empty and Tier 1 has one node. It is
 /// only different from ChildTierRouter in that (1) it does manage context, and (2) it can immediately send states back
 /// to compute_kernel if they are still served by this slice.
-template<typename ComputeKernel, typename Model>
-class SingleTierRouter : public TierRouter<ComputeKernel, Model>
+template<typename ComputeKernel, typename ModelConfig>
+class SingleTierRouter : public TierRouter<ComputeKernel, ModelConfig>
 {
 public:
-  SingleTierRouter( const ComputeKernel& compute_kernel,
+  SingleTierRouter( std::unique_ptr<ComputeKernel> compute_kernel,
                     NodeConcurrency& concurrency,
                     size_t kv_slots,
                     size_t start_layer,
                     size_t end_layer );
 
-  void set_up_event_loop( EventLoop event_loop )
+  void set_up_event_loop( EventLoop& event_loop ) override
   {
     event_loop.add_rule( "Compute Kernel",
                          Direction::In,
                          this->compute_kernel_->event_fd(),
-                         std::bind( &SingleTierRouter<ComputeKernel, Model>::pull_from_kernel, this ) );
+                         std::bind( &SingleTierRouter<ComputeKernel, ModelConfig>::pull_from_kernel, this ) );
   }
 
   /// @brief
   /// called by worker to send state to kernel
-  void push( glinthawk::models::BatchedInferenceState<typename Model::ConfigType>&& state ) override;
+  void push( glinthawk::models::BatchedInferenceState<ModelConfig>&& state ) override;
 
   /// @brief
   /// called by worker to get state from kernel
-  [[nodiscard]] bool pop( glinthawk::models::BatchedInferenceState<typename Model::ConfigType>& state ) override;
+  [[nodiscard]] bool pop( glinthawk::models::BatchedInferenceState<ModelConfig>& state ) override;
 
   /// @brief
   /// is_context_available checks if we have context available for attention for all layers in this slice. It returns
@@ -472,7 +477,7 @@ public:
   [[nodiscard]] bool is_context_available() const override;
 
 protected:
-  using StateType = typename glinthawk::models::BatchedInferenceState<typename Model::ConfigType>;
+  using StateType = typename glinthawk::models::BatchedInferenceState<ModelConfig>;
 
   /// @brief
   /// For now we assume:
@@ -487,9 +492,9 @@ protected:
   const size_t start_layer_;
   const size_t end_layer_;
 
-  std::mutex ctx_mutex_;
+  std::mutex ctx_mutex_ {};
 
-  GlobalQueue<typename Model::ConfigType> outgoing_;
+  GlobalQueue<ModelConfig> outgoing_ {};
 
   [[nodiscard]] bool inline is_served_in_this_slice( const StateType& state ) const
   {
@@ -502,20 +507,20 @@ protected:
   void pull_from_kernel();
 };
 
-template<typename ComputeKernel, typename Model>
-SingleTierRouter<ComputeKernel, Model>::SingleTierRouter( const ComputeKernel& compute_kernel,
-                                                          NodeConcurrency& concurrency,
-                                                          size_t kv_slots,
-                                                          size_t start_layer,
-                                                          size_t end_layer )
-  : TierRouter<ComputeKernel, Model>( compute_kernel )
+template<typename ComputeKernel, typename ModelConfig>
+SingleTierRouter<ComputeKernel, ModelConfig>::SingleTierRouter( std::unique_ptr<ComputeKernel> compute_kernel,
+                                                                NodeConcurrency& concurrency,
+                                                                size_t kv_slots,
+                                                                size_t start_layer,
+                                                                size_t end_layer )
+  : TierRouter<ComputeKernel, ModelConfig>( std::move( compute_kernel ) )
   , concurrency_( concurrency.get( glinthawk::models::InferenceStage::PreAttention ) )
   , free_contexts_( start_layer ? kv_slots : 0 )
   , start_layer_( start_layer )
   , end_layer_( end_layer )
 {
   // TODO(pouya): if there is only one slice, a generated batch never gets pushed to worker to report generations.
-  CHECK( start_layer_ != 0 or end_layer_ != Model::ConfigType::n_layers - 1 );
+  CHECK( start_layer_ != 0 or end_layer_ != ModelConfig::n_layers - 1 );
 
   CHECK_EQ( concurrency.get( glinthawk::models::InferenceStage::PreAttention ),
             concurrency.get( glinthawk::models::InferenceStage::Attention ) );
@@ -525,37 +530,37 @@ SingleTierRouter<ComputeKernel, Model>::SingleTierRouter( const ComputeKernel& c
             concurrency.get( glinthawk::models::InferenceStage::Classification ) );
 }
 
-template<typename ComputeKernel, typename Model>
-void SingleTierRouter<ComputeKernel, Model>::pull_from_kernel()
+template<typename ComputeKernel, typename ModelConfig>
+void SingleTierRouter<ComputeKernel, ModelConfig>::pull_from_kernel()
 {
-  TierRouter<ComputeKernel, Model>::compute_kernel_->event_fd().read_event();
-  models::BatchedInferenceState<typename Model::ConfigType> state;
-  while ( TierRouter<ComputeKernel, Model>::compute_kernel_->pop( state ) ) {
+  TierRouter<ComputeKernel, ModelConfig>::compute_kernel_->event_fd().read_event();
+  models::BatchedInferenceState<ModelConfig> state;
+  while ( TierRouter<ComputeKernel, ModelConfig>::compute_kernel_->pop( state ) ) {
     if ( is_served_in_this_slice( state ) ) {
-      TierRouter<ComputeKernel, Model>::compute_kernel_->push( std::move( state ) );
+      TierRouter<ComputeKernel, ModelConfig>::compute_kernel_->push( std::move( state ) );
     } else {
       state.set_gather();
       {
         std::lock_guard lock { outgoing_.mutex };
         outgoing_.queue.emplace( std::move( state ) );
       }
-      TierRouter<ComputeKernel, Model>::event_fd_.write_event();
+      TierRouter<ComputeKernel, ModelConfig>::event_fd_.write_event();
     }
   }
 }
 
-template<typename ComputeKernel, typename Model>
-void SingleTierRouter<ComputeKernel, Model>::push( models::BatchedInferenceState<typename Model::ConfigType>&& state )
+template<typename ComputeKernel, typename ModelConfig>
+void SingleTierRouter<ComputeKernel, ModelConfig>::push( models::BatchedInferenceState<ModelConfig>&& state )
 {
   CHECK_EQ( state.batch_size(), concurrency_ );
 
-  bool already_assigned = state.rank_assigned( 0 );
+  bool already_assigned = state.assigned_to_node( 0 );
   for ( size_t i = 0; i < state.batch_size(); i++ ) {
-    CHECK_EQ( already_assigned, state.rank_assigned( i ) )
+    CHECK_EQ( already_assigned, state.assigned_to_node( i ) )
       << "Either all prompts are already tier-routed or none of them are.";
     if ( not state.assigned_to_node( i ) ) {
-      state.set_tier( 0 );
-      state.set_rank( 0 );
+      state.set_tier( i, 0 );
+      state.set_rank( i, 0 );
       {
         std::lock_guard lock { ctx_mutex_ };
         CHECK( free_contexts_ > 0 );
@@ -564,11 +569,11 @@ void SingleTierRouter<ComputeKernel, Model>::push( models::BatchedInferenceState
     }
   }
   state.set_scatter();
-  TierRouter<ComputeKernel, Model>::compute_kernel_->push( std::move( state ) );
+  TierRouter<ComputeKernel, ModelConfig>::compute_kernel_->push( std::move( state ) );
 }
 
-template<typename ComputeKernel, typename Model>
-bool SingleTierRouter<ComputeKernel, Model>::pop( models::BatchedInferenceState<typename Model::ConfigType>& state )
+template<typename ComputeKernel, typename ModelConfig>
+bool SingleTierRouter<ComputeKernel, ModelConfig>::pop( models::BatchedInferenceState<ModelConfig>& state )
 {
   std::lock_guard lock { outgoing_.mutex };
 
@@ -581,8 +586,8 @@ bool SingleTierRouter<ComputeKernel, Model>::pop( models::BatchedInferenceState<
   return true;
 }
 
-template<typename ComputeKernel, typename Model>
-bool SingleTierRouter<ComputeKernel, Model>::is_context_available() const
+template<typename ComputeKernel, typename ModelConfig>
+bool SingleTierRouter<ComputeKernel, ModelConfig>::is_context_available() const
 {
   std::lock_guard lock { ctx_mutex_ };
   return free_contexts_ >= concurrency_;

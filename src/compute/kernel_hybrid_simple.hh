@@ -223,7 +223,7 @@ void SimpleHybridComputeKernel<ModelA, ModelB>::model_step_forward( StateType& s
       timeit<IntDistributions::KernelClassificationForwardTime>( __stats__, [&] { model.forward_classify( state ); } );
       break;
 
-    case Stage::Attention: LOG( FATAL ) << "Invalid stage: " << next_stage; break;
+    case Stage::Attention: LOG( FATAL ) << "Invalid stage: " << state.next_stage(); break;
   }
 }
 

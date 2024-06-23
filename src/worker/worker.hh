@@ -128,8 +128,8 @@ private:
   void setup_tier_router_and_compute_kernel( const std::filesystem::path& model_root,
                                              const uint32_t start_layer,
                                              const uint32_t end_layer,
-                                             const compute::SliceConcurrency& concurrency_,
-                                             const std::vector<uint32_t> max_context_counts_,
+                                             compute::SliceConcurrency concurrency_,
+                                             std::vector<size_t> max_context_counts_,
                                              const int8_t tier,
                                              const uint8_t rank,
                                              const bool randomize );
@@ -219,8 +219,8 @@ void BatchedWorker<ModelConfig, ComputeKernel>::setup_tier_router_and_compute_ke
   const std::filesystem::path& model_root,
   const uint32_t start_layer,
   const uint32_t end_layer,
-  const compute::SliceConcurrency& concurrency,
-  const std::vector<uint32_t> max_context_counts,
+  compute::SliceConcurrency concurrency,
+  std::vector<size_t> max_context_counts,
   const int8_t tier,
   const uint8_t rank,
   const bool randomize )
@@ -229,15 +229,21 @@ void BatchedWorker<ModelConfig, ComputeKernel>::setup_tier_router_and_compute_ke
 
   monolith_concurrency_size_ = concurrency.full_batch();
   first_parent_ = start_layer == 0 and tier == 0 and rank == 0;
-  const compute::NodeConcurrency kernel_concurrency = concurrency.node_concurrency( tier );
+  compute::NodeConcurrency kernel_concurrency = concurrency.node_concurrency( tier );
   const size_t kernel_max_context_count = max_context_counts[tier];
   const size_t kernel_max_concurrency_size = kernel_concurrency.max();
 
-  ComputeKernel kernel_;
+  std::unique_ptr<ComputeKernel> kernel_;
 
-  if constexpr ( ComputeKernel::Type == compute::KernelType::Batched
-                 or ComputeKernel::Type == compute::KernelType::SimplePiped ) {
-    kernel_ = std::make_unique<ComputeKernel>( kernel_max_concurrency_size,
+  if constexpr ( ComputeKernel::Type == compute::KernelType::Batched ) {
+    kernel_ = std::make_unique<ComputeKernel>( model_root,
+                                               start_layer,
+                                               end_layer,
+                                               kernel_max_concurrency_size,
+                                               kernel_max_context_count,
+                                               randomize );
+  } else if constexpr ( ComputeKernel::Type == compute::KernelType::SimplePiped ) {
+    kernel_ = std::make_unique<ComputeKernel>( kernel_concurrency,
                                                model_root,
                                                start_layer,
                                                end_layer,
@@ -275,21 +281,21 @@ void BatchedWorker<ModelConfig, ComputeKernel>::setup_tier_router_and_compute_ke
     CHECK_EQ( tier, 0 );
     CHECK_EQ( rank, 0 );
     tier_router_ = std::make_unique<compute::SingleTierRouter<ComputeKernel, ModelConfig>>(
-      kernel_, kernel_concurrency, kernel_max_context_count, start_layer, end_layer );
+      std::move( kernel_ ), kernel_concurrency, kernel_max_context_count, start_layer, end_layer );
   } else if ( tier == 0 and rank == 0 ) {
     tier_router_ = std::make_unique<compute::ParentTierRouter<ComputeKernel, ModelConfig>>(
-      kernel_, concurrency, max_context_counts, start_layer, end_layer );
+      std::move( kernel_ ), concurrency, max_context_counts, start_layer, end_layer );
   } else {
-    tier_router_ = std::make_unique<compute::ChildTierRouter<ComputeKernel, ModelConfig>>( kernel_ );
+    tier_router_ = std::make_unique<compute::ChildTierRouter<ComputeKernel, ModelConfig>>( std::move( kernel_ ) );
   }
 
   event_loop_.add_rule( "Tier Router",
                         Direction::In,
                         tier_router_->event_fd(),
                         std::bind( &BatchedWorker<ModelConfig, ComputeKernel>::handle_tier_router_event, this ),
-                        [this] { return this->compute_kernel_ != nullptr; } );
+                        [this] { return this->tier_router_ != nullptr; } );
 
-  tier_router_.set_up_event_loop( event_loop_ );
+  tier_router_->set_up_event_loop( event_loop_ );
 
   event_loop_.add_rule(
     "Commit completions",
@@ -419,11 +425,11 @@ bool BatchedWorker<ModelConfig, ComputeKernel>::handle_coordinator_message( core
 
       for ( int i = 0; i < proto.tier_concurrency_s_size(); i++ ) {
         const auto& tier_concurrency = proto.tier_concurrency_s( i );
-        n_tiers.push_back( tier_concurrency.ranks() );
-        stage_concurrencies.emplace_back( tier_concurrency.concurrency_pre_att_size(),
-                                          tier_concurrency.concurrency_att_size(),
-                                          tier_concurrency.concurrency_post_att_size(),
-                                          tier_concurrency.concurrency_cls_size(), );
+        n_tiers.push_back( static_cast<uint8_t>( tier_concurrency.ranks() ) );
+        stage_concurrencies.push_back( { tier_concurrency.concurrency_pre_att_size(),
+                                         tier_concurrency.concurrency_att_size(),
+                                         tier_concurrency.concurrency_post_att_size(),
+                                         tier_concurrency.concurrency_cls_size() } );
         max_contexts.push_back( tier_concurrency.max_context_count() );
       }
 
@@ -432,8 +438,8 @@ bool BatchedWorker<ModelConfig, ComputeKernel>::handle_coordinator_message( core
                                             proto.end_layer(),
                                             { n_tiers, stage_concurrencies },
                                             max_contexts,
-                                            proto.tier(),
-                                            proto.rank(),
+                                            static_cast<int8_t>( proto.tier() ),
+                                            static_cast<uint8_t>( proto.rank() ),
                                             proto.randomize() );
 
       LOG( INFO ) << "Worker initialized.";
@@ -505,8 +511,10 @@ bool BatchedWorker<ModelConfig, ComputeKernel>::handle_coordinator_message( core
         route_str << route.layer_num() << "[" << next_stage << "]<" << route.tier() << "," << route.rank() << "> -> "
                   << route.ip() << ":" << route.port() << "; ";
 
-        new_route.emplace( std::make_tuple( route.layer_num(), next_stage, route.tier(), route.rank() ),
-                           net::Address { route.ip(), static_cast<uint16_t>( route.port() ) } );
+        new_route.emplace(
+          std::make_tuple(
+            route.layer_num(), next_stage, static_cast<int8_t>( route.tier() ), static_cast<uint8_t>( route.rank() ) ),
+          net::Address { route.ip(), static_cast<uint16_t>( route.port() ) } );
       }
 
       route_set_.emplace( proto.route_id(), new_route );
@@ -552,7 +560,7 @@ bool BatchedWorker<ModelConfig, ComputeKernel>::handle_coordinator_message( core
       // generating random temperatures
       std::random_device rd {};
       std::mt19937 temp_gen { rd() };
-      std::uniform_real_distribution<float> temp_dist { 0.0f, 1.0f };
+      std::uniform_int_distribution<uint8_t> temp_dist { 0, 255 };
 
       for ( size_t i = 0; i < prompt_count; i++ ) {
         prompt::Prompt new_prompt { generate_next_hash_id(), temp_dist( temp_gen ), 1, { 1 /* TOKEN_BOS */ } };
@@ -563,9 +571,7 @@ bool BatchedWorker<ModelConfig, ComputeKernel>::handle_coordinator_message( core
       // TODO(pouya): fix the copy paste
       size_t added_prompt_count = 0;
       while ( prompt_queue_.size() >= monolith_concurrency_size_ and tier_router_->is_context_available() ) {
-        BatchedState state {
-          monolith_concurrency_size_, DataType::Float16, RouteID {}, ModelID {}, false, false, false
-        };
+        BatchedState state { monolith_concurrency_size_, DataType::Float16, RouteID {}, ModelID {} };
 
         for ( size_t i = 0; i < monolith_concurrency_size_; i++ ) {
           PromptID prompt_id = prompt_queue_.front();
@@ -608,9 +614,7 @@ bool BatchedWorker<ModelConfig, ComputeKernel>::handle_coordinator_message( core
 
       size_t added_prompt_count = 0;
       while ( prompt_queue_.size() >= monolith_concurrency_size_ and tier_router_->is_context_available() ) {
-        BatchedState state {
-          monolith_concurrency_size_, DataType::Float16, RouteID {}, ModelID {}, false, false, false
-        };
+        BatchedState state { monolith_concurrency_size_, DataType::Float16, RouteID {}, ModelID {} };
 
         for ( size_t i = 0; i < monolith_concurrency_size_; i++ ) {
           PromptID prompt_id = prompt_queue_.front();
@@ -729,13 +733,13 @@ bool BatchedWorker<ModelConfig, ComputeKernel>::handle_peer_message( core::Messa
               auto& next_prompt = prompt_store_.get( next_prompt_id );
               state.set_prompt( i,
                                 next_prompt_id,
-                                state.get_context_id( i ),
+                                state.context_id( i ),
                                 next_prompt.prompt().at( 0 ),
                                 0,
                                 next_prompt.temperature(),
                                 next_prompt.prompt().count(),
-                                state.tier(),
-                                state.rank() );
+                                state.tier( i ),
+                                state.rank( i ) );
             }
           }
         }

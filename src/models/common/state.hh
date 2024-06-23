@@ -184,7 +184,7 @@ public:
 
   // TODO(sadjad) eventually we got to get rid of the default constructor.
   BatchedInferenceState()
-    : BatchedInferenceState( 0, DataType::Float32, {}, {}, {}, {}, {} )
+    : BatchedInferenceState( 0, DataType::Float32, {}, {} )
   {
   }
 
@@ -313,7 +313,9 @@ public:
   /// @return A pair of states.
   std::pair<BatchedInferenceState, BatchedInferenceState> split( const size_t n );
 
-  static std::deque<BatchedInferenceState<Config>> split_states( std::vector<size_t> vec_n, bool ignore_empty );
+  static std::deque<BatchedInferenceState<Config>>&& split_states( BatchedInferenceState<Config>&& state,
+                                                                   std::vector<size_t> vec_n,
+                                                                   bool ignore_empty );
 
   /// @brief Like `split`, but creates spans of the current state instead of a new state.
   /// @param n The size of the first state span.
@@ -327,7 +329,7 @@ public:
   /// @return The merged state.
   void merge( BatchedInferenceState&& other );
 
-  static BatchedInferenceState<Config>&& merge_states( std::deque<BatchedInferenceState<Config>> vec_state );
+  static BatchedInferenceState<Config>&& merge_states( std::deque<BatchedInferenceState<Config>>&& vec_state );
 
   std::string debug_string( const bool prompt_details = false ) const;
 };
@@ -734,16 +736,16 @@ std::deque<BatchedInferenceState<Config>>&& BatchedInferenceState<Config>::split
   }
   CHECK_EQ( state.metadata_.batch_size, sum_n ) << "Requested batch sizes should sum up to this state's size";
 
-  std::deque<BatchedInferenceState> pieces {};
+  std::deque<BatchedInferenceState<Config>> pieces {};
   if ( vec_n.size() == 1 ) {
     pieces.push_back( std::move( state ) );
-    return pieces;
+    return std::move( pieces );
   }
 
   DLOG( INFO ) << "Splitting state of size " << state.metadata_.batch_size << " into " << vec_n.size() << " states.";
 
   size_t last_bi = 0;
-  for ( int i = 0; i < vec_n.size(); i++ ) {
+  for ( size_t i = 0; i < vec_n.size(); i++ ) {
     if ( vec_n[i] == 0 and ignore_empty ) {
       continue;
     }
@@ -772,7 +774,7 @@ std::deque<BatchedInferenceState<Config>>&& BatchedInferenceState<Config>::split
 
     if ( state.has_kvs() ) {
       state_new.allocate_kvs();
-      std::memcpy( state_new.kvs_.data(), kvs_.data() + last_bi * kv_len(), vec_n[i] * kv_len() );
+      std::memcpy( state_new.kvs_.data(), state.kvs_.data() + last_bi * state.kv_len(), vec_n[i] * state.kv_len() );
     }
 
     last_bi += vec_n[i];
