@@ -109,9 +109,9 @@ public:
 
   size_t full_batch() const { return monolith_batch_size_; }
 
-  NodeConcurrency& node_concurrency( const int8_t tier_i ) const
+  NodeConcurrency node_concurrency( const int8_t tier_i ) const
   {
-    return { v_[tier_i][0], v_[tier_i][1], v_[tier_i][2], v_[tier_i][3] }
+    return NodeConcurrency{ v_[tier_i][0], v_[tier_i][1], v_[tier_i][2], v_[tier_i][3] };
   }
 };
 

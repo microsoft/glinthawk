@@ -58,11 +58,11 @@ private:
   template<typename M>
   struct ModelData
   {
-    ModelData( std::unique_ptr<M>&& in_model, const Concurrency& in_concurrency );
+    ModelData( std::unique_ptr<M>&& in_model, const NodeConcurrency& in_concurrency );
 
     std::unique_ptr<M> model;
     PreallocatingContextManager<M> context_manager;
-    const Concurrency concurrency;
+    const NodeConcurrency concurrency;
 
     StatePriorityQueue processing {};
     std::mutex mutex {};
@@ -98,7 +98,7 @@ private:
 
 template<typename Model>
 template<typename M>
-PipedComputeKernel<Model>::ModelData<M>::ModelData( std::unique_ptr<M>&& in_model, const Concurrency& in_concurrency )
+PipedComputeKernel<Model>::ModelData<M>::ModelData( std::unique_ptr<M>&& in_model, const NodeConcurrency& in_concurrency )
   : model( std::move( in_model ) )
   , context_manager( model->settings() )
   , concurrency( in_concurrency )
@@ -107,7 +107,7 @@ PipedComputeKernel<Model>::ModelData<M>::ModelData( std::unique_ptr<M>&& in_mode
 
 template<typename Model>
 template<typename... Args>
-PipedComputeKernel<Model>::PipedComputeKernel( const Concurrency& concurrency, Args&&... args )
+PipedComputeKernel<Model>::PipedComputeKernel( const NodeConcurrency& concurrency, Args&&... args )
   : model_( std::make_unique<Model>( std::forward<Args>( args )... ), concurrency )
 {
   threads_.emplace_back( &PipedComputeKernel::bookkeeping_thread_func, this );

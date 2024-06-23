@@ -61,11 +61,11 @@ private:
   requires std::same_as<M, ModelA> || std::same_as<M, ModelB>
   struct ModelData
   {
-    ModelData( std::unique_ptr<M>&& in_model, const Concurrency& in_concurrency );
+    ModelData( std::unique_ptr<M>&& in_model, const NodeConcurrency& in_concurrency );
 
     std::unique_ptr<M> model;
     PreallocatingContextManager<M> context_manager;
-    const Concurrency concurrency;
+    const NodeConcurrency concurrency;
 
     StatePriorityQueue processing {};
     std::mutex mutex {};
@@ -108,7 +108,7 @@ private:
 template<typename ModelA, typename ModelB>
 template<typename M>
 HybridComputeKernel<ModelA, ModelB>::ModelData<M>::ModelData( std::unique_ptr<M>&& in_model,
-                                                              const Concurrency& in_concurrency )
+                                                              const NodeConcurrency& in_concurrency )
   : model( std::move( in_model ) )
   , context_manager( model->settings() )
   , concurrency( in_concurrency )
@@ -117,8 +117,8 @@ HybridComputeKernel<ModelA, ModelB>::ModelData<M>::ModelData( std::unique_ptr<M>
 
 template<typename ModelA, typename ModelB>
 template<typename... Args>
-HybridComputeKernel<ModelA, ModelB>::HybridComputeKernel( const Concurrency& concurrency_a,
-                                                          const Concurrency& concurrency_b,
+HybridComputeKernel<ModelA, ModelB>::HybridComputeKernel( const NodeConcurrency& concurrency_a,
+                                                          const NodeConcurrency& concurrency_b,
                                                           Args&&... args )
   : a_( std::make_unique<ModelA>( std::forward<Args>( args )... ), concurrency_a )
   , b_( std::make_unique<ModelB>( std::forward<Args>( args )... ), concurrency_b )
