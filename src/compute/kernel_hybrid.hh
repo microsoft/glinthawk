@@ -89,9 +89,9 @@ private:
   std::mutex context_mutex_ {};
 
   // incoming -> (waiting|{a,b}.processing) -> outgoing
-  GlobalQueue<ConfigType> incoming_;
-  GlobalQueue<ConfigType> waiting_;
-  GlobalQueue<ConfigType> outgoing_;
+  GlobalQueue<ConfigType> incoming_ {};
+  GlobalQueue<ConfigType> waiting_ {};
+  GlobalQueue<ConfigType> outgoing_ {};
   // </queues>
 
   // <threads>
@@ -148,7 +148,7 @@ void HybridComputeKernel<ModelA, ModelB>::push( models::BatchedInferenceState<Co
 
   {
     std::lock_guard lock { incoming_.mutex };
-    incoming_.queue.push( std::move( state ) );
+    incoming_.queue.emplace( std::move( state ) );
   }
 
   incoming_.cv.notify_one();
@@ -254,7 +254,7 @@ void HybridComputeKernel<ModelA, ModelB>::execution_thread_func(
 
       {
         std::lock_guard lock { outgoing_.mutex };
-        outgoing_.queue.push( std::move( *merged_state ) );
+        outgoing_.queue.emplace( std::move( *merged_state ) );
       }
 
       event_fd_.write_event();

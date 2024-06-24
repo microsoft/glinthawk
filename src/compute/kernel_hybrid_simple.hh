@@ -85,19 +85,10 @@ private:
   // TODO(pouya): understand what this is
   uint64_t current_local_state_id_ {}; // keeping track of the populated contexts for the states
 
-  // <queues>
-  // global queues:
-  struct GlobalQueue
-  {
-    std::queue<StateType> queue;
-    std::mutex mutex;
-    std::condition_variable cv;
-  };
-
   // incoming -> (waiting|processing) x N -> outgoing
-  GlobalQueue incoming_;
-  GlobalQueue waiting_;
-  GlobalQueue outgoing_;
+  GlobalQueue<ConfigType> incoming_ {};
+  GlobalQueue<ConfigType> waiting_ {};
+  GlobalQueue<ConfigType> outgoing_ {};
   // </queues>
 
   // Used to synchronize the model threads. Every time this barrier is reached, the processing mode is toggled,
@@ -168,7 +159,7 @@ void SimpleHybridComputeKernel<ModelA, ModelB>::push( models::BatchedInferenceSt
 
   {
     std::lock_guard lock { incoming_.mutex };
-    incoming_.queue.push( std::move( state ) );
+    incoming_.queue.emplace( std::move( state ) );
   }
 
   incoming_.cv.notify_one();
@@ -183,7 +174,7 @@ bool SimpleHybridComputeKernel<ModelA, ModelB>::pop( models::BatchedInferenceSta
     return false;
   }
 
-  state = std::move( outgoing_.queue.front() );
+  state = std::move( outgoing_.queue.top().state );
   outgoing_.queue.pop();
   return true;
 }
@@ -260,7 +251,12 @@ void SimpleHybridComputeKernel<ModelA, ModelB>::execution_thread_func(
 
       // During even iterations, ModelA processes pre/post-attention for [0] and ModelB does attention for [1]. During
       // odd iterations, ModelA does pre/post-attention for [1] and ModelB does attention for [0].
-      constexpr auto active_state_index = ( model_idx == 0 ) ? ( iteration % 2 ) : ( ( iteration + 1 ) % 2 );
+      auto active_state_index = [iteration] {
+        if constexpr ( model_idx == 0 )
+          return iteration % 2;
+        else
+          return ( ( iteration + 1 ) % 2 );
+      }();
       StateType& input_state = active_states_[active_state_index];
 
       // run the corresponding forward function
@@ -269,9 +265,10 @@ void SimpleHybridComputeKernel<ModelA, ModelB>::execution_thread_func(
                                or ( model_idx == 0 and next_stage == Stage::Attention );
 
       if ( not should_skip ) {
-        switch ( model_idx ) {
-          case 0: model_step_forward( input_state ); break;
-          case 1: model_step_forward( input_state, active_contexts_[active_state_index] ); break;
+        if constexpr ( model_idx ) {
+          model_step_forward( input_state );
+        } else {
+          model_step_forward( input_state, active_contexts_[active_state_index] );
         }
       }
     }
@@ -286,7 +283,7 @@ void SimpleHybridComputeKernel<ModelA, ModelB>::execution_thread_func(
 
       {
         std::lock_guard lock { outgoing_.mutex };
-        outgoing_.queue.push( std::move( active_states_[0] ) );
+        outgoing_.queue.emplace( std::move( active_states_[0] ) );
       }
 
       // notify the user about the new outgoing state
@@ -308,7 +305,7 @@ void SimpleHybridComputeKernel<ModelA, ModelB>::bookkeeping_thread_func()
     {
       std::unique_lock lock { incoming_.mutex };
       incoming_.cv.wait( lock, [this] { return !incoming_.queue.empty(); } );
-      incoming_state = std::move( incoming_.queue.front() );
+      incoming_state = std::move( incoming_.queue.top().state );
       incoming_.queue.pop();
     }
 

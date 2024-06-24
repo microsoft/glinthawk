@@ -56,7 +56,7 @@ public:
 
   [[nodiscard]] virtual bool pop( glinthawk::models::BatchedInferenceState<ModelConfig>& state ) = 0;
 
-  [[nodiscard]] virtual bool is_context_available() const = 0;
+  [[nodiscard]] virtual bool is_context_available() = 0;
 
 protected:
   // Worker doesn't see the compute kernel. Only the tier router does.
@@ -89,6 +89,8 @@ public:
                     size_t start_layer,
                     size_t end_layer );
 
+  ~ParentTierRouter() = default;
+
   /// @brief
   /// 1. Push monolithic state from worker -> calls process_monolith
   /// 2. Push sharded state from worker -> process_shard, may internally call process_monolith
@@ -109,7 +111,7 @@ public:
   /// function is truly only relevant in slice 0.
   /// This function will only return "true" a finite number of times before all contexts are filled up. From that point,
   /// new prompts are placed in discarded prompt locations, and will have context by default.
-  [[nodiscard]] bool is_context_available() const override;
+  [[nodiscard]] bool is_context_available() override;
 
 protected:
   using Stage = glinthawk::models::InferenceStage;
@@ -268,7 +270,7 @@ bool ParentTierRouter<ComputeKernel, ModelConfig>::pop( models::BatchedInference
 }
 
 template<typename ComputeKernel, typename ModelConfig>
-bool ParentTierRouter<ComputeKernel, ModelConfig>::is_context_available() const
+bool ParentTierRouter<ComputeKernel, ModelConfig>::is_context_available()
 {
   std::lock_guard lock { ctx_mutex_ };
 
@@ -388,6 +390,8 @@ class ChildTierRouter : public TierRouter<ComputeKernel, ModelConfig>
 public:
   explicit ChildTierRouter( std::unique_ptr<ComputeKernel> compute_kernel );
 
+  ~ChildTierRouter() = default;
+
   /// @brief
   /// 1. Push sharded state from worker -> send state to kernel
   void push( glinthawk::models::BatchedInferenceState<ModelConfig>&& state ) override;
@@ -398,7 +402,7 @@ public:
 
   /// @brief
   /// This should never be called.
-  [[nodiscard]] bool is_context_available() const override;
+  [[nodiscard]] bool is_context_available() override;
 
 protected:
   EventLoop event_loop_ {};
@@ -439,7 +443,7 @@ bool ChildTierRouter<ComputeKernel, ModelConfig>::pop( models::BatchedInferenceS
 }
 
 template<typename ComputeKernel, typename ModelConfig>
-bool ChildTierRouter<ComputeKernel, ModelConfig>::is_context_available() const
+bool ChildTierRouter<ComputeKernel, ModelConfig>::is_context_available()
 {
   LOG( FATAL ) << "DummyTierRouter should never receive new batches. That is only going to happen in slice0, tier1, "
                   "rank0.";
