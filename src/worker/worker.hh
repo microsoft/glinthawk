@@ -93,7 +93,7 @@ private:
 
   std::filesystem::path model_root_;
   std::unique_ptr<compute::TierRouter<ComputeKernel, ModelConfig>> tier_router_ { nullptr };
-  ContextID next_context_id_ { 0 };
+  ContextID next_context_id_ { NULL_CONTEXT + 1 };
   bool first_parent_ { false };
 
   std::unordered_map<RouteID, RouteMap> route_set_ {};

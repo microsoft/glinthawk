@@ -15,7 +15,7 @@ using ContextID = uint32_t;
 using RouteID = uint32_t;
 using ModelID = uint32_t;
 
-ContextID NULL_CONTEXT {};
+constexpr ContextID NULL_CONTEXT {};
 
 enum class DataType : uint8_t
 {
