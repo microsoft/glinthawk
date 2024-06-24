@@ -122,8 +122,8 @@ public:
 template<typename ConfigType>
 struct StateQueueItem
 {
-  std::pair<size_t, size_t> _comp_key; /* (layer, stage) */
   mutable glinthawk::models::BatchedInferenceState<ConfigType> state;
+  std::pair<size_t, size_t> _comp_key; /* (layer, stage) */
 
   explicit StateQueueItem( glinthawk::models::BatchedInferenceState<ConfigType>&& in_state )
     : state( std::move( in_state ) )
