@@ -236,12 +236,8 @@ void BatchedWorker<ModelConfig, ComputeKernel>::setup_tier_router_and_compute_ke
   std::unique_ptr<ComputeKernel> kernel_;
 
   if constexpr ( ComputeKernel::Type == compute::KernelType::Batched ) {
-    kernel_ = std::make_unique<ComputeKernel>( model_root,
-                                               start_layer,
-                                               end_layer,
-                                               kernel_max_concurrency_size,
-                                               kernel_max_context_count,
-                                               randomize );
+    kernel_ = std::make_unique<ComputeKernel>(
+      model_root, start_layer, end_layer, kernel_max_concurrency_size, kernel_max_context_count, randomize );
   } else if constexpr ( ComputeKernel::Type == compute::KernelType::SimplePiped ) {
     kernel_ = std::make_unique<ComputeKernel>( kernel_concurrency,
                                                model_root,
@@ -277,12 +273,7 @@ void BatchedWorker<ModelConfig, ComputeKernel>::setup_tier_router_and_compute_ke
     LOG( FATAL ) << "Invalid ComputeKernel type.";
   }
 
-  if ( concurrency.num_tiers() == 1 and concurrency.num_ranks( 0 ) == 1 ) {
-    CHECK_EQ( tier, 0 );
-    CHECK_EQ( rank, 0 );
-    tier_router_ = std::make_unique<compute::SingleTierRouter<ComputeKernel, ModelConfig>>(
-      std::move( kernel_ ), kernel_concurrency, kernel_max_context_count, start_layer, end_layer );
-  } else if ( tier == 0 and rank == 0 ) {
+  if ( tier == 0 and rank == 0 ) {
     tier_router_ = std::make_unique<compute::ParentTierRouter<ComputeKernel, ModelConfig>>(
       std::move( kernel_ ), concurrency, max_context_counts, start_layer, end_layer );
   } else {
@@ -294,8 +285,6 @@ void BatchedWorker<ModelConfig, ComputeKernel>::setup_tier_router_and_compute_ke
                         tier_router_->event_fd(),
                         std::bind( &BatchedWorker<ModelConfig, ComputeKernel>::handle_tier_router_event, this ),
                         [this] { return this->tier_router_ != nullptr; } );
-
-  tier_router_->set_up_event_loop( event_loop_ );
 
   event_loop_.add_rule(
     "Commit completions",

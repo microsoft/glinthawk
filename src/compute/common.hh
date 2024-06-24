@@ -1,6 +1,5 @@
 #pragma once
 
-#include "util/eventfd.hh"
 #include "util/util.hh"
 #include <concepts>
 #include <type_traits>
@@ -18,11 +17,10 @@ enum class KernelType
 };
 
 template<typename Kernel, typename StateType>
-concept KernelConcept = requires( Kernel k, StateType s, EventFD e ) {
+concept KernelConcept = requires( Kernel k, StateType s ) {
   std::is_same_v<typename std::decay<decltype( Kernel::Type )>::type, KernelType>;
   { k.push( std::move( s ) ) } -> std::same_as<void>;
   { k.pop( s ) } -> std::same_as<bool>;
-  { k.set_event_fd( e ) };
 };
 
 class NodeConcurrency
