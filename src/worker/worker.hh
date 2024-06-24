@@ -574,7 +574,7 @@ bool BatchedWorker<ModelConfig, ComputeKernel>::handle_coordinator_message( core
                             prompt.temperature(),
                             prompt.prompt().count(),
                             -1,
-                            -1 );
+                            0 );
           // TODO: either use uint32_t directly instead of ContextID, or require some add-ability concept.
           next_context_id_++;
           added_prompt_count++;
@@ -617,7 +617,7 @@ bool BatchedWorker<ModelConfig, ComputeKernel>::handle_coordinator_message( core
                             prompt.temperature(),
                             prompt.prompt().count(),
                             -1,
-                            -1 );
+                            0 );
           next_context_id_++;
           added_prompt_count++;
         }

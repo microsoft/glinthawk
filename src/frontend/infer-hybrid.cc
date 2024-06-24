@@ -52,11 +52,11 @@ private:
 
   StateType make_state()
   {
-    StateType st { batch_size_, DataType::_GLINTHAWK_DTYPE_NAME_, {}, {}, false, false, false };
+    StateType st { batch_size_, DataType::_GLINTHAWK_DTYPE_NAME_, {}, {} };
 
     // TODO: have to be careful with how many context ids we are making
     for ( size_t i = 0; i < batch_size_; ++i ) {
-      st.set_prompt( i, next_hash_id(), next_hash_id(), 1 /* BOS */, 0, temp_, 1, 0, 0 );
+      st.set_prompt( i, next_hash_id(), NULL_CONTEXT, 1 /* BOS */, 0, temp_, 1, 0, 0 );
     }
 
     st.set_next_layer( 0 );
@@ -81,6 +81,9 @@ public:
     , vocabulary_( tokenizer_path )
     , state_( make_state() )
   {
+    for ( size_t i = 0; i < batch_size_; ++i ) {
+      state_.set_context_id( i, NULL_CONTEXT+i );
+    }
   }
 
   void run()
