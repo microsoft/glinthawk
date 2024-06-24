@@ -1,4 +1,5 @@
 #include <chrono>
+#include <csignal>
 #include <filesystem>
 #include <iostream>
 #include <queue>
@@ -20,6 +21,12 @@
 using namespace std;
 using namespace glinthawk;
 using namespace glinthawk::models;
+
+static void signal_handler( int )
+{
+  cerr << endl << global_timer().summary() << endl;
+  exit( 0 );
+}
 
 template<class Model>
 class Rambler
@@ -69,7 +76,11 @@ public:
 
       while ( true ) {
         state_.set_temperature( 0, current_temp() );
-        model_.forward( state_, vector<decltype( context_ )> { context_ } );
+
+        {
+          GlobalScopeTimer<Timer::Category::TokenGeneration> _;
+          model_.forward( state_, vector<decltype( context_ )> { context_ } );
+        }
 
         const auto token = state_.token( 0 );
 
@@ -102,6 +113,8 @@ int main( int argc, char* argv[] )
   FLAGS_logtostderr = true;
   FLAGS_colorlogtostderr = true;
   google::InitGoogleLogging( argv[0] );
+
+  signal( SIGINT, signal_handler );
 
   try {
     const filesystem::path model_dir_path { argv[1] };
