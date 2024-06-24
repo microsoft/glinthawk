@@ -155,7 +155,7 @@ protected:
 
   void place_shard( StateType&& state );
 
-  std::optional<StateType>&& form_monolith( size_t layer, Stage stage );
+  bool form_monolith( StateType& monolith, size_t layer, Stage stage );
 
   /// @brief
   /// assign_ranks assigns tier_routing_group indices to states that have not been assigned them before. The
@@ -305,31 +305,33 @@ void ParentTierRouter<ComputeKernel, ModelConfig>::assign_ranks( StateType& stat
 }
 
 template<typename ComputeKernel, typename ModelConfig>
-std::optional<typename ParentTierRouter<ComputeKernel, ModelConfig>::StateType>&&
-ParentTierRouter<ComputeKernel, ModelConfig>::form_monolith( const size_t layer, const Stage stage )
+bool ParentTierRouter<ComputeKernel, ModelConfig>::form_monolith( StateType& monolith,
+                                                                  const size_t layer,
+                                                                  const Stage stage )
 {
   const auto vi = vector_index( layer, stage );
   std::deque<StateType> shards;
   {
     std::lock_guard lock { shards_mutex_ };
     for ( int8_t tier_i = 0; tier_i < concurrency_.num_tiers(); tier_i++ ) {
-      if ( concurrency_.get( tier_i, stage ) > 0 and idle_shards_[vi].size() < concurrency_.num_ranks( tier_i ) ) {
-        return std::nullopt;
+      if ( concurrency_.get( tier_i, stage ) > 0
+           and idle_shards_[tier_i][vi].size() < concurrency_.num_ranks( tier_i ) ) {
+        return false;
       }
     }
     for ( int8_t tier_i = 0; tier_i < concurrency_.num_tiers(); tier_i++ ) {
       if ( concurrency_.get( tier_i, stage ) > 0 ) {
         shards.insert( shards.end(),
-                       idle_shards_[tier_i][vi].begin(),
-                       idle_shards_[tier_i][vi].begin() + concurrency_.num_ranks( tier_i ) );
+                       std::make_move_iterator( idle_shards_[tier_i][vi].begin() ),
+                       std::make_move_iterator( idle_shards_[tier_i][vi].begin() + concurrency_.num_ranks( tier_i ) ) );
         idle_shards_[tier_i][vi].erase( idle_shards_[tier_i][vi].begin(),
                                         idle_shards_[tier_i][vi].begin() + concurrency_.num_ranks( tier_i ) );
       }
     }
   }
-  StateType monolith = std::move( StateType::merge_states( std::move( shards ) ) );
+  monolith = std::move( StateType::merge_states( std::move( shards ) ) );
   monolith.set_is_sharded( false );
-  return std::move( std::make_optional<StateType>( monolith ) );
+  return true;
 }
 
 template<typename ComputeKernel, typename ModelConfig>
@@ -371,10 +373,9 @@ void ParentTierRouter<ComputeKernel, ModelConfig>::process_shard( StateType&& st
   auto layer = state.next_layer();
   auto stage = state.next_stage();
   place_shard( std::move( state ) );
-  std::optional<StateType> monolithic_state = std::move( form_monolith( layer, stage ) );
 
-  if ( monolithic_state.has_value() ) {
-    process_monolith( std::move( *monolithic_state ) );
+  if ( form_monolith( state, layer, stage ) ) {
+    process_monolith( std::move( state ) );
   }
 }
 
@@ -413,9 +414,7 @@ ChildTierRouter<ComputeKernel, ModelConfig>::ChildTierRouter( std::unique_ptr<Co
     "Compute Kernel",
     Direction::In,
     this->compute_kernel_->event_fd(),
-    [this] {
-      TierRouter<ComputeKernel, ModelConfig>::event_fd_.write_event();
-    },
+    [this] { TierRouter<ComputeKernel, ModelConfig>::event_fd_.write_event(); },
     // Not sure what interest means here. Should check with Sadjad.
     [] { return true; },
     [] { LOG( ERROR ) << "TierRouter stopped pulling from kernel."; } );

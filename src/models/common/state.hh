@@ -230,7 +230,7 @@ public:
   bool gather() const { return metadata_.to_parent; }
   bool all_assigned_to_nodes() const
   {
-    for ( int i = 0; i < metadata_.batch_size; i++ ) {
+    for ( size_t i = 0; i < metadata_.batch_size; i++ ) {
       if ( not assigned_to_node( i ) ) {
         return false;
       }
@@ -313,9 +313,9 @@ public:
   /// @return A pair of states.
   std::pair<BatchedInferenceState, BatchedInferenceState> split( const size_t n );
 
-  static std::deque<BatchedInferenceState<Config>>&& split_states( BatchedInferenceState<Config>&& state,
-                                                                   std::vector<size_t> vec_n,
-                                                                   bool ignore_empty );
+  static std::deque<BatchedInferenceState<Config>> split_states( BatchedInferenceState<Config>&& state,
+                                                                 std::vector<size_t> vec_n,
+                                                                 bool ignore_empty );
 
   /// @brief Like `split`, but creates spans of the current state instead of a new state.
   /// @param n The size of the first state span.
@@ -329,7 +329,7 @@ public:
   /// @return The merged state.
   void merge( BatchedInferenceState&& other );
 
-  static BatchedInferenceState<Config>&& merge_states( std::deque<BatchedInferenceState<Config>>&& vec_state );
+  static BatchedInferenceState<Config> merge_states( std::deque<BatchedInferenceState<Config>>&& vec_state );
 
   std::string debug_string( const bool prompt_details = false ) const;
 };
@@ -722,7 +722,7 @@ size_t BatchedInferenceState<Config>::free_slots() const
 }
 
 template<typename Config>
-std::deque<BatchedInferenceState<Config>>&& BatchedInferenceState<Config>::split_states(
+std::deque<BatchedInferenceState<Config>> BatchedInferenceState<Config>::split_states(
   BatchedInferenceState<Config>&& state,
   std::vector<size_t> vec_n,
   bool ignore_empty )
@@ -739,7 +739,7 @@ std::deque<BatchedInferenceState<Config>>&& BatchedInferenceState<Config>::split
   std::deque<BatchedInferenceState<Config>> pieces {};
   if ( vec_n.size() == 1 ) {
     pieces.push_back( std::move( state ) );
-    return std::move( pieces );
+    return pieces;
   }
 
   DLOG( INFO ) << "Splitting state of size " << state.metadata_.batch_size << " into " << vec_n.size() << " states.";
@@ -784,7 +784,7 @@ std::deque<BatchedInferenceState<Config>>&& BatchedInferenceState<Config>::split
 
   state = {};
 
-  return std::move( pieces );
+  return pieces;
 }
 
 template<typename Config>
@@ -939,7 +939,7 @@ void BatchedInferenceState<Config>::merge( BatchedInferenceState&& other )
 }
 
 template<typename Config>
-BatchedInferenceState<Config>&& BatchedInferenceState<Config>::merge_states(
+BatchedInferenceState<Config> BatchedInferenceState<Config>::merge_states(
   std::deque<BatchedInferenceState>&& vec_state )
 {
   CHECK_GT( vec_state.size(), 0 ) << "Merging empty list";
@@ -1016,7 +1016,7 @@ BatchedInferenceState<Config>&& BatchedInferenceState<Config>::merge_states(
 
     other = {};
   }
-  return std::move( new_state );
+  return new_state;
 }
 
 template<typename Config>
