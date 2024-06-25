@@ -42,13 +42,15 @@ namespace glinthawk::compute {
 /// TierRouter is a middle-man between the worker and kernel. Generally, it's job is to break down states between nodes,
 /// manage context and route states to/from kernel.
 template<typename ComputeKernel, typename ModelConfig>
+requires models::llama2::ModelConfig<ModelConfig>
+         && compute::KernelConcept<ComputeKernel, models::BatchedInferenceState<ModelConfig>>
 class TierRouter
 {
 public:
   explicit TierRouter( std::unique_ptr<ComputeKernel> compute_kernel )
     : compute_kernel_( std::move( compute_kernel ) ) {};
 
-  virtual ~TierRouter() = 0;
+  virtual ~TierRouter() = default;
 
   EventFD& event_fd() { return event_fd_; }
 
@@ -80,6 +82,8 @@ protected:
 /// kernel has space for it.
 // TODO(pouya): can straggler's cause an unstable failure mode in dispersing work among tiers?
 template<typename ComputeKernel, typename ModelConfig>
+requires models::llama2::ModelConfig<ModelConfig>
+         && compute::KernelConcept<ComputeKernel, models::BatchedInferenceState<ModelConfig>>
 class ParentTierRouter : public TierRouter<ComputeKernel, ModelConfig>
 {
 public:
@@ -89,7 +93,7 @@ public:
                     size_t start_layer,
                     size_t end_layer );
 
-  ~ParentTierRouter() = default;
+  ~ParentTierRouter() override = default;
 
   /// @brief
   /// 1. Push monolithic state from worker -> calls process_monolith
@@ -385,12 +389,14 @@ void ParentTierRouter<ComputeKernel, ModelConfig>::process_shard( StateType&& st
 /// ChildTierRouter is an empty middle-man between the worker and kernel. It's job is to mimic the TierRouter do the
 /// worker is oblivious to which rank it has. DummyTierRouter that pass states through with no delay.
 template<typename ComputeKernel, typename ModelConfig>
+requires models::llama2::ModelConfig<ModelConfig>
+         && compute::KernelConcept<ComputeKernel, models::BatchedInferenceState<ModelConfig>>
 class ChildTierRouter : public TierRouter<ComputeKernel, ModelConfig>
 {
 public:
   explicit ChildTierRouter( std::unique_ptr<ComputeKernel> compute_kernel );
 
-  ~ChildTierRouter() = default;
+  ~ChildTierRouter() override = default;
 
   /// @brief
   /// 1. Push sharded state from worker -> send state to kernel
