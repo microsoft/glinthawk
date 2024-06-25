@@ -34,18 +34,23 @@ class Rambler
 private:
   using StateType = BatchedInferenceState<typename Model::ConfigType>;
 
+  const uint32_t batch_size_;
+
   Model model_;
   llama2::Vocabulary vocabulary_;
 
-  shared_ptr<typename Model::ContextType> context_;
+  vector<shared_ptr<typename Model::ContextType>> contexts_ {};
   StateType state_ {};
 
   void create_initial_state()
   {
-    state_ = { 1, DataType::_GLINTHAWK_DTYPE_NAME_, {}, {}, false, false, false };
+    state_ = { batch_size_, DataType::_GLINTHAWK_DTYPE_NAME_, {}, {}, false, false, false };
     state_.set_next_layer( 0 );
     state_.set_next_stage( InferenceStage::PreAttention );
-    state_.set_prompt( 0, {}, 1 /* BOS */, 0, 1.0, 1 );
+
+    for ( size_t i = 0; i < batch_size_; ++i ) {
+      state_.set_prompt( i, {}, 1 /* BOS */, 0, 1.0, 1 );
+    }
   }
 
   float current_temp() const
@@ -61,12 +66,16 @@ private:
   }
 
 public:
-  Rambler( const filesystem::path& model_path, const filesystem::path& tokenizer_path )
-    : model_( model_path, 0, std::numeric_limits<uint32_t>::max(), 1, 1 )
+  Rambler( const filesystem::path& model_path, const filesystem::path& tokenizer_path, const uint32_t batch_size )
+    : batch_size_( batch_size )
+    , model_( model_path, 0, std::numeric_limits<uint32_t>::max(), batch_size, batch_size )
     , vocabulary_( tokenizer_path )
-    , context_( make_shared<typename Model::ContextType>( model_.settings() ) )
   {
     create_initial_state();
+
+    for ( size_t i = 0; i < batch_size_; ++i ) {
+      contexts_.push_back( make_shared<typename Model::ContextType>( model_.settings() ) );
+    }
   }
 
   void ramble()
@@ -79,16 +88,21 @@ public:
 
         {
           GlobalScopeTimer<Timer::Category::TokenGeneration> _;
-          model_.forward( state_, vector<decltype( context_ )> { context_ } );
+          model_.forward( state_, contexts_ );
         }
-
-        const auto token = state_.token( 0 );
 
         if ( state_.finished( 0 ) ) {
           break;
         }
 
-        cout << vocabulary_.get_word( token ) << flush;
+        // check for completed dummy prompts, and restart them
+        for ( size_t i = 1; i < batch_size_; ++i ) {
+          if ( state_.finished( i ) ) {
+            state_.set_prompt( i, {}, 1 /* BOS */, 0, 1.0, 1 );
+          }
+        }
+
+        cout << vocabulary_.get_word( state_.token( 0 ) ) << flush;
       }
 
       cout << endl;
@@ -97,7 +111,10 @@ public:
   }
 };
 
-void usage( const char* argv0 ) { cerr << "Usage: " << argv0 << " <model_dir> <model_name> <tokenizer_path>" << endl; }
+void usage( const char* argv0 )
+{
+  cerr << "Usage: " << argv0 << " <model_dir> <model_name> <tokenizer_path> [<batch_size=1>]" << endl;
+}
 
 int main( int argc, char* argv[] )
 {
@@ -105,7 +122,7 @@ int main( int argc, char* argv[] )
     abort();
   }
 
-  if ( argc != 4 ) {
+  if ( argc != 4 && argc != 5 ) {
     usage( argv[0] );
     return EXIT_FAILURE;
   }
@@ -120,11 +137,12 @@ int main( int argc, char* argv[] )
     const filesystem::path model_dir_path { argv[1] };
     const string model_name { argv[2] };
     const filesystem::path tokenizer_path { argv[3] };
+    const size_t batch_size = ( argc == 5 ) ? stoul( argv[4] ) : 1u;
 
 #define CREATE_AND_RUN( MODEL_NAME, CLASS_NAME )                                                                       \
   if ( model_name == MODEL_NAME ) {                                                                                    \
     using ModelType = llama2::_GLINTHAWK_ARCH_NS_::CLASS_NAME<_GLINTHAWK_DTYPE_>;                                      \
-    Rambler<ModelType> rambler( model_dir_path, tokenizer_path );                                                      \
+    Rambler<ModelType> rambler( model_dir_path, tokenizer_path, batch_size );                                          \
     rambler.ramble();                                                                                                  \
   }
 
