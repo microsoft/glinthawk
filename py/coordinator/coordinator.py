@@ -1,5 +1,3 @@
-import settings
-
 import os
 import sys
 import enum
@@ -16,8 +14,8 @@ from rich.logging import RichHandler
 from google.protobuf.message import Message as ProtoMessage
 from google.protobuf.json_format import MessageToJson, MessageToDict
 
-from common.message import Message
-from protobuf import glinthawk_pb2 as protobuf
+from ..common.message import Message
+from ..protobuf import glinthawk_pb2 as protobuf
 
 from .worker import Worker
 from .model import Model
@@ -42,15 +40,15 @@ class Coordinator:
 
         # Workers
         self.workers: List[Worker] = []
-        self.first_worker = None  # Handle to the first worker in the chain
-        self.classification_worker = None  # Handle to the classification worker
-        self.separate_classification_worker = kwargs.get("separate_cls", False)
+        self.first_worker = None  # Handle to the worker at slice=0, tier=0, rank=0
 
         # Model
         self.model = Model(
-            n_layers=kwargs["n_layers"],
-            layers_per_worker=kwargs["layers_per_worker"],
-            separate_cls=self.separate_classification_worker,
+            model_name=kwargs.get("model_name"),
+            n_layers=kwargs.get("n_layers"),
+            n_slices=kwargs.get("n_slices"),
+            tier_config=kwargs.get("tiers"),
+            separate_cls_tiers=kwargs.get("separate_cls_tiers"),
         )
 
         # Job info
@@ -66,15 +64,6 @@ class Coordinator:
         self.initial_dummy_count = kwargs.get("dummy_count", 0)
         self.generated_dummies = 0
         self.completed_dummies = 0
-
-        # Concurrency sizes and context counts
-        self.concurrency_size_pre = kwargs.get("concurrency_size_pre", 16)
-        self.concurrency_size_att = kwargs.get("concurrency_size_att", 16)
-        self.concurrency_size_post = kwargs.get("concurrency_size_post", 16)
-        self.concurrency_size_cls = kwargs.get("concurrency_size_cls", 16)
-
-        self.cpu_context_count = kwargs.get("cpu_context_count", 36 * 81 * 2)
-        self.gpu_context_count = kwargs.get("gpu_context_count", 18 * 81)
 
         # Prompts and completions
         self.prompt_queue = []
@@ -208,51 +197,39 @@ class Coordinator:
                 proto = protobuf.Hey()
                 proto.ParseFromString(message.payload)
                 worker.platform = proto.platform
+                worker.kernel = proto.kernel
                 worker.ip = socket.inet_aton(proto.ip)
                 worker.port = int(proto.port)
 
-                if worker.platform not in [Platform.AMD64, Platform.CUDA] or not self.model.assign_slices(worker):
+                if not self.model.assign_slices(worker):
                     worker.state = Worker.State.Disconnected
+                    if worker in self.workers:
+                        self.workers.remove(worker)
                     self.push_message(worker, Message.OpCode.Bye, b"")
                     self.logger.warning(f"Dropped the connection to {worker.id}.")
-                    # TODO(sadjad): remove the worker from the list
                     continue
 
-                if worker.model_slice_start[0] == 0 and worker.model_slice_start[1] == Stage.PreAttention:
+                if worker.is_first_parent():
                     self.first_worker = worker
-                elif worker.model_slice_start[1] == Stage.Classification:
-                    self.classification_worker = worker
-
-                context_count = self.gpu_context_count if worker.platform == Platform.CUDA else self.cpu_context_count
-
-                worker.concurrency_size_pre = self.concurrency_size_pre
-                worker.concurrency_size_att = self.concurrency_size_att
-                worker.concurrency_size_post = self.concurrency_size_post
-                worker.concurrency_size_cls = self.concurrency_size_cls
 
                 self.push_message(
                     worker,
                     Message.OpCode.InitializeWorker,
                     protobuf.InitializeWorker(
-                        model_name="model",
+                        model_name=self.model.model_name,
                         start_layer=worker.model_slice_start[0],
                         end_layer=worker.model_slice_end[0],
-                        concurrency_pre_att_size=worker.concurrency_size_pre,
-                        concurrency_att_size=worker.concurrency_size_att,
-                        concurrency_post_att_size=worker.concurrency_size_post,
-                        concurrency_cls_size=worker.concurrency_size_cls,
-                        max_context_count=context_count,
+                        tier_concurrency_s=self.model.get_tier_concurrencies_message(),
+                        tier=worker.tier,
+                        rank=worker.rank,
                         randomize=False,
                     ),
                 )
 
                 self.logger.info(f"Worker {worker.id} is at {proto.ip}:{worker.port} [{worker}].")
 
-                if (
-                    self.model.all_assigned()
-                    and self.first_worker
-                    and (not self.separate_classification_worker or self.classification_worker)
-                ):
+                if self.model.all_assigned():
+                    assert self.first_worker is not None
                     self.logger.info("All workers have been assigned layers; setting routes.")
                     routing_message = self.create_routing_message().SerializeToString()
 
@@ -271,7 +248,6 @@ class Coordinator:
                             Message.OpCode.PushDummyPrompts,
                             protobuf.PushDummyPrompts(
                                 count=self.initial_dummy_count,
-                                batch_size=self.concurrency_size_pre,
                             ),
                         )
 
@@ -315,7 +291,6 @@ class Coordinator:
                 Message.OpCode.PushDummyPrompts,
                 protobuf.PushDummyPrompts(
                     count=count,
-                    batch_size=self.concurrency_size_pre,
                 ),
             )
 

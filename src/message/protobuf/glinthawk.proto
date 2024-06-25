@@ -10,9 +10,18 @@ message Hey
     CUDA = 1;
   }
 
+  enum Kernel
+  {
+    Batched = 0;
+    Hybrid = 1;
+    SimpleHybrid = 2;
+    SimplePiped = 3;
+  }
+
   string ip = 1;
   uint32 port = 2;
   Platform platform = 3;
+  Kernel kernel = 4;
 }
 
 message InitializeWorker

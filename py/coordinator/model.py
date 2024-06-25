@@ -1,47 +1,112 @@
 import socket
+from typing import List, Dict
 
-from protobuf import glinthawk_pb2 as protobuf
-
-from .base import Stage, Platform
+from .base import Stage, Platform, Kernel
 from .worker import Worker
+from ..protobuf import glinthawk_pb2 as protobuf
 
 
 class Model:
-    def __init__(self, n_layers, layers_per_worker, separate_cls):
-        assert n_layers % layers_per_worker == 0, "Number of layers must be divisible by layers per worker"
+    def __init__(self, model_name: str, n_layers: int, n_slices: int, tier_config: List[Dict],
+                 separate_cls_tiers: List[Dict]):
+        assert n_layers % n_slices == 0, "Number of layers must be divisible by number of slices"
 
+        self.model_name = model_name
         self.n_layers = n_layers
-        self.layers_per_worker = layers_per_worker
-        self.separate_cls = separate_cls
+        self.n_slices = n_slices
+        self.layers_per_worker = n_layers // n_slices
+        self.tier_config = tier_config
+        self.n_tiers = len(self.tier_config)
 
-        self._assigned_workers = 0
+        self.tier_concurrency_s = [
+            protobuf.InitializeWorker.TierConcurrency(
+                ranks=self.tier_config[i]['ranks'],
+                concurrency_pre_att_size=self.tier_config[i]['concurrency_size_pre'],
+                concurrency_att_size=self.tier_config[i]['concurrency_size_att'],
+                concurrency_post_att_size=self.tier_config[i]['concurrency_size_post'],
+                concurrency_cls_size=self.tier_config[i]['concurrency_size_cls'],
+                max_context_count=self.tier_config[i]['max_context_count'],
+            )
+            for i in range(self.n_tiers)
+        ]
+
+        for i_tier in range(self.n_tiers):
+            platform_str = self.tier_config[i_tier]['platform']
+            if platform_str == 'amd64':
+                self.tier_config[i_tier]['platform'] = Platform.AMD64
+            elif platform_str == 'cuda':
+                self.tier_config[i_tier]['platform'] = Platform.CUDA
+            else:
+                raise ValueError(f'Unknown platform "{platform_str}" in config')
+
+            kernel_str = self.tier_config[i_tier]['kernel']
+            if kernel_str == 'batched':
+                self.tier_config[i_tier]['kernel'] = Kernel.Batched
+            elif kernel_str == 'hybrid':
+                self.tier_config[i_tier]['kernel'] = Kernel.Hybrid
+            elif kernel_str == 'simple_hybrid':
+                self.tier_config[i_tier]['kernel'] = Kernel.SimpleHybrid
+            elif kernel_str == 'simple_piped':
+                self.tier_config[i_tier]['kernel'] = Kernel.SimplePiped
+            else:
+                raise ValueError(f'Unknown kernel "{kernel_str}" in config')
+
+        self.separate_cls_tiers = separate_cls_tiers
+        self.separate_cls = len(self.separate_cls_tiers) > 0
+
+        assert self.separate_cls is False, "We don't support separate classification worker yet!"
+
+        # TODO check if tier config is sensible, batch size wise
+
+        # For each tier, what is the next (slice, rank) to place the worker at.
+        self._next_worker_loc = [{"slice": 0, "rank": 0} for _ in range(self.n_tiers)]
 
     def all_assigned(self) -> bool:
-        return self._assigned_workers == self.n_layers // self.layers_per_worker + (1 if self.separate_cls else 0)
+        for i_tier in range(self.n_tiers):
+            if self._next_worker_loc[i_tier]["slice"] < self.n_slices:
+                return False
+        return True
 
-    def assign_slices(self, worker):
-        num_layer_workers = self.n_layers // self.layers_per_worker
+    def _find_suitable_tier(self, worker: Worker) -> int:
+        suitable_tier_index = -1
+        for i in range(self.n_tiers):
+            if (worker.platform == self.tier_config[i]['platform'] and
+                    worker.kernel == self.tier_config[i]['kernel'] and
+                    self._next_worker_loc[i]['slice'] < self.n_slices):
+                suitable_tier_index = i
+        return suitable_tier_index == -1
 
-        if self.separate_cls and self._assigned_workers == num_layer_workers:
-            # all layers have been assigned, we need to assign the last worker to the classification stage
-            worker.model_slice_start = (self.n_layers - 1, Stage.Classification)
-            worker.model_slice_end = (self.n_layers - 1, Stage.Classification)
-        elif self._assigned_workers < num_layer_workers:
-            first_layer = self._assigned_workers * self.layers_per_worker
-            last_layer = (self._assigned_workers + 1) * self.layers_per_worker - 1
-            # assign the worker to the next set of layers
-            worker.model_slice_start = (first_layer, Stage.PreAttention)
-            worker.model_slice_end = (last_layer, Stage.PostAttention)
+    def get_tier_concurrencies_message(self):
+        return self.tier_concurrency_s
 
-            if last_layer == self.n_layers - 1:
-                # We're responsible for classification
-                worker.model_slice_end = (last_layer, Stage.Classification)
-        else:
-            # No more workers should be assigned
+    def assign_slices(self, worker) -> bool:
+        # find applicable tiers
+        i_tier = self._find_suitable_tier(worker)
+        if i_tier == -1:
             return False
 
-        self._assigned_workers += 1
-        return True
+        first_layer = self._next_worker_loc[i_tier]['slice'] * self.layers_per_worker
+        last_layer = (self._next_worker_loc[i_tier]['slice'] + 1) * self.layers_per_worker - 1
+        # assign the worker to the correct slice, tier and rank
+        worker.model_slice_start = (first_layer, Stage.PreAttention)
+        worker.model_slice_end = (last_layer, Stage.PostAttention)
+        if last_layer == self.n_layers - 1:
+            # We're responsible for classification
+            worker.model_slice_end = (last_layer, Stage.Classification)
+        worker.tier = i_tier
+        worker.rank = self._next_worker_loc[i_tier]['rank']
+
+        worker.concurrency_size_pre = self.tier_config[worker.tier]['concurrency_size_pre']
+        worker.concurrency_size_att = self.tier_config[worker.tier]['concurrency_size_att']
+        worker.concurrency_size_post = self.tier_config[worker.tier]['concurrency_size_post']
+        worker.concurrency_size_cls = self.tier_config[worker.tier]['concurrency_size_cls']
+        worker.max_context_count = self.tier_config[worker.tier]['max_context_count']
+
+        # advance next_worker_loc
+        self._next_worker_loc[i_tier]['rank'] += 1
+        if self._next_worker_loc[i_tier]['rank'] == self.tier_config[i_tier]['ranks']:
+            self._next_worker_loc[i_tier]['rank'] = 0
+            self._next_worker_loc[i_tier]['slice'] += 1
 
     def route_message(self, workers):
         if not self.all_assigned():
@@ -51,13 +116,15 @@ class Model:
 
         for worker in workers:
             if worker.state != Worker.State.Connected:
-                continue
+                raise RuntimeError('A worker has disconnected. This possibly corrupts the path!')
 
             if worker.model_slice_start[1] == Stage.Classification:
                 message.layer_to_address.append(
                     protobuf.SetRoute.LayerToAddress(
                         layer_num=self.n_layers - 1,
                         stage=Stage.Classification,
+                        tier=worker.tier,
+                        rank=worker.rank,
                         ip=socket.inet_ntoa(worker.ip),
                         port=worker.port,
                     )
@@ -73,6 +140,8 @@ class Model:
                         protobuf.SetRoute.LayerToAddress(
                             layer_num=layer,
                             stage=stage,
+                            tier=worker.tier,
+                            rank=worker.rank,
                             ip=socket.inet_ntoa(worker.ip),
                             port=worker.port,
                         )

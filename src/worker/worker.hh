@@ -367,6 +367,17 @@ BatchedWorker<ModelConfig, ComputeKernel>::BatchedWorker( const net::Address& wo
 #elif defined( TARGET_PLATFORM_CUDA )
   hey_proto.set_platform( protobuf::Hey::CUDA );
 #endif
+  if constexpr ( ComputeKernel::Type == compute::KernelType::Batched ) {
+    hey_proto.set_kernel( protobuf::Hey::Batched );
+  } else if constexpr ( ComputeKernel::Type == compute::KernelType::Hybrid ) {
+    hey_proto.set_kernel( protobuf::Hey::Hybrid );
+  } else if constexpr ( ComputeKernel::Type == compute::KernelType::SimpleHybrid ) {
+    hey_proto.set_kernel( protobuf::Hey::SimpleHybrid );
+  } else if constexpr ( ComputeKernel::Type == compute::KernelType::SimplePiped ) {
+    hey_proto.set_kernel( protobuf::Hey::SimplePiped );
+  } else {
+    throw std::logic_error( "No such kernel type" );
+  }
   coordinator_.message_handler.push_message( { Message::OpCode::Hey, hey_proto.SerializeAsString() } );
 
   setup_stats_handler();
