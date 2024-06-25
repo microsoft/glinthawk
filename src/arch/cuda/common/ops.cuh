@@ -480,7 +480,6 @@ void Operations<glinthawk::float32_t>::accum( glinthawk::float32_t* a,
                                               const glinthawk::float32_t* b,
                                               const uint64_t batch_size ) const
 {
-  const glinthawk::float32_t alpha = 1.0f;
   CHECK_CUBLAS( cublasSaxpy( cublas_handle_default, size * batch_size, &alpha, b, 1, a, 1 ) );
 }
 
@@ -589,8 +588,8 @@ void Operations<DType>::copy( DType* dst,
                               const CopyType type,
                               const bool async ) const
 {
-  auto convert_to_cuda = []( const CopyType type ) {
-    switch ( type ) {
+  auto convert_to_cuda = []( const CopyType copy_type ) {
+    switch ( copy_type ) {
       case CopyType::HostToHost: return cudaMemcpyHostToHost;
       case CopyType::HostToDevice: return cudaMemcpyHostToDevice;
       case CopyType::DeviceToHost: return cudaMemcpyDeviceToHost;

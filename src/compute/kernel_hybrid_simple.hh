@@ -107,7 +107,7 @@ private:
   std::array<std::vector<ContextPtrB>, 2> next_contexts_ {};
 
   // <threads>
-  std::vector<std::thread> threads_;
+  std::vector<std::thread> threads_ {};
 
   template<typename M>
   void execution_thread_func( ModelData<M>& model_data );
@@ -212,7 +212,8 @@ void SimpleHybridComputeKernel<ModelA, ModelB>::model_step_forward( StateType& s
       timeit<IntDistributions::KernelClassificationForwardTime>( __stats__, [&] { model.forward_classify( state ); } );
       break;
 
-    case Stage::Attention: LOG( FATAL ) << "Invalid stage: " << state.next_stage(); break;
+    case Stage::Attention:
+    default: LOG( FATAL ) << "Invalid stage: " << state.next_stage(); break;
   }
 }
 
