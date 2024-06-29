@@ -41,9 +41,9 @@ logo = rich.align.Align.center(
 
 @click.command()
 @click.option("--config-file", "-C", help="Config file for setting up nodes", required=True, type=click.STRING)
-@click.option("--dummy-count", "-N", help="Number of dummy prompts", type=click.INT, default=2048)
-@click.option("--prompt-dir", "-P", help="Directory for input files.")
-@click.option("--output-dir", "-O", help="Directory for output files.")
+@click.option("--dummy-count", "-N", help="Number of dummy prompts", type=click.INT)
+@click.option("--prompt-dir", "-P", help="Directory for input files.", type=click.STRING)
+@click.option("--output-dir", "-O", help="Directory for output files.", required=True, type=click.STRING)
 def main(config_file, **kwargs):
     with open(config_file, 'rb') as f:
         config = json.load(f)

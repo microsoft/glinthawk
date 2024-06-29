@@ -1,20 +1,21 @@
 {
+  "config_name": "L7B_2xT4_B1",
   "model_name": "llama2-7b-chat",
   "listen_address": "0.0.0.0",
   "listen_port": "3020",
   "n_layers": 32,
-  "layers_per_worker": 16,
-  "separate_cls": false,
+  "n_slices": 2,
   "tiers": [
     {
       "kernel": "simple_piped",
-      "compute": "cuda",
-      "n_tier": 1,
+      "platform": "cuda",
+      "ranks": 1,
       "concurrency_size_pre": 1,
       "concurrency_size_att": 1,
       "concurrency_size_post": 1,
       "concurrency_size_cls": 1,
       "max_context_count": 16
     }
-  ]
+  ],
+  "separate_cls_tiers": []
 }

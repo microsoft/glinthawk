@@ -24,7 +24,7 @@ static void signal_handler( int )
 
 void usage( const char* argv0 )
 {
-  cerr << "Usage: " << argv0 << " <model_dir_path> <model_name>" << " <listen_ip> <listen_port>"
+  cerr << "Usage: " << argv0 << " <model_dir_path> <model_name> <kernel_name>" << " <listen_ip> <listen_port>"
        << " <coordinator_ip> <coordinator_port>" << endl;
 }
 
@@ -34,7 +34,7 @@ int main( int argc, char* argv[] )
     abort();
   }
 
-  if ( argc != 7 ) {
+  if ( argc != 8 ) {
     usage( argv[0] );
     return EXIT_FAILURE;
   }
@@ -47,28 +47,32 @@ int main( int argc, char* argv[] )
 
   const filesystem::path model_path { argv[1] };
   const string model_name { argv[2] };
-  const string listen_ip { argv[3] };
-  const uint16_t listen_port = static_cast<uint16_t>( stoi( argv[4] ) );
-  const string coordinator_ip { argv[5] };
-  const uint16_t coordinator_port = static_cast<uint16_t>( stoi( argv[6] ) );
+  const string kernel_name { argv[3] };
+  const string listen_ip { argv[4] };
+  const uint16_t listen_port = static_cast<uint16_t>( stoi( argv[5] ) );
+  const string coordinator_ip { argv[6] };
+  const uint16_t coordinator_port = static_cast<uint16_t>( stoi( argv[7] ) );
 
   try {
     net::Address listen_addr { listen_ip, listen_port };
     net::Address coordinator_addr { coordinator_ip, coordinator_port };
 
-#define CREATE_AND_RUN_WORKER( MODEL_NAME, CLASS_NAME )                                                                \
-  if ( model_name == MODEL_NAME ) {                                                                                    \
-    core::BatchedWorker<models::llama2::configs::CLASS_NAME,                                                           \
-                        compute::BatchedComputeKernel<_GLINTHAWK_ARCH_NS_::CLASS_NAME<_GLINTHAWK_DTYPE_>>>             \
+#define CREATE_AND_RUN_WORKER( MODEL_NAME, MODEL_CLASS_NAME, KERNEL_NAME, KERNEL_CLASS_NAME )                          \
+  if ( model_name == MODEL_NAME and kernel_name == KERNEL_NAME ) {                                                     \
+    core::BatchedWorker<models::llama2::configs::MODEL_CLASS_NAME,                                                     \
+                        KERNEL_CLASS_NAME<_GLINTHAWK_ARCH_NS_::MODEL_CLASS_NAME<_GLINTHAWK_DTYPE_>>>                   \
       worker { listen_addr, coordinator_addr, model_path };                                                            \
     worker.run();                                                                                                      \
   }
-
     // clang-format off
-    CREATE_AND_RUN_WORKER( "llama2-7b-chat", Llama2_7B_Chat )
-    else CREATE_AND_RUN_WORKER( "llama2-13b-chat", Llama2_13B_Chat )
-    else CREATE_AND_RUN_WORKER( "llama2-70b-chat", Llama2_70B_Chat )
-    else CREATE_AND_RUN_WORKER( "stories-110m", Stories_110M )
+    CREATE_AND_RUN_WORKER( "llama2-7b-chat", Llama2_7B_Chat, "batched", compute::BatchedComputeKernel )
+    else CREATE_AND_RUN_WORKER( "llama2-13b-chat", Llama2_13B_Chat, "batched", compute::BatchedComputeKernel )
+    else CREATE_AND_RUN_WORKER( "llama2-70b-chat", Llama2_70B_Chat, "batched", compute::BatchedComputeKernel )
+    else CREATE_AND_RUN_WORKER( "stories-110m", Stories_110M, "batched", compute::BatchedComputeKernel )
+    else CREATE_AND_RUN_WORKER( "llama2-7b-chat", Llama2_7B_Chat, "simple_piped", compute::PipedComputeKernel )
+    else CREATE_AND_RUN_WORKER( "llama2-13b-chat", Llama2_13B_Chat, "simple_piped", compute::PipedComputeKernel )
+    else CREATE_AND_RUN_WORKER( "llama2-70b-chat", Llama2_70B_Chat, "simple_piped", compute::PipedComputeKernel )
+    else CREATE_AND_RUN_WORKER( "stories-110m", Stories_110M, "simple_piped", compute::PipedComputeKernel )
     else LOG( FATAL ) << "Unknown model name: " << model_name;
     // clang-format on
 

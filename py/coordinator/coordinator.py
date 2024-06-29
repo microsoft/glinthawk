@@ -1,24 +1,20 @@
-import os
-import sys
+import asyncio
 import enum
 import json
-import socket
-import asyncio
 import logging
-
-from typing import List, Dict, Tuple
-from dataclasses import dataclass, field
+import os
+import socket
+import time
 from signal import SIGINT, SIGTERM
+from typing import List
 
-from rich.logging import RichHandler
+from common.message import Message
+from google.protobuf.json_format import MessageToDict
 from google.protobuf.message import Message as ProtoMessage
-from google.protobuf.json_format import MessageToJson, MessageToDict
+from protobuf import glinthawk_pb2 as protobuf
 
-from ..common.message import Message
-from ..protobuf import glinthawk_pb2 as protobuf
-
-from .worker import Worker
 from .model import Model
+from .worker import Worker
 
 Platform = protobuf.Hey.Platform
 Stage = protobuf.SetRoute.LayerToAddress.Stage
@@ -70,7 +66,8 @@ class Coordinator:
         self.completion_queue = asyncio.Queue()
 
         self.prompt_dir = kwargs.get("prompt_dir")
-        self.output_dir = kwargs.get("output_dir")
+        self.output_dir = kwargs.get("output_dir") + "/" + kwargs.get("config_name") + "/" + time.strftime(
+            '%Y-%m-%d-%H-%M-%S', time.gmtime()) + "/"
         os.makedirs(self.output_dir, exist_ok=True)
 
         self.load_prompts(self.prompt_dir, self.output_dir)
@@ -277,7 +274,7 @@ class Coordinator:
         while self.initial_dummy_count > 0:
             await asyncio.sleep(10)
 
-            if not self.is_running():
+            if not self.is_running() or not self.model.all_assigned():
                 break
 
             count = (self.initial_dummy_count // 2) - (self.generated_dummies - self.completed_dummies)
@@ -310,7 +307,7 @@ class Coordinator:
             proto = protobuf.PushPrompts()
 
             while (
-                len(self.prompt_queue) > 0 and self.assigned_prompts - self.completed_prompts < self.prompt_batch_size
+                    len(self.prompt_queue) > 0 and self.assigned_prompts - self.completed_prompts < self.prompt_batch_size
             ):
                 proto.prompts.append(self.prompt_queue.pop(0))
                 self.assigned_prompts += 1

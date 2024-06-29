@@ -3,7 +3,7 @@ from typing import List, Dict
 
 from .base import Stage, Platform, Kernel
 from .worker import Worker
-from ..protobuf import glinthawk_pb2 as protobuf
+from protobuf import glinthawk_pb2 as protobuf
 
 
 class Model:
@@ -81,7 +81,7 @@ class Model:
                     worker.kernel == self.tier_config[i]['kernel'] and
                     self._next_worker_loc[i]['slice'] < self.n_slices):
                 suitable_tier_index = i
-        return suitable_tier_index == -1
+        return suitable_tier_index
 
     def get_tier_concurrencies_message(self):
         return self.tier_concurrency_s
@@ -114,6 +114,7 @@ class Model:
         if self._next_worker_loc[i_tier]['rank'] == self.tier_config[i_tier]['ranks']:
             self._next_worker_loc[i_tier]['rank'] = 0
             self._next_worker_loc[i_tier]['slice'] += 1
+        return True
 
     def route_message(self, workers):
         if not self.all_assigned():

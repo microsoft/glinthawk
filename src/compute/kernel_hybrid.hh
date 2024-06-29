@@ -100,7 +100,7 @@ private:
 
   void bookkeeping_thread_func();
 
-  std::vector<std::thread> threads_;
+  std::vector<std::thread> threads_ {};
   // </threads>
 };
 
@@ -214,6 +214,7 @@ void HybridComputeKernel<ModelA, ModelB>::execution_thread_func(
 
       case Stage::PostAttention: model_data.model->forward_post_attention( state ); break;
       case Stage::Classification: model_data.model->forward_classify( state ); break;
+      default: LOG( FATAL ) << "Invalid stage: " << state.next_stage(); break;
     }
 
     std::optional<StateType> merged_state;
@@ -285,7 +286,7 @@ void HybridComputeKernel<ModelA, ModelB>::bookkeeping_thread_func()
     // can we, or have we already, allocated the contexts for this state?
 
     if ( state.next_stage() == Stage::Attention ) {
-      CHECK_EQ( context_map_.find( state.id() ), context_map_.end() );
+      CHECK( context_map_.find( state.id() ) == context_map_.end() );
 
       std::vector<ContextPtrA> contexts_a;
       std::vector<ContextPtrB> contexts_b;
@@ -324,13 +325,13 @@ void HybridComputeKernel<ModelA, ModelB>::bookkeeping_thread_func()
 
       {
         std::lock_guard lock { a_.mutex };
-        a_.processing.push( std::move( state_a ) );
+        a_.processing.emplace( std::move( state_a ) );
       }
       a_.cv.notify_one();
 
       {
         std::lock_guard lock { b_.mutex };
-        b_.processing.push( std::move( state_b ) );
+        b_.processing.emplace( std::move( state_b ) );
       }
       b_.cv.notify_one();
     } else {
@@ -344,7 +345,7 @@ void HybridComputeKernel<ModelA, ModelB>::bookkeeping_thread_func()
 
         {
           std::lock_guard lock { a_.mutex };
-          a_.processing.push( std::move( state ) );
+          a_.processing.emplace( std::move( state ) );
         }
         a_.cv.notify_one();
       } else if ( b_.concurrency.get( next_stage ) == state.batch_size() ) {
@@ -357,7 +358,7 @@ void HybridComputeKernel<ModelA, ModelB>::bookkeeping_thread_func()
 
         {
           std::lock_guard lock { b_.mutex };
-          b_.processing.push( std::move( state ) );
+          b_.processing.emplace( std::move( state ) );
         }
         b_.cv.notify_one();
       }

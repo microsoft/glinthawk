@@ -1,4 +1,5 @@
 {
+  "config_name": "L7B_2xT4_8xCPU_B4_static",
   "model_name": "llama2-7b-chat",
   "listen_address": "0.0.0.0",
   "listen_port": "3020",

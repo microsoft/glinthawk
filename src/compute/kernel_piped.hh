@@ -91,7 +91,7 @@ private:
   void execution_thread_func( ModelData<M>& model_data );
   void bookkeeping_thread_func();
 
-  std::vector<std::thread> threads_;
+  std::vector<std::thread> threads_ {};
   // </threads>
 };
 
@@ -189,6 +189,7 @@ void PipedComputeKernel<Model>::execution_thread_func(
 
       case Stage::PostAttention: model_data.model->forward_post_attention( state ); break;
       case Stage::Classification: model_data.model->forward_classify( state ); break;
+      default: LOG( FATAL ) << "Invalid stage: " << state.next_stage(); break;
     }
 
     // We always put the result in outgoing, so TierRouter makes a decision about it.
@@ -230,7 +231,7 @@ void PipedComputeKernel<Model>::bookkeeping_thread_func()
     CHECK_EQ( model_.concurrency.get( state.next_stage() ), state.batch_size() );
 
     if ( state.next_stage() == Stage::Attention ) {
-      CHECK_EQ( context_map_.find( state.id() ), context_map_.end() );
+      CHECK( context_map_.find( state.id() ) == context_map_.end() );
       std::vector<ContextPtr> contexts;
       contexts.reserve( model_.concurrency.get( Stage::Attention ) );
 
@@ -249,7 +250,7 @@ void PipedComputeKernel<Model>::bookkeeping_thread_func()
 
     {
       std::lock_guard lock { model_.mutex };
-      model_.processing.push( std::move( state ) );
+      model_.processing.emplace( std::move( state ) );
     }
 
     model_.cv.notify_one();
