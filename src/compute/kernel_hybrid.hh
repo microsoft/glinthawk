@@ -133,6 +133,7 @@ HybridComputeKernel<ModelA, ModelB>::HybridComputeKernel( const NodeConcurrency&
 template<typename ModelA, typename ModelB>
 HybridComputeKernel<ModelA, ModelB>::~HybridComputeKernel()
 {
+  LOG( INFO ) << "HybridComputeKernel shutting down...";
   running_ = false;
   for ( auto& t : threads_ ) {
     t.join();

@@ -51,24 +51,21 @@ def get_ssh_command(
 
 async def run_command(command, addr, port, log_stdout_dir=None, log_stderr_dir=None):
     try:
+        f_out = open(os.path.join(log_stdout_dir, f"{addr}-{port}.stdout.log"),
+                     "wb") if log_stdout_dir else asyncio.subprocess.DEVNULL
+        f_err = open(os.path.join(log_stderr_dir, f"{addr}-{port}.stderr.log"),
+                     "wb") if log_stderr_dir else asyncio.subprocess.DEVNULL
+
         process = await asyncio.create_subprocess_exec(
             *command,
             stdin=asyncio.subprocess.DEVNULL,
-            stdout=asyncio.subprocess.DEVNULL if log_stdout_dir is None else asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.DEVNULL if log_stderr_dir is None else asyncio.subprocess.PIPE,
+            stdout=f_out,
+            stderr=f_err,
             start_new_session=True,
         )
 
-        stdout, stderr = await process.communicate()
+        await process.communicate()
         logging.warning(f"Process {addr}:{port} exited with code {process.returncode}.")
-
-        if log_stdout_dir and stdout:
-            with open(os.path.join(log_stdout_dir, f"{addr}-{port}.stdout.log"), "wb") as f:
-                f.write(stdout)
-
-        if log_stderr_dir and stderr:
-            with open(os.path.join(log_stderr_dir, f"{addr}-{port}.stderr.log"), "wb") as f:
-                f.write(stderr)
 
     except asyncio.CancelledError:
         logging.warning(f"Process {addr}:{port} was cancelled.")
@@ -76,6 +73,12 @@ async def run_command(command, addr, port, log_stdout_dir=None, log_stderr_dir=N
         if process and process.returncode is None:
             os.killpg(os.getpgid(process.pid), signal.SIGHUP)
             await process.wait()
+
+        if log_stdout_dir:
+            f_out.close()
+
+        if log_stderr_dir:
+            f_err.close()
 
         logging.info(f"Cleaned up {addr}:{port}.")
 

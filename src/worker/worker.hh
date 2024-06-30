@@ -471,6 +471,7 @@ bool BatchedWorker<ModelConfig, ComputeKernel>::handle_coordinator_message( core
         },
         [] { return true; },
         [] { LOG( ERROR ) << "Shutdown timer stopped."; } );
+      LOG( INFO ) << "5Stopping tier router...";
 
       return false;
     }
@@ -508,8 +509,8 @@ bool BatchedWorker<ModelConfig, ComputeKernel>::handle_coordinator_message( core
           default: throw std::runtime_error( "invalid stage" );
         }
 
-        route_str << route.layer_num() << "[" << next_stage << "]<" << route.tier() << "," << route.rank() << "> -> "
-                  << route.ip() << ":" << route.port() << "; ";
+        route_str << route.layer_num() << "[" << next_stage << "]<T" << static_cast<size_t>( route.tier() ) << ", R"
+                  << static_cast<size_t>( route.rank() ) << "> -> " << route.ip() << ":" << route.port() << "; ";
 
         new_route.emplace(
           std::make_tuple(
@@ -570,7 +571,8 @@ bool BatchedWorker<ModelConfig, ComputeKernel>::handle_coordinator_message( core
 
       // TODO(pouya): fix the copy paste
       size_t added_prompt_count = 0;
-      while ( prompt_queue_.size() >= monolith_concurrency_size_ and tier_router_->is_context_available() ) {
+      while ( prompt_queue_.size() >= monolith_concurrency_size_ and tier_router_ != nullptr
+              and tier_router_->is_context_available() ) {
         BatchedState state { monolith_concurrency_size_, DataType::Float16, RouteID {}, ModelID {} };
 
         for ( size_t i = 0; i < monolith_concurrency_size_; i++ ) {
@@ -613,7 +615,8 @@ bool BatchedWorker<ModelConfig, ComputeKernel>::handle_coordinator_message( core
       }
 
       size_t added_prompt_count = 0;
-      while ( prompt_queue_.size() >= monolith_concurrency_size_ and tier_router_->is_context_available() ) {
+      while ( prompt_queue_.size() >= monolith_concurrency_size_ and tier_router_ != nullptr
+              and tier_router_->is_context_available() ) {
         BatchedState state { monolith_concurrency_size_, DataType::Float16, RouteID {}, ModelID {} };
 
         for ( size_t i = 0; i < monolith_concurrency_size_; i++ ) {

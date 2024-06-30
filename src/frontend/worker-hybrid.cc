@@ -85,6 +85,7 @@ int main( int argc, char* argv[] )
     cerr << "Error: " << e.what() << endl;
     return EXIT_FAILURE;
   }
+  LOG( INFO ) << "Worker is finished, exiting...";
 
   return EXIT_SUCCESS;
 }

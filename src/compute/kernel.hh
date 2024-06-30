@@ -108,7 +108,9 @@ public:
 
   EventFD& event_fd() { return event_fd_; }
 
-  ~BatchedComputeKernel() {}
+  ~BatchedComputeKernel() {
+    LOG( INFO ) << "BatchedComputeKernel shutting down...";
+  }
 };
 
 template<typename Model>

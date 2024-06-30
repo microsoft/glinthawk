@@ -610,8 +610,12 @@ void BatchedInferenceState<Config>::discard( const size_t i )
 
   // TODO(pouya): will this preserve context_id?
   auto context_id = prompts_[i].context_id;
+  auto tier = prompts_[i].tier;
+  auto rank = prompts_[i].rank;
   prompts_[i] = {};
   prompts_[i].context_id = context_id;
+  prompts_[i].tier = tier;
+  prompts_[i].rank = rank;
   prompts_[i].active = false;
 }
 
@@ -1037,7 +1041,7 @@ std::string BatchedInferenceState<Config>::debug_string( const bool prompt_detai
     for ( const auto& p : prompts_ ) {
       oss << " (" << p.prompt_id.base58digest().substr( 0, 8 ) << ", " << p.context_id << ", " << p.token << ", "
           << p.token_pos << ", " << ( static_cast<float>( p.temperature ) / 255.0f ) << ", " << p.prompt_length << ", "
-          << p.finished << ", {" << p.tier << ", " << p.rank << "}) ";
+          << p.finished << ", {" << static_cast<int>(p.tier) << ", " << static_cast<int>(p.rank) << "}) ";
     }
 
     oss << "]";

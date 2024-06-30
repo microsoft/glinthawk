@@ -117,6 +117,7 @@ PipedComputeKernel<Model>::PipedComputeKernel( const NodeConcurrency& concurrenc
 template<typename Model>
 PipedComputeKernel<Model>::~PipedComputeKernel()
 {
+  LOG( INFO ) << "PipedComputeKernel shutting down...";
   running_ = false;
   for ( auto& t : threads_ ) {
     t.join();

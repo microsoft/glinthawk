@@ -1,15 +1,14 @@
 #!/usr/bin/env python3
 
-import os
 import asyncio
-import logging
-import signal
-import shlex
 import hashlib
+import logging
+import os
+import shlex
+import signal
 import time
 
 import click
-import rich
 import rich.logging
 
 logging.basicConfig(
@@ -23,13 +22,12 @@ logging.basicConfig(
 
 
 def get_ssh_command(
-    command: str,
-    worker_address: str,
-    ssh_user: str,
-    ssh_port: int = None,
-    ssh_key: str = None,
+        command: str,
+        worker_address: str,
+        ssh_user: str,
+        ssh_port: int = None,
+        ssh_key: str = None,
 ):
-
     ssh_command = [
         "ssh",
     ]
@@ -53,20 +51,21 @@ def get_ssh_command(
 
 
 def get_worker_command(
-    worker_address: str,
-    worker_port: int,
-    image_name: str,
-    image_args: list,
-    ssh_user: str,
-    ssh_port: int = None,
-    ssh_key: str = None,
-    **kwargs,
+        worker_address: str,
+        worker_port: int,
+        image_name: str,
+        image_args: list,
+        ssh_user: str,
+        ssh_port: int = None,
+        ssh_key: str = None,
+        **kwargs,
 ):
     container_name = (
-        "glinthawk-"
-        + hashlib.sha256((image_name + " ".join(image_args) + worker_address + str(worker_port)).encode()).hexdigest()[
-            :12
-        ]
+            "glinthawk-"
+            + hashlib.sha256(
+        (image_name + " ".join(image_args) + worker_address + str(worker_port)).encode()).hexdigest()[
+              :12
+              ]
     )
 
     docker_command = [
@@ -117,24 +116,21 @@ def get_worker_command(
 
 async def run_command(command, container_name, addr, port, log_stdout_dir=None, log_stderr_dir=None, **kwargs):
     try:
+        f_out = open(os.path.join(log_stdout_dir, f"{addr}-{port}.stdout.log"),
+                     "wb") if log_stdout_dir else asyncio.subprocess.DEVNULL
+        f_err = open(os.path.join(log_stderr_dir, f"{addr}-{port}.stderr.log"),
+                     "wb") if log_stderr_dir else asyncio.subprocess.DEVNULL
+
         process = await asyncio.create_subprocess_exec(
             *command,
             stdin=asyncio.subprocess.DEVNULL,
-            stdout=asyncio.subprocess.DEVNULL if log_stdout_dir is None else asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.DEVNULL if log_stderr_dir is None else asyncio.subprocess.PIPE,
+            stdout=f_out,
+            stderr=f_err,
             start_new_session=True,
         )
 
-        stdout, stderr = await process.communicate()
+        await process.communicate()
         logging.warning(f"Process {addr}:{port} exited with code {process.returncode}.")
-
-        if log_stdout_dir and stdout:
-            with open(os.path.join(log_stdout_dir, f"{addr}-{port}.stdout.log"), "wb") as f:
-                f.write(stdout)
-
-        if log_stderr_dir and stderr:
-            with open(os.path.join(log_stderr_dir, f"{addr}-{port}.stderr.log"), "wb") as f:
-                f.write(stderr)
 
     except asyncio.CancelledError:
         logging.warning(f"Process {addr}:{port} was cancelled.")
@@ -142,6 +138,12 @@ async def run_command(command, container_name, addr, port, log_stdout_dir=None, 
         if process and process.returncode is None:
             os.killpg(os.getpgid(process.pid), signal.SIGHUP)
             await process.wait()
+
+        if log_stdout_dir:
+            f_out.close()
+
+        if log_stderr_dir:
+            f_err.close()
 
         logging.info(f"Stopping container {container_name} on {addr}:{port}...")
         process = await asyncio.create_subprocess_exec(

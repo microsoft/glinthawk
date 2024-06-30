@@ -145,6 +145,7 @@ SimpleHybridComputeKernel<ModelA, ModelB>::SimpleHybridComputeKernel( const uint
 template<typename ModelA, typename ModelB>
 SimpleHybridComputeKernel<ModelA, ModelB>::~SimpleHybridComputeKernel()
 {
+  LOG( INFO ) << "SimpleHybridComputeKernel shutting down...";
   running_ = false;
   for ( auto& t : threads_ ) {
     t.join();

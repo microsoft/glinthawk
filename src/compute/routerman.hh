@@ -1,20 +1,9 @@
 #pragma once
 
 #include <array>
-#include <atomic>
-#include <concepts>
-#include <condition_variable>
 #include <deque>
-#include <functional>
-#include <limits>
-#include <list>
-#include <memory>
 #include <mutex>
-#include <optional>
-#include <queue>
 #include <thread>
-#include <tuple>
-#include <typeinfo>
 #include <vector>
 
 #include "models/common/state.hh"
@@ -93,7 +82,9 @@ public:
                     size_t start_layer,
                     size_t end_layer );
 
-  ~ParentTierRouter() override = default;
+  ~ParentTierRouter() override {
+    LOG( INFO ) << "ParentTierRouter shutting down...";
+  };
 
   /// @brief
   /// 1. Push monolithic state from worker -> calls process_monolith
@@ -129,7 +120,7 @@ protected:
   /// 4. Batch sizes are equal across stages
   /// The ParentTierRouter does not need to know if the kernel is hybrid or not. It treats hybrid kernels as a sum of
   /// two concurrencies.
-  const SliceConcurrency& concurrency_;
+  const SliceConcurrency concurrency_;
   std::vector<size_t> free_contexts_ {};
 
   const size_t start_layer_;
@@ -142,6 +133,7 @@ protected:
 
   GlobalQueue<ModelConfig> outgoing_ {};
   EventLoop event_loop_ {};
+  std::jthread event_loop_thread_;
 
   [[nodiscard]] inline size_t vector_index( const size_t layer, const Stage stage ) const
   {
@@ -187,6 +179,8 @@ protected:
   /// outgoing queue that the worker communicates with. This function may be indirectly called by the compute kernel or
   /// the worker.
   void process_shard( StateType&& state );
+
+  void run_event_loop( std::stop_token stoken );
 };
 
 template<typename ComputeKernel, typename ModelConfig>
@@ -201,7 +195,7 @@ ParentTierRouter<ComputeKernel, ModelConfig>::ParentTierRouter( std::unique_ptr<
                                      : std::vector<size_t> { static_cast<size_t>( concurrency_.num_tiers() ), 0 } )
   , start_layer_( start_layer )
   , end_layer_( end_layer )
-  , idle_shards_( static_cast<size_t>( concurrency_.num_tiers() ) )
+  , event_loop_thread_( std::bind( &ParentTierRouter::run_event_loop, this, std::placeholders::_1 ) )
 {
   // TODO(pouya): if there is only one slice, a generated batch never gets pushed to worker to report generations.
   CHECK( start_layer_ != 0 or end_layer_ != ModelConfig::n_layers - 1 );
@@ -209,7 +203,7 @@ ParentTierRouter<ComputeKernel, ModelConfig>::ParentTierRouter( std::unique_ptr<
   for ( int tier_i = 0; tier_i < concurrency_.num_tiers(); tier_i++ ) {
     CHECK( kv_slots_tier_s[tier_i] > 0
            or concurrency_.get( tier_i, glinthawk::models::InferenceStage::Attention ) == 0 );
-    idle_shards_[tier_i].emplace_back( ( end_layer_ - start_layer_ + 1 ) * util::to_underlying( Stage::__COUNT__ ) );
+    idle_shards_.emplace_back( ( end_layer_ - start_layer_ + 1 ) * util::to_underlying( Stage::__COUNT__ ) );
   }
 
   if constexpr ( ComputeKernel::Type == KernelType::Batched or ComputeKernel::Type == KernelType::SimpleHybrid ) {
@@ -245,7 +239,15 @@ void ParentTierRouter<ComputeKernel, ModelConfig>::pull_from_kernel()
   while ( TierRouter<ComputeKernel, ModelConfig>::compute_kernel_->pop( state ) ) {
     // Shards will not be merge-able if they are not of the same (state/gather, shard/monolith)
     state.set_gather();
-    process_shard( std::move( state ) );
+    if ( is_served_in_this_slice( state ) ) {
+      process_shard( std::move( state ) );
+    } else {
+      {
+        std::lock_guard lock { outgoing_.mutex };
+        outgoing_.queue.emplace( std::move( state ) );
+      }
+      TierRouter<ComputeKernel, ModelConfig>::event_fd_.write_event();
+    }
   }
 }
 
@@ -349,17 +351,21 @@ void ParentTierRouter<ComputeKernel, ModelConfig>::process_monolith( StateType&&
   // TODO(pouya): the ranks only make sense for attention, routing should not be tied to rank for other stages
   std::deque<StateType> shards
     = std::move( StateType::split_states( std::move( state ), concurrency_.cutting_plan( state.next_stage() ), true ) );
+  bool trigger_event_fd = false;
   for ( StateType& shard : shards ) {
     shard.set_is_sharded( true );
     shard.set_scatter();
     if ( shard.tier( 0 ) == 0 and shard.rank( 0 ) == 0 ) {
       TierRouter<ComputeKernel, ModelConfig>::compute_kernel_->push( std::move( shard ) );
     } else {
+      trigger_event_fd = true;
       std::lock_guard lock { outgoing_.mutex };
       outgoing_.queue.emplace( std::move( shard ) );
     };
   }
-  TierRouter<ComputeKernel, ModelConfig>::event_fd_.write_event();
+  if ( trigger_event_fd ) {
+    TierRouter<ComputeKernel, ModelConfig>::event_fd_.write_event();
+  }
 }
 
 template<typename ComputeKernel, typename ModelConfig>
@@ -385,6 +391,16 @@ void ParentTierRouter<ComputeKernel, ModelConfig>::process_shard( StateType&& st
   }
 }
 
+template<typename ComputeKernel, typename ModelConfig>
+void ParentTierRouter<ComputeKernel, ModelConfig>::run_event_loop( std::stop_token stoken )
+{
+  while ( event_loop_.wait_next_event( 1'000 ) != EventLoop::Result::Exit ) {
+    if ( stoken.stop_requested() ) {
+      return;
+    }
+  }
+}
+
 /// @brief
 /// ChildTierRouter is an empty middle-man between the worker and kernel. It's job is to mimic the TierRouter do the
 /// worker is oblivious to which rank it has. DummyTierRouter that pass states through with no delay.
@@ -396,7 +412,9 @@ class ChildTierRouter : public TierRouter<ComputeKernel, ModelConfig>
 public:
   explicit ChildTierRouter( std::unique_ptr<ComputeKernel> compute_kernel );
 
-  ~ChildTierRouter() override = default;
+  ~ChildTierRouter() override {
+    LOG( INFO ) << "ChildTierRouter shutting down...";
+  };
 
   /// @brief
   /// 1. Push sharded state from worker -> send state to kernel
@@ -412,11 +430,15 @@ public:
 
 protected:
   EventLoop event_loop_ {};
+  std::jthread event_loop_thread_;
+
+  void run_event_loop( std::stop_token stoken );
 };
 
 template<typename ComputeKernel, typename ModelConfig>
 ChildTierRouter<ComputeKernel, ModelConfig>::ChildTierRouter( std::unique_ptr<ComputeKernel> compute_kernel )
   : TierRouter<ComputeKernel, ModelConfig>( std::move( compute_kernel ) )
+  , event_loop_thread_( std::bind( &ChildTierRouter::run_event_loop, this, std::placeholders::_1 ) )
 {
   event_loop_.set_fd_failure_callback( [] { LOG( ERROR ) << "FD failure callback called."; } );
 
@@ -454,6 +476,16 @@ bool ChildTierRouter<ComputeKernel, ModelConfig>::is_context_available()
   LOG( FATAL ) << "DummyTierRouter should never receive new batches. That is only going to happen in slice0, tier1, "
                   "rank0.";
   return false;
+}
+
+template<typename ComputeKernel, typename ModelConfig>
+void ChildTierRouter<ComputeKernel, ModelConfig>::run_event_loop( std::stop_token stoken )
+{
+  while ( event_loop_.wait_next_event( 1'000 ) != EventLoop::Result::Exit ) {
+    if ( stoken.stop_requested() ) {
+      return;
+    }
+  }
 }
 
 } // namespace glinthawk::compute

@@ -2,9 +2,9 @@
 
 #include "util/util.hh"
 #include <concepts>
+#include <numeric>
 #include <type_traits>
 #include <utility>
-#include <numeric>
 
 namespace glinthawk::compute {
 
@@ -46,9 +46,9 @@ private:
   size_t monolith_batch_size_ {};
   std::vector<uint8_t> n_tier_s_;
   std::vector<std::array<size_t, util::to_underlying( models::InferenceStage::__COUNT__ )>> v_;
-  std::array<std::vector<size_t>, util::to_underlying( models::InferenceStage::__COUNT__ )> shard_cut_cache_{};
-  std::array<std::vector<int8_t>, util::to_underlying( models::InferenceStage::__COUNT__ )> tier_index_cache_{};
-  std::array<std::vector<uint8_t>, util::to_underlying( models::InferenceStage::__COUNT__ )> rank_index_cache_{};
+  std::array<std::vector<size_t>, util::to_underlying( models::InferenceStage::__COUNT__ )> shard_cut_cache_ {};
+  std::array<std::vector<int8_t>, util::to_underlying( models::InferenceStage::__COUNT__ )> tier_index_cache_ {};
+  std::array<std::vector<uint8_t>, util::to_underlying( models::InferenceStage::__COUNT__ )> rank_index_cache_ {};
 
 public:
   SliceConcurrency( std::vector<uint8_t> n_tier_s,
