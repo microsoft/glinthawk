@@ -15,6 +15,9 @@ namespace glinthawk::models::llama2::amd64 {
 template<typename Config, typename DType>
 class Context;
 
+template<typename Config, typename DType>
+using DynamicContext = Context<Config, DType>;
+
 template<typename Config, typename DType, typename Ctx = Context<Config, DType>>
 requires ModelConfig<Config>
 class LlamaOperations : public common::amd64::Operations<DType>
