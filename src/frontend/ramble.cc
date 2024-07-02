@@ -141,7 +141,14 @@ int main( int argc, char* argv[] )
 
 #define CREATE_AND_RUN( MODEL_NAME, CLASS_NAME )                                                                       \
   if ( model_name == MODEL_NAME ) {                                                                                    \
-    using ModelType = llama2::_GLINTHAWK_ARCH_NS_::CLASS_NAME<_GLINTHAWK_DTYPE_>;                                      \
+    using namespace llama2;                                                                                            \
+                                                                                                                       \
+    using DType = _GLINTHAWK_DTYPE_;                                                                                   \
+    using ConfigType = configs::CLASS_NAME;                                                                            \
+    using ContextType = _GLINTHAWK_ARCH_NS_::Context<ConfigType, DType>;                                               \
+    using OperationsType = _GLINTHAWK_ARCH_NS_::LlamaOperations<ConfigType, DType, ContextType>;                       \
+    using ModelType = Llama2<ConfigType, DType, OperationsType, ContextType>;                                          \
+                                                                                                                       \
     Rambler<ModelType> rambler( model_dir_path, tokenizer_path, batch_size );                                          \
     rambler.ramble();                                                                                                  \
   }
