@@ -35,8 +35,6 @@ public:
       << "Length must be a multiple of the allocation granularity (" << allocation_granularity << " bytes)";
 
     CHECK_EQ( CUDA_SUCCESS, cuMemCreate( &alloc_handle_, len_, &alloc_props, 0 ) );
-
-    DLOG( INFO ) << "Allocated " << len_ << " bytes of physical memory";
   }
 
   // disallow copy & move
@@ -53,9 +51,6 @@ public:
     }
 
     mapped_to_ = dptr;
-
-    DLOG( INFO ) << "Mapping physical memory to virtual address " << reinterpret_cast<void*>( dptr ) << " with length "
-                 << len_;
 
     CUmemAccessDesc access_desc = {};
     access_desc.location.id = device_;
@@ -98,8 +93,6 @@ public:
     CHECK_EQ( CUDA_SUCCESS, cuCtxSetCurrent( context_ ) );
     CHECK_EQ( CUDA_SUCCESS, cuCtxGetDevice( &device_ ) );
     CHECK_EQ( CUDA_SUCCESS, cuMemAddressReserve( &dptr_, max_len_, 0, 0, 0 ) );
-
-    DLOG( INFO ) << "Allocated " << max_len_ << " bytes of virtual memory at " << reinterpret_cast<void*>( dptr_ );
   }
 
   ~VirtualMemoryRegion()
@@ -150,8 +143,6 @@ public:
 
   void allocate_span( const void* ptr, const size_t len )
   {
-    DLOG( INFO ) << "Allocating span of " << len << " bytes at " << ptr;
-
     if ( reinterpret_cast<const uint8_t*>( ptr ) + len > reinterpret_cast<const uint8_t*>( dptr_ ) + max_len_ ) {
       LOG( FATAL ) << "Out of bounds allocation";
     }

@@ -157,7 +157,7 @@ DynamicContext<Config, DType>::DynamicContext( const ConfigRuntime<Config>& sett
 template<typename Config, typename DType>
 bool DynamicContext<Config, DType>::prepare( const size_t layer_num, const size_t token_pos )
 {
-  constexpr size_t BLOCK_SIZE = 16 * 1024 * 1024; // 16 MiB
+  constexpr size_t BLOCK_SIZE = 8 * 1024 * 1024; // 8 MiB
 
   // we need to make sure that for this layer and this token, there is memory allocated
   const auto layer = this->layer( layer_num );
@@ -169,9 +169,6 @@ bool DynamicContext<Config, DType>::prepare( const size_t layer_num, const size_
   const size_t needed_allocated_len = ( layer_end_addr - layer_start_addr ) * sizeof( DType );
 
   if ( needed_allocated_len > layer_allocated_len ) {
-    DLOG( INFO ) << "Allocating " << BLOCK_SIZE << " bytes for layer " << layer_num << " and token " << token_pos
-                 << " (current allocation for layer is " << layer_allocated_len << " bytes)";
-
     storage_->allocate_span( layer_start_addr + layer_allocated_len / sizeof( DType ), BLOCK_SIZE );
     layer_allocated_offsets_.at( layer_num ) += BLOCK_SIZE;
   }
