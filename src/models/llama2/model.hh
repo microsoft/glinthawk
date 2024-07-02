@@ -401,6 +401,8 @@ void Llama2<Config, DType, LlamaOperations, Context>::forward_prelude( StateType
   const uint32_t next_layer_batch = states.next_layer();
 
   for ( size_t i = 0; i < contexts.size(); i++ ) {
+    CHECK( contexts[i]->prepare( next_layer_batch, states.token_pos( i ) ) );
+
     this->scratchpad_.batch_token_positions[i] = states.token_pos( i );
     this->scratchpad_.batch_layer_contexts[i] = contexts[i]->layer( next_layer_batch );
     this->scratchpad_.batch_token_contexts[i] = contexts[i]->layer( next_layer_batch ).token( states.token_pos( i ) );

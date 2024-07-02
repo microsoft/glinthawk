@@ -114,6 +114,7 @@ public:
       return { nullptr };
     return { buffer_ + token_num * Config::kv_dim * 2 };
   }
+
   const TokenContextType token( const int token_num ) const
   {
     if ( buffer_ == nullptr )
@@ -161,6 +162,11 @@ public:
     , buffer_( nullptr )
   {
   }
+
+  // This function is always called before processing a state, with the current layer number
+  // and token position. For dynamic contexts that allocate memory differently, this function
+  // should be overridden. Returns true on success, false otherwise.
+  bool prepare( [[maybe_unused]] const size_t layer_num, [[maybe_unused]] const size_t token_pos ) { return true; }
 
   LayerContextType layer( const int layer_num ) const
   {
