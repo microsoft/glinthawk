@@ -145,7 +145,7 @@ int main( int argc, char* argv[] )
                                                                                                                        \
     using DType = _GLINTHAWK_DTYPE_;                                                                                   \
     using ConfigType = configs::CLASS_NAME;                                                                            \
-    using ContextType = _GLINTHAWK_ARCH_NS_::Context<ConfigType, DType>;                                               \
+    using ContextType = _GLINTHAWK_ARCH_NS_::DynamicContext<ConfigType, DType>;                                        \
     using OperationsType = _GLINTHAWK_ARCH_NS_::LlamaOperations<ConfigType, DType, ContextType>;                       \
     using ModelType = Llama2<ConfigType, DType, OperationsType, ContextType>;                                          \
                                                                                                                        \
