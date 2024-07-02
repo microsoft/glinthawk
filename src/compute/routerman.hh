@@ -298,9 +298,9 @@ void ParentTierRouter<ComputeKernel, ModelConfig>::assign_ranks( StateType& stat
     CHECK_EQ( already_assigned, state.assigned_to_node( i ) )
       << "Either all prompts are already tier-routed or none of them are.";
     if ( not state.assigned_to_node( i ) ) {
-      const auto [tier_i, rank_i] = concurrency_.tier_rank( state.next_stage(), i );
-      state.set_tier( i, tier_i );
-      state.set_rank( i, rank_i );
+      const auto [tier_i, rank_i] = concurrency_.tier_rank( glinthawk::models::InferenceStage::Attention, i );
+      state.set_kv_tier( i, tier_i );
+      state.set_kv_rank( i, rank_i );
       {
         std::lock_guard lock { ctx_mutex_ };
         CHECK( free_contexts_[tier_i] > 0 );
