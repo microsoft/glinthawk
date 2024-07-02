@@ -31,12 +31,13 @@ struct __attribute__( ( packed ) ) StateMetadata
   ModelID model_id {};
   uint32_t next_layer { 0 };
   InferenceStage next_stage { InferenceStage::PreAttention };
+  int8_t next_tier { 0 };
+  uint8_t next_rank { 0 };
 
   bool has_activations { false };
   bool has_queries { false };
   bool has_kvs { false };
   bool is_sharded { false };
-  bool to_parent { true };
 };
 
 struct __attribute__( ( packed ) ) PromptData
@@ -52,8 +53,8 @@ struct __attribute__( ( packed ) ) PromptData
   uint8_t temperature {}; // compact temprature, between [0, 255]; has to be divided by 255.0f before use.
   uint32_t prompt_length {};
   bool finished { false };
-  int8_t tier { -1 }; // Denotes which tier this prompt needs to be forwarded to, 0-indexed, -1 means unassigned
-  uint8_t rank { 0 }; // Denotes which rank in tier this prompt needs to be forwarded to, 0-indexed
+  int8_t kv_tier { -1 }; // Denotes which tier holds the kv cache for this prompt, 0-indexed, -1 means unassigned
+  uint8_t kv_rank { 0 }; // Denotes which rank in tier holds the kv-cache for this prompt, 0-indexed
 };
 
 template<typename T>
@@ -69,12 +70,12 @@ concept StateConcept = requires( T state, const T cstate, const std::string cstr
   { state.set_model_id( {} ) };
   { state.set_next_layer( 0 ) };
   { state.set_next_stage( InferenceStage::PreAttention ) };
+  { state.set_next_tier( 0 ) };
+  { state.set_next_rank( 0 ) };
   { state.set_has_activations( false ) };
   { state.set_has_queries( false ) };
   { state.set_has_kvs( false ) };
   { state.set_is_sharded( false ) };
-  { state.set_scatter() };
-  { state.set_gather() };
 
   { cstate.id() } -> std::same_as<uint64_t>;
   { cstate.batch_size() } -> std::same_as<uint32_t>;
@@ -83,12 +84,12 @@ concept StateConcept = requires( T state, const T cstate, const std::string cstr
   { cstate.model_id() } -> std::same_as<ModelID>;
   { cstate.next_layer() } -> std::same_as<uint32_t>;
   { cstate.next_stage() } -> std::same_as<InferenceStage>;
+  { cstate.next_tier() } -> std::same_as<int8_t>;
+  { cstate.next_rank() } -> std::same_as<uint8_t>;
   { cstate.has_activations() } -> std::same_as<bool>;
   { cstate.has_queries() } -> std::same_as<bool>;
   { cstate.has_kvs() } -> std::same_as<bool>;
   { cstate.is_sharded() } -> std::same_as<bool>;
-  { cstate.gather() } -> std::same_as<bool>;
-  { cstate.scatter() } -> std::same_as<bool>;
   { cstate.all_assigned_to_nodes() } -> std::same_as<bool>;
 
   { state.set_prompt( 0, {}, {}, 0, 0, 0.0f, 0, 0, 0 ) };
@@ -99,8 +100,8 @@ concept StateConcept = requires( T state, const T cstate, const std::string cstr
   { state.prompt_length( 0 ) } -> std::same_as<uint32_t>;
   { state.temperature( 0 ) } -> std::same_as<float>;
   { state.finished( 0 ) } -> std::same_as<bool>;
-  { state.tier( 0 ) } -> std::same_as<int8_t>;
-  { state.rank( 0 ) } -> std::same_as<uint8_t>;
+  { state.kv_tier( 0 ) } -> std::same_as<int8_t>;
+  { state.kv_rank( 0 ) } -> std::same_as<uint8_t>;
   { state.assigned_to_node( 0 ) } -> std::same_as<bool>;
   { state.active( 0 ) } -> std::same_as<bool>;
 
@@ -111,8 +112,8 @@ concept StateConcept = requires( T state, const T cstate, const std::string cstr
   { state.set_prompt_length( 0, 0 ) };
   { state.set_temperature( 0, 0.0f ) };
   { state.set_finished( 0 ) };
-  { state.set_tier( 0, 0 ) };
-  { state.set_rank( 0, 0 ) };
+  { state.set_kv_tier( 0, 0 ) };
+  { state.set_kv_rank( 0, 0 ) };
 
   { state.discard( 0 ) };
 
@@ -207,12 +208,12 @@ public:
   void set_model_id( const ModelID model_id ) { metadata_.model_id = model_id; }
   void set_next_layer( const uint32_t next_layer ) { metadata_.next_layer = next_layer; }
   void set_next_stage( const InferenceStage next_stage ) { metadata_.next_stage = next_stage; }
+  void set_next_tier( const int8_t next_tier ) { metadata_.next_tier = next_tier; }
+  void set_next_rank( const uint8_t next_rank ) { metadata_.next_rank = next_rank; }
   void set_has_activations( const bool has_activations ) { metadata_.has_activations = has_activations; }
   void set_has_queries( const bool has_queries ) { metadata_.has_queries = has_queries; }
   void set_has_kvs( const bool has_kvs ) { metadata_.has_kvs = has_kvs; }
   void set_is_sharded( const bool is_sharded ) { metadata_.is_sharded = is_sharded; }
-  void set_scatter() { metadata_.to_parent = false; }
-  void set_gather() { metadata_.to_parent = true; }
 
   // metadata getters
   uint64_t id() const { return metadata_.id; }
@@ -222,12 +223,12 @@ public:
   ModelID model_id() const { return metadata_.model_id; }
   uint32_t next_layer() const { return metadata_.next_layer; }
   InferenceStage next_stage() const { return metadata_.next_stage; }
+  int8_t next_tier() const { return metadata_.next_tier; }
+  uint8_t next_rank() const { return metadata_.next_rank; }
   bool has_activations() const { return metadata_.has_activations; }
   bool has_queries() const { return metadata_.has_queries; }
   bool has_kvs() const { return metadata_.has_kvs; }
   bool is_sharded() const { return metadata_.is_sharded; }
-  bool scatter() const { return not metadata_.to_parent; }
-  bool gather() const { return metadata_.to_parent; }
   bool all_assigned_to_nodes() const
   {
     for ( size_t i = 0; i < metadata_.batch_size; i++ ) {
@@ -246,8 +247,8 @@ public:
                    uint32_t token_pos,
                    float temperature,
                    uint32_t prompt_length,
-                   int8_t tier,
-                   uint8_t rank );
+                   int8_t kv_tier,
+                   uint8_t kv_rank );
 
   // prompt getters
   PromptID prompt_id( const size_t i ) const { return prompts_[i].prompt_id; }
@@ -257,9 +258,9 @@ public:
   uint32_t prompt_length( const size_t i ) const { return prompts_[i].prompt_length; }
   float temperature( const size_t i ) const { return prompts_[i].temperature / 255.0f; }
   bool finished( const size_t i ) const { return prompts_[i].finished; }
-  int8_t tier( const size_t i ) const { return prompts_[i].tier; }
-  uint8_t rank( const size_t i ) const { return prompts_[i].rank; }
-  bool assigned_to_node( const size_t i ) const { return prompts_[i].tier != -1; }
+  int8_t kv_tier( const size_t i ) const { return prompts_[i].kv_tier; }
+  uint8_t kv_rank( const size_t i ) const { return prompts_[i].kv_rank; }
+  bool assigned_to_node( const size_t i ) const { return prompts_[i].kv_tier != -1; }
   bool active( const size_t i ) const { return prompts_[i].active; }
 
   // prompt setters
@@ -270,8 +271,8 @@ public:
   void set_prompt_length( const size_t i, uint32_t prompt_length ) { prompts_[i].prompt_length = prompt_length; }
   void set_temperature( const size_t i, float t ) { prompts_[i].temperature = static_cast<uint8_t>( t * 255.0f ); }
   void set_finished( const size_t i ) { prompts_[i].finished = true; }
-  void set_tier( const size_t i, int8_t tier ) { prompts_[i].tier = tier; }
-  void set_rank( const size_t i, uint8_t rank ) { prompts_[i].rank = rank; }
+  void set_kv_tier( const size_t i, int8_t kv_tier ) { prompts_[i].kv_tier = kv_tier; }
+  void set_kv_rank( const size_t i, uint8_t kv_rank ) { prompts_[i].kv_rank = kv_rank; }
 
   void discard( const size_t i );
 
@@ -369,14 +370,13 @@ public:
   void set_model_id( const ModelID model_id ) { state_.set_model_id( model_id ); }
   void set_next_layer( const uint32_t next_layer ) { state_.set_next_layer( next_layer ); }
   void set_next_stage( const InferenceStage next_stage ) { state_.set_next_stage( next_stage ); }
+  void set_next_tier( const int8_t next_tier ) { state_.set_next_tier( next_tier ); }
+  void set_next_rank( const uint8_t next_rank ) { state_.set_next_rank( next_rank ); }
   void set_has_activations( const bool has_activations ) { state_.set_has_activations( has_activations ); }
   void set_has_queries( const bool has_queries ) { state_.set_has_queries( has_queries ); }
   void set_has_kvs( const bool has_kvs ) { state_.set_has_kvs( has_kvs ); }
-  // TODO(pouya): if spans share metadata with the original, is_sharded/scatter/gather might be broken and bug
-  //  tier_router
+  // TODO(pouya): if spans share metadata with the original, is_sharded might be broken and bug tier_router
   void set_is_sharded( const bool is_sharded ) { state_.set_is_sharded( is_sharded ); }
-  void set_scatter() { state_.set_scatter(); }
-  void set_gather() { state_.set_gather(); }
 
   uint64_t id() const { return state_.id(); }
   uint32_t batch_size() const { return n_; }
@@ -385,14 +385,13 @@ public:
   ModelID model_id() const { return state_.model_id(); }
   uint32_t next_layer() const { return state_.next_layer(); }
   InferenceStage next_stage() const { return state_.next_stage(); }
+  int8_t next_tier() const { return state_.next_tier(); }
+  uint8_t next_rank() const { return state_.next_rank(); }
   bool has_activations() const { return state_.has_activations(); }
   bool has_queries() const { return state_.has_queries(); }
   bool has_kvs() const { return state_.has_kvs(); }
-  // TODO(pouya): if spans share metadata with the original, is_sharded/scatter/gather might be broken and bug
-  //  tier_router
+  // TODO(pouya): if spans share metadata with the original, is_sharded might be broken and bug tier_router
   bool is_sharded() const { return state_.is_sharded(); }
-  bool scatter() const { return state_.scatter(); }
-  bool gather() const { return state_.gather(); }
   bool all_assigned_to_nodes() const
   {
     for ( int i = 0; i < n_; i++ ) {
@@ -409,10 +408,10 @@ public:
                    uint32_t token_pos,
                    float temperature,
                    uint32_t prompt_length,
-                   int8_t tier,
-                   uint8_t rank )
+                   int8_t kv_tier,
+                   uint8_t kv_rank )
   {
-    state_.set_prompt( off_ + i, prompt_id, context_id, token, token_pos, temperature, prompt_length, tier, rank );
+    state_.set_prompt( off_ + i, prompt_id, context_id, token, token_pos, temperature, prompt_length, kv_tier, kv_rank );
   }
 
   PromptID prompt_id( const size_t i ) const { return state_.prompt_id( off_ + i ); }
@@ -423,8 +422,8 @@ public:
   float temperature( const size_t i ) const { return state_.temperature( off_ + i ); }
   bool finished( const size_t i ) const { return state_.finished( off_ + i ); }
   bool active( const size_t i ) const { return state_.active( off_ + i ); }
-  int8_t tier( const size_t i ) const { return state_.tier( off_ + i ); }
-  uint8_t rank( const size_t i ) const { return state_.rank( off_ + i ); }
+  int8_t kv_tier( const size_t i ) const { return state_.kv_tier( off_ + i ); }
+  uint8_t kv_rank( const size_t i ) const { return state_.kv_rank( off_ + i ); }
   bool assigned_to_node( const size_t i ) const { return state_.assigned_to_node( off_ + i ); }
 
   void set_prompt_id( const size_t i, PromptID prompt_id ) { state_.set_prompt_id( off_ + i, prompt_id ); }
@@ -434,8 +433,8 @@ public:
   void set_prompt_length( const size_t i, uint32_t len ) { state_.set_prompt_length( off_ + i, len ); }
   void set_temperature( const size_t i, float t ) { state_.set_temperature( off_ + i, t ); }
   void set_finished( const size_t i ) { state_.set_finished( off_ + i ); }
-  void set_tier( const size_t i, int8_t tier ) { state_.set_tier( off_ + i, tier ); }
-  void set_rank( const size_t i, uint8_t rank ) { state_.set_rank( off_ + i, rank ); }
+  void set_kv_tier( const size_t i, int8_t kv_tier ) { state_.set_kv_tier( off_ + i, kv_tier ); }
+  void set_kv_rank( const size_t i, uint8_t kv_rank ) { state_.set_kv_rank( off_ + i, kv_rank ); }
 
   void discard( const size_t i ) { state_.discard( off_ + i ); }
 
@@ -586,8 +585,8 @@ void BatchedInferenceState<Config>::set_prompt( const size_t i,
                                                 uint32_t token_pos,
                                                 float temperature,
                                                 uint32_t prompt_length,
-                                                int8_t tier,
-                                                uint8_t rank )
+                                                int8_t kv_tier,
+                                                uint8_t kv_rank )
 {
   prompts_[i].prompt_id = prompt_id;
   prompts_[i].context_id = context_id;
@@ -597,8 +596,8 @@ void BatchedInferenceState<Config>::set_prompt( const size_t i,
   prompts_[i].prompt_length = prompt_length;
   prompts_[i].finished = false;
   prompts_[i].active = true;
-  prompts_[i].tier = tier;
-  prompts_[i].rank = rank;
+  prompts_[i].kv_tier = kv_tier;
+  prompts_[i].kv_rank = kv_rank;
 }
 
 template<typename Config>
@@ -608,14 +607,13 @@ void BatchedInferenceState<Config>::discard( const size_t i )
   CHECK( metadata_.next_stage == InferenceStage::PreAttention ) << "Discarding prompts in a non-PreAttention stage";
   CHECK_EQ( metadata_.next_layer, 0 ) << "Discarding prompts in a non-0 layer";
 
-  // TODO(pouya): will this preserve context_id?
   auto context_id = prompts_[i].context_id;
-  auto tier = prompts_[i].tier;
-  auto rank = prompts_[i].rank;
+  auto kv_tier = prompts_[i].kv_tier;
+  auto kv_rank = prompts_[i].kv_rank;
   prompts_[i] = {};
   prompts_[i].context_id = context_id;
-  prompts_[i].tier = tier;
-  prompts_[i].rank = rank;
+  prompts_[i].kv_tier = kv_tier;
+  prompts_[i].kv_rank = kv_rank;
   prompts_[i].active = false;
 }
 
@@ -893,11 +891,12 @@ void BatchedInferenceState<Config>::merge( BatchedInferenceState&& other )
   CHECK_EQ( metadata_.model_id, other.metadata_.model_id ) << "States with different model IDs";
   CHECK_EQ( metadata_.next_layer, other.metadata_.next_layer ) << "States with different next layers";
   CHECK( metadata_.next_stage == other.metadata_.next_stage ) << "States with different next stages";
+  CHECK_EQ( metadata_.next_tier, other.metadata_.next_tier ) << "States with different next tiers";
+  CHECK_EQ( metadata_.next_rank, other.metadata_.next_rank ) << "States with different next ranks";
   CHECK_EQ( metadata_.has_activations, other.metadata_.has_activations ) << "States with different activation states";
   CHECK_EQ( metadata_.has_queries, other.metadata_.has_queries ) << "States with different query states";
   CHECK_EQ( metadata_.has_kvs, other.metadata_.has_kvs ) << "States with different key-value states";
   CHECK_EQ( metadata_.is_sharded, other.metadata_.is_sharded ) << "Sharded and Monolithic states";
-  CHECK_EQ( metadata_.to_parent, other.metadata_.to_parent ) << "States with different destinations";
 
   BatchedInferenceState new_state;
   new_state.metadata_ = metadata_;
@@ -987,12 +986,13 @@ BatchedInferenceState<Config> BatchedInferenceState<Config>::merge_states(
     CHECK_EQ( new_state.metadata_.model_id, other.metadata_.model_id ) << "States with different model IDs";
     CHECK_EQ( new_state.metadata_.next_layer, other.metadata_.next_layer ) << "States with different next layers";
     CHECK( new_state.metadata_.next_stage == other.metadata_.next_stage ) << "States with different next stages";
+    CHECK( new_state.metadata_.next_tier == other.metadata_.next_tier ) << "States with different next tiers";
+    CHECK( new_state.metadata_.next_rank == other.metadata_.next_rank ) << "States with different next ranks";
     CHECK_EQ( new_state.metadata_.has_activations, other.metadata_.has_activations )
       << "States with different activation states";
     CHECK_EQ( new_state.metadata_.has_queries, other.metadata_.has_queries ) << "States with different query states";
     CHECK_EQ( new_state.metadata_.has_kvs, other.metadata_.has_kvs ) << "States with different key-value states";
     CHECK_EQ( new_state.metadata_.is_sharded, other.metadata_.is_sharded ) << "Sharded and Monolithic states";
-    CHECK_EQ( new_state.metadata_.to_parent, other.metadata_.to_parent ) << "States with different destinations";
 
     // copying prompt data
     for ( size_t j = 0; j < other.metadata_.batch_size; j++ ) {
@@ -1030,10 +1030,11 @@ std::string BatchedInferenceState<Config>::debug_string( const bool prompt_detai
   oss << "BatchedInferenceState(" << "local_id=" << metadata_.id << ", " << "batch_size=" << metadata_.batch_size
       << ", " << "dtype=" << metadata_.dtype << ", " << "route_id=" << metadata_.route_id << ", "
       << "model_id=" << metadata_.model_id << ", " << "next_layer=" << metadata_.next_layer << ", "
-      << "next_stage=" << metadata_.next_stage << ", " << "has_activations=" << metadata_.has_activations << ", "
+      << "next_stage=" << metadata_.next_stage << ", " << "next_tier=" << metadata_.next_tier << ", "
+      << "next_rank=" << metadata_.next_rank << ", " << "has_activations=" << metadata_.has_activations << ", "
       << "activations.len=" << activations_.len() << ", " << "has_queries=" << metadata_.has_queries << ", "
       << "queries.len=" << queries_.len() << ", " << "has_kvs=" << metadata_.has_kvs << ", " << "kvs.len=" << kvs_.len()
-      << ", " << "is_sharded=" << metadata_.is_sharded << ", " << "to_parent=" << metadata_.to_parent << ", ";
+      << ", " << "is_sharded=" << metadata_.is_sharded << ", ";
 
   if ( not prompt_details ) {
     oss << "prompts=[";
@@ -1041,7 +1042,7 @@ std::string BatchedInferenceState<Config>::debug_string( const bool prompt_detai
     for ( const auto& p : prompts_ ) {
       oss << " (" << p.prompt_id.base58digest().substr( 0, 8 ) << ", " << p.context_id << ", " << p.token << ", "
           << p.token_pos << ", " << ( static_cast<float>( p.temperature ) / 255.0f ) << ", " << p.prompt_length << ", "
-          << p.finished << ", {" << static_cast<int>(p.tier) << ", " << static_cast<int>(p.rank) << "}) ";
+          << p.finished << ", {" << static_cast<int>(p.kv_tier) << ", " << static_cast<int>(p.kv_rank) << "}) ";
     }
 
     oss << "]";
