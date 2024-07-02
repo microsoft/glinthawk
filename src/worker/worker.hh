@@ -145,11 +145,9 @@ private:
   net::Address find_next_worker( const RouteMap& route, const BatchedState& state )
   {
     CHECK( state.is_sharded() ) << "Monoliths should never be sent across nodes";
-    int8_t tier = state.scatter() ? state.tier( 0 ) : 0;
-    uint8_t rank = state.scatter() ? state.rank( 0 ) : 0;
-    auto it = route.find( { state.next_layer(), state.next_stage(), tier, rank } );
-    CHECK( it != route.end() ) << "No worker found for layer " << state.next_layer() << ", stage "
-                               << state.next_stage();
+    auto it = route.find( { state.next_layer(), state.next_stage(), state.next_tier(), state.next_rank() } );
+    CHECK( it != route.end() ) << "No worker found for layer " << state.next_layer() << ", stage " << state.next_stage()
+                               << ", tier " << state.next_tier() << ", rank " << state.next_rank();
     return it->second;
   }
 
@@ -509,8 +507,9 @@ bool BatchedWorker<ModelConfig, ComputeKernel>::handle_coordinator_message( core
           default: throw std::runtime_error( "invalid stage" );
         }
 
-        route_str << route.layer_num() << "[" << next_stage << "]<T" << static_cast<size_t>( route.tier() ) << ", R"
-                  << static_cast<size_t>( route.rank() ) << "> -> " << route.ip() << ":" << route.port() << "; ";
+        route_str << "<L" << route.layer_num() << ", T" << static_cast<size_t>( route.tier() ) << ", R"
+                  << static_cast<size_t>( route.rank() ) << ">[" << next_stage << "]" << " -> " << route.ip() << ":"
+                  << route.port() << "; ";
 
         new_route.emplace(
           std::make_tuple(
@@ -741,8 +740,8 @@ bool BatchedWorker<ModelConfig, ComputeKernel>::handle_peer_message( core::Messa
                                 0,
                                 next_prompt.temperature(),
                                 next_prompt.prompt().count(),
-                                state.tier( i ),
-                                state.rank( i ) );
+                                state.kv_tier( i ),
+                                state.kv_rank( i ) );
             }
           }
         }
