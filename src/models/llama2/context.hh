@@ -35,6 +35,7 @@ template<typename T, typename DType>
 concept ContextConcept = LayerContextConcept<typename T::LayerContextType, DType>
                          && TokenContextConcept<typename T::TokenContextType, DType> && requires( T t ) {
                               { T() };
+                              { t.prepare( 0ull, 0ull ) } -> std::same_as<bool>;
                               { t.layer( 0ull ) } -> std::same_as<typename T::LayerContextType>;
                               { t.empty() } -> std::same_as<bool>;
                               { T::max_size( 0ull ) } -> std::same_as<size_t>;

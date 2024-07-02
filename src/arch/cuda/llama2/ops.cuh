@@ -1,9 +1,12 @@
 #pragma once
 
+#include <list>
 #include <memory>
+#include <optional>
 #include <vector>
 
 #include "../common/ops.cuh"
+#include "../common/vmem.cuh"
 #include "models/llama2/base.hh"
 #include "models/llama2/ops/concept.hh"
 
@@ -12,6 +15,9 @@ namespace glinthawk::models::llama2::cuda {
 // platform-specific context
 template<typename Config, typename DType>
 class Context;
+
+template<typename Config, typename DType>
+class DynamicContext;
 
 template<typename Config, typename DType, typename Ctx = Context<Config, DType>>
 requires ModelConfig<Config> && ContextConcept<Ctx, DType>
@@ -74,6 +80,22 @@ public:
   Context( const ConfigRuntime<Config>& settings, const bool make_empty = false );
 };
 
+template<typename Config, typename DType>
+class DynamicContext : public llama2::Context<Config, DType>
+{
+private:
+  std::optional<common::cuda::VirtualMemoryRegion> storage_;
+  std::vector<size_t> layer_allocated_offsets_;
+
+public:
+  using llama2::Context<Config, DType>::Context;
+
+  DynamicContext( const ConfigRuntime<Config>& settings, const bool make_empty = false );
+  ~DynamicContext() {}
+
+  bool prepare( const size_t layer_num, const size_t token_pos );
+};
+
 static_assert( LlamaOperationsConcept<LlamaOperations<configs::Stories_110M, glinthawk::float32_t>,
                                       glinthawk::float32_t,
                                       ConfigRuntime<configs::Stories_110M>> );
@@ -115,6 +137,46 @@ Context<Config, DType>::Context( const ConfigRuntime<Config>& settings, const bo
   }() )
 {
   this->buffer_ = storage_.get();
+}
+
+template<typename Config, typename DType>
+DynamicContext<Config, DType>::DynamicContext( const ConfigRuntime<Config>& settings, const bool make_empty )
+  : llama2::Context<Config, DType>( settings )
+  , storage_( [&]() -> decltype( storage_ ) {
+    if ( make_empty ) {
+      return std::nullopt;
+    }
+
+    return common::cuda::VirtualMemoryRegion( Context<Config, DType>::max_size( settings.n_layers_loaded() ) );
+  }() )
+  , layer_allocated_offsets_( Config::n_layers, 0 )
+{
+  this->buffer_ = storage_.has_value() ? reinterpret_cast<DType*>( storage_->ptr() ) : nullptr;
+}
+
+template<typename Config, typename DType>
+bool DynamicContext<Config, DType>::prepare( const size_t layer_num, const size_t token_pos )
+{
+  constexpr size_t BLOCK_SIZE = 16 * 1024 * 1024; // 16 MiB
+
+  // we need to make sure that for this layer and this token, there is memory allocated
+  const auto layer = this->layer( layer_num );
+  const DType* layer_start_addr = layer.token( 0 ).key();
+  const DType* layer_end_addr = layer.token( token_pos + 1 ).key();
+
+  // (1) do we have enough memory allocated?
+  const size_t layer_allocated_len = layer_allocated_offsets_.at( layer_num );
+  const size_t needed_allocated_len = ( layer_end_addr - layer_start_addr ) * sizeof( DType );
+
+  if ( needed_allocated_len > layer_allocated_len ) {
+    DLOG( INFO ) << "Allocating " << BLOCK_SIZE << " bytes for layer " << layer_num << " and token " << token_pos
+                 << " (current allocation for layer is " << layer_allocated_len << " bytes)";
+
+    storage_->allocate_span( layer_start_addr + layer_allocated_len / sizeof( DType ), BLOCK_SIZE );
+    layer_allocated_offsets_.at( layer_num ) += BLOCK_SIZE;
+  }
+
+  return true;
 }
 
 // all helper functions are defined in this anonymous namespace
