@@ -781,6 +781,8 @@ void BatchedWorker<ModelConfig, ComputeKernel>::run()
       return;
     }
   }
+
+  LOG( INFO ) << "Worker event loop thread exiting.";
 }
 
 template<typename ModelConfig, typename ComputeKernel>

@@ -82,9 +82,7 @@ public:
                     size_t start_layer,
                     size_t end_layer );
 
-  ~ParentTierRouter() override {
-    LOG( INFO ) << "ParentTierRouter shutting down...";
-  };
+  ~ParentTierRouter() override { LOG( INFO ) << "ParentTierRouter shutting down..."; };
 
   /// @brief
   /// 1. Push monolithic state from worker -> calls process_monolith
@@ -399,6 +397,8 @@ void ParentTierRouter<ComputeKernel, ModelConfig>::run_event_loop( std::stop_tok
       return;
     }
   }
+
+  LOG( INFO ) << "ParentTierRouter event loop thread exiting.";
 }
 
 /// @brief
@@ -412,9 +412,7 @@ class ChildTierRouter : public TierRouter<ComputeKernel, ModelConfig>
 public:
   explicit ChildTierRouter( std::unique_ptr<ComputeKernel> compute_kernel );
 
-  ~ChildTierRouter() override {
-    LOG( INFO ) << "ChildTierRouter shutting down...";
-  };
+  ~ChildTierRouter() override { LOG( INFO ) << "ChildTierRouter shutting down..."; };
 
   /// @brief
   /// 1. Push sharded state from worker -> send state to kernel
@@ -486,6 +484,7 @@ void ChildTierRouter<ComputeKernel, ModelConfig>::run_event_loop( std::stop_toke
       return;
     }
   }
+  LOG( INFO ) << "ChildTierRouter event loop thread exiting.";
 }
 
 } // namespace glinthawk::compute
