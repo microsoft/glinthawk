@@ -95,7 +95,13 @@ static_assert( OperationsConcept<Operations<glinthawk::float16_t>, glinthawk::fl
 namespace {
 
 template<std::unsigned_integral T>
-constexpr T div_ceil( const T x, const T y )
+consteval T div_ceil( const T x, const T y )
+{
+  return x / y + ( x % y != 0 );
+}
+
+template<std::unsigned_integral T>
+T div_ceil_runtime( const T x, const T y )
 {
   return x / y + ( x % y != 0 );
 }
@@ -205,24 +211,23 @@ __global__ void reduce_norm_v2_sum_batched( glinthawk::float32_t* output,
     output[blockIdx.y * gridDim.x + blockIdx.x] = s_out[0] + s_out[1];
 }
 
+template<uint64_t size>
 void square_reduce_step_2( glinthawk::float32_t* output,
                            const glinthawk::float32_t* x,
                            glinthawk::float32_t* temp_1,
                            glinthawk::float32_t* temp_2,
-                           const uint64_t size,
                            const uint64_t batch_size )
 {
-  const uint64_t max_elems_per_block = NRBS * 2;
-  const uint64_t shmem_size = sizeof( glinthawk::float32_t ) * max_elems_per_block;
-
-  const uint64_t grid_size = div_ceil( size, max_elems_per_block );
+  constexpr uint64_t max_elems_per_block = NRBS * 2;
+  constexpr uint64_t shmem_size = sizeof( glinthawk::float32_t ) * max_elems_per_block;
+  constexpr uint64_t grid_size = div_ceil( size, max_elems_per_block );
 
   dim3 grids( grid_size, batch_size );
-  if ( grid_size == 1 ) {
+  if constexpr ( grid_size == 1 ) {
     reduce_norm_v2_sum_batched<<<grids, NRBS, shmem_size>>>( output, x, size );
   } else {
     reduce_norm_v2_sum_batched<<<grids, NRBS, shmem_size>>>( temp_1, x, size );
-    square_reduce_step_2( output, temp_1, temp_2, temp_1, grid_size, batch_size );
+    square_reduce_step_2<grid_size>( output, temp_1, temp_2, temp_1, batch_size );
   }
 }
 
@@ -234,13 +239,13 @@ void square_reduce_step_1( glinthawk::float32_t* output, const glinthawk::float1
   constexpr uint64_t grid_size = div_ceil( size, max_elems_per_block );
 
   dim3 grids( grid_size, batch_size );
-  if ( grid_size == 1 ) {
+  if constexpr ( grid_size == 1 ) {
     reduce_norm_v2_square_batched<<<grids, NRBS, shmem_size>>>( output, x, size );
   } else {
     glinthawk::float32_t* temp_1 = output + batch_size;
     glinthawk::float32_t* temp_2 = temp_1 + batch_size * grid_size;
     reduce_norm_v2_square_batched<<<grids, NRBS, shmem_size>>>( temp_1, x, size );
-    square_reduce_step_2( output, temp_1, temp_2, temp_1, grid_size, batch_size );
+    square_reduce_step_2<grid_size>( output, temp_1, temp_2, temp_1, batch_size );
   }
 }
 
@@ -376,7 +381,8 @@ void argmax_step_2( uint32_t* output_arg,
     argmax_batched_next<DType, size><<<grids, AMRBS, shmem_size>>>( output_arg, temp_1, x_arg, x );
   } else {
     argmax_batched_next<DType, size><<<grids, AMRBS, shmem_size>>>( temp_1_arg, temp_1, x_arg, x );
-    argmax_step_2<grid_size>( output_arg, temp_1_arg, temp_1, temp_2_arg, temp_2, temp_1_arg, temp_1, batch_size );
+    argmax_step_2<DType, grid_size>(
+      output_arg, temp_1_arg, temp_1, temp_2_arg, temp_2, temp_1_arg, temp_1, batch_size );
   }
 }
 
@@ -490,7 +496,7 @@ void Operations<glinthawk::float16_t>::accum( glinthawk::float16_t* a,
                                               const glinthawk::float16_t* b,
                                               const uint64_t batch_size ) const
 {
-  accum_cuda<<<div_ceil( size * batch_size, TPB ), TPB>>>( a, b, size * batch_size );
+  accum_cuda<<<div_ceil_runtime( size * batch_size, TPB ), TPB>>>( a, b, size * batch_size );
 }
 
 template<>
@@ -533,7 +539,7 @@ template<typename DType>
 template<uint64_t hidden_dim>
 void Operations<DType>::silu( DType* hb, DType* hb2, const uint64_t batch_size ) const
 {
-  silu_direct<<<div_ceil( hidden_dim * batch_size, TPB ), TPB>>>( hb, hb2, hidden_dim * batch_size );
+  silu_direct<<<div_ceil_runtime( hidden_dim * batch_size, TPB ), TPB>>>( hb, hb2, hidden_dim * batch_size );
 }
 
 template<typename DType>
