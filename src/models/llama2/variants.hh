@@ -33,7 +33,7 @@ struct Llama3_8B_Instruct
   constexpr static uint64_t head_size = 128;
   constexpr static uint64_t n_heads = 32;
   constexpr static uint64_t n_kv_heads = 8;
-  constexpr static uint64_t gqa_size = 8;
+  constexpr static uint64_t gqa_size = 4;
   constexpr static uint64_t vocab_size = 128256;
   constexpr static uint64_t seq_len = 2048;
   constexpr static bool wcls_present = true;
