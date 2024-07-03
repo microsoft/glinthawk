@@ -529,7 +529,7 @@ bool BatchedWorker<ModelConfig, ComputeKernel>::handle_coordinator_message( core
             break;
           }
 
-          state.set_prompt( j, generate_next_prompt_id(), 1 /* TOKEN_BOS */, 0, temp_dist( temp_gen ), 1 );
+          state.set_prompt( j, generate_next_prompt_id(), ModelConfig::token_bos, 0, temp_dist( temp_gen ), 1 );
         }
 
         DLOG( INFO ) << "Generated state: " << state.debug_string( true );

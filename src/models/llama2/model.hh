@@ -70,10 +70,6 @@ public:
   ConfigRuntime<Config> settings() const { return instance_config_; }
   Operations& ops() { return ops_; }
 
-private:
-  static constexpr uint32_t TOKEN_BOS = 1; // Beginning-of-sequence token
-  static constexpr uint32_t TOKEN_EOS = 2; // End-of-sequence token
-
 protected:
   const ConfigRuntime<Config> instance_config_;
   Operations ops_ { instance_config_ };
@@ -449,7 +445,8 @@ void Llama2<Config, DType, LlamaOperations, Context>::forward_postlude( StateTyp
       states.set_token( i, this->scratchpad_.argmax_pos[i] );
       states.set_token_pos( i, states.token_pos( i ) + 1 );
 
-      if ( states.token( i ) == TOKEN_EOS or states.token_pos( i ) >= Config::seq_len ) {
+      if ( states.token( i ) == Config::token_eos or states.token( i ) == Config::token_eot
+           or states.token_pos( i ) >= Config::seq_len ) {
         // Discarding the prompt entry is left to the caller, we just set the finished flag here
         states.set_finished( i );
       }
