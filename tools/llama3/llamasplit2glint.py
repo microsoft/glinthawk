@@ -1,16 +1,16 @@
 #!/usr/bin/env python3
 
 """
-This script exports the Llama 2 weights in Glinthawk format.
+This script exports the Llama 3 weights in Glinthawk format.
 Adapted from https://github.com/karpathy/llama2.c and https://github.com/meta-llama/llama3.
 """
-import gc
 import os
 import pickle
 import sys
 import struct
 import json
 import tempfile
+import ctypes
 import torch
 
 from tqdm import tqdm
@@ -29,21 +29,30 @@ def precompute_freqs_cis(dim: int, end: int, theta: float = 10000.0):
 
 
 def export(p: Dict[str, int], state_dict_map: Dict[str, List[Path,]], dest_dir: str, dtype_text: str = "FP16"):
-    dtype = torch.float16 if dtype_text == "FP16" else torch.float32
+    dtype = None
+
+    if dtype_text == "FP16":
+        dtype = torch.float16
+    elif dtype_text == "FP32":
+        dtype = torch.float32
+    elif dtype_text == "BF16":
+        dtype = torch.bfloat16
 
     os.makedirs(dest_dir, exist_ok=True)
 
     def serialize(f: BinaryIO, key: str):
         if isinstance(state_dict_map[key], list):
             t = load_tensor(key, state_dict_map[key])
+            del state_dict_map[key]
         elif isinstance(state_dict_map[key], torch.Tensor):
             t = state_dict_map[key]
             del state_dict_map[key]
         else:
             raise TypeError("The type of this key is not string or a torch Tensor")
 
-        t = t.contiguous().view(-1).type(dtype).numpy()
-        f.write(memoryview(t).tobytes())
+        t = t.contiguous().view(-1).type(dtype)
+        data = (ctypes.c_uint8 * (t.numel() * t.element_size())).from_address(t.data_ptr())
+        f.write(data)
 
     header = struct.pack(
         "iiiiiii",
@@ -89,6 +98,8 @@ def export(p: Dict[str, int], state_dict_map: Dict[str, List[Path,]], dest_dir: 
         with open(os.path.join(dest_dir, f"LAYER{i}_{dtype_text}"), "wb") as fout:
             for name in tqdm(weight_names, desc=f"Writing weights for layer {i}", leave=False):
                 serialize(fout, f"layers.{i}.{name}.weight")
+
+    assert not state_dict_map, f"Unprocessed keys: {state_dict_map.keys()}"
 
 
 def load_tensor(key: str, path_list: List[Path]) -> torch.Tensor:
@@ -154,7 +165,7 @@ def load_and_export(model_path: str, temp_path: str, output_path: str, dtype_txt
 
 def main():
     if len(sys.argv) != 4:
-        print("[Llama model folder path] [output folder path] [dtype=FP16|FP32]")
+        print("[Llama model folder path] [output folder path] [dtype=FP16|FP32|BF16]")
         exit(1)
 
     model_path = Path(sys.argv[1])
