@@ -21,8 +21,8 @@ from typing import List, Dict, Tuple, BinaryIO
 
 def precompute_freqs_cis(dim: int, end: int, theta: float = 10000.0):
     freqs = 1.0 / (theta ** (torch.arange(0, dim, 2)[: (dim // 2)].float() / dim))
-    t = torch.arange(end, device=freqs.device)  # type: ignore
-    freqs = torch.outer(t, freqs).float()  # type: ignore
+    t = torch.arange(end, device=freqs.device, dtype=torch.float32)
+    freqs = torch.outer(t, freqs).float()
     freqs_cos = torch.cos(freqs)  # real part
     freqs_sin = torch.sin(freqs)  # imaginary part
     return freqs_cos, freqs_sin
@@ -37,6 +37,8 @@ def export(p: Dict[str, int], state_dict_map: Dict[str, List[Path,]], dest_dir: 
         dtype = torch.float32
     elif dtype_text == "BF16":
         dtype = torch.bfloat16
+    else:
+        raise ValueError("Invalid dtype")
 
     os.makedirs(dest_dir, exist_ok=True)
 
@@ -52,7 +54,8 @@ def export(p: Dict[str, int], state_dict_map: Dict[str, List[Path,]], dest_dir: 
 
         t = t.contiguous().view(-1).type(dtype)
         data = (ctypes.c_uint8 * (t.numel() * t.element_size())).from_address(t.data_ptr())
-        f.write(data)
+
+        assert f.write(data) == t.numel() * t.element_size()
 
     header = struct.pack(
         "iiiiiii",

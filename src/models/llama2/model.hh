@@ -115,7 +115,7 @@ std::string dtype_str()
   } else if constexpr ( std::is_same_v<DType, glinthawk::bfloat16_t> ) {
     return { "BF16" };
   } else {
-    LOG( FATAL ) << "invalid dtype";
+    []<bool flag = false>() { static_assert( flag, "invalid dtype" ); }();
   }
 }
 
@@ -129,7 +129,7 @@ void CHECK_DTYPE( const DataType dtype )
   } else if constexpr ( std::is_same_v<DType, glinthawk::bfloat16_t> ) {
     CHECK( dtype == DataType::BFloat16 );
   } else {
-    LOG( FATAL ) << "invalid dtype";
+    []<bool flag = false>() { static_assert( flag, "invalid dtype" ); }();
   }
 }
 
