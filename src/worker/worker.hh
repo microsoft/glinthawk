@@ -33,28 +33,6 @@
 
 namespace glinthawk::core {
 
-namespace {
-
-// XXX(sadjad): this is not ideal. We should unify the way we describe the datatypes across the codebase.
-template<typename DType>
-constexpr DataType get_datatype()
-{
-  if constexpr ( std::is_same_v<DType, float> ) {
-    return DataType::Float32;
-  }
-#if defined( TARGET_PLATFORM_AMD64 )
-  else if constexpr ( std::is_same_v<DType, _Float16> ) {
-    return DataType::Float16;
-  }
-#elif defined( TARGET_PLATFORM_CUDA )
-  else if constexpr ( std::is_same_v<DType, __half> ) {
-    return DataType::Float16;
-  }
-#endif
-}
-
-} // anonymous namespace
-
 template<typename ModelConfig, typename ComputeKernel>
 requires models::llama2::ModelConfig<ModelConfig>
          && compute::KernelConcept<ComputeKernel, models::BatchedInferenceState<ModelConfig>>

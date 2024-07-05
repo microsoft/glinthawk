@@ -49,7 +49,7 @@ private:
     state_.set_next_stage( InferenceStage::PreAttention );
 
     for ( size_t i = 0; i < batch_size_; ++i ) {
-      state_.set_prompt( i, {}, 1 /* BOS */, 0, 1.0, 1 );
+      state_.set_prompt( i, {}, Model::ConfigType::token_bos, 0, 1.0, 1 );
     }
   }
 
@@ -98,7 +98,7 @@ public:
         // check for completed dummy prompts, and restart them
         for ( size_t i = 1; i < batch_size_; ++i ) {
           if ( state_.finished( i ) ) {
-            state_.set_prompt( i, {}, 1 /* BOS */, 0, 1.0, 1 );
+            state_.set_prompt( i, {}, Model::ConfigType::token_bos, 0, 1.0, 1 );
           }
         }
 
@@ -159,6 +159,7 @@ int main( int argc, char* argv[] )
     else CREATE_AND_RUN( "llama2-7b-chat", Llama2_7B_Chat )
     else CREATE_AND_RUN( "llama2-13b-chat", Llama2_13B_Chat )
     else CREATE_AND_RUN( "llama2-70b-chat", Llama2_70B_Chat )
+    else CREATE_AND_RUN( "llama3-8b-instruct", Llama3_8B_Instruct )
     else LOG( FATAL ) << "Unknown model name: " << model_name;
     // clang-format on
 

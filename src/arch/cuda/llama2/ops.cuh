@@ -104,6 +104,10 @@ static_assert( LlamaOperationsConcept<LlamaOperations<configs::Stories_110M, gli
                                       glinthawk::float16_t,
                                       ConfigRuntime<configs::Stories_110M>> );
 
+static_assert( LlamaOperationsConcept<LlamaOperations<configs::Stories_110M, glinthawk::bfloat16_t>,
+                                      glinthawk::bfloat16_t,
+                                      ConfigRuntime<configs::Stories_110M>> );
+
 namespace {
 
 template<std::unsigned_integral T>
@@ -189,7 +193,7 @@ __global__ void find_max_for_rows( const DType* att, DType* output, const uint64
 
   DType max_value = att[0];
   for ( uint64_t i = 1; i <= token_pos; i++ ) {
-    if constexpr ( std::is_same_v<DType, glinthawk::float16_t> ) {
+    if constexpr ( std::is_same_v<DType, glinthawk::float16_t> or std::is_same_v<DType, glinthawk::bfloat16_t> ) {
       max_value = __hmax( max_value, att[i] );
     } else {
       max_value = max( max_value, att[i] );
@@ -207,7 +211,7 @@ __global__ void subtract_and_expf( const DType* values, DType* att )
 
   att += head_num * seq_len;
 
-  if constexpr ( std::is_same_v<DType, glinthawk::float16_t> ) {
+  if constexpr ( std::is_same_v<DType, glinthawk::float16_t> or std::is_same_v<DType, glinthawk::bfloat16_t> ) {
     att[token_pos] = hexp( att[token_pos] - values[head_num] );
   } else {
     att[token_pos] = expf( att[token_pos] - values[head_num] );
@@ -288,6 +292,8 @@ __global__ void gumbel_fix( DType* array, const glinthawk::float32_t temp, curan
     myrandf = logf( -logf( myrandf ) );
     if constexpr ( std::is_same_v<DType, glinthawk::float16_t> ) {
       array[i] = __float2half( __half2float( array[i] ) / temp - myrandf );
+    } else if constexpr ( std::is_same_v<DType, glinthawk::bfloat16_t> ) {
+      array[i] = __float2bfloat16( __bfloat162float( array[i] ) / temp - myrandf );
     } else {
       array[i] = array[i] / temp - myrandf;
     }
@@ -319,14 +325,17 @@ LlamaOperations<Config, DType, ContextType>::LlamaOperations( const ConfigRuntim
   // (b) Config::n_heads must not exceed 1024.
   // (c) Config::dim / Config::n_heads / 2 must not exceed 1024.
   // (d) Config::n_heads must not exceed (1 << 31) - 1. RoPE has n_heads blocks, which cannot surpass 2^31.
-  // (e) Config::seq_len must not exceed (1 << 31) - 1. Attention softmax has seq_len blocks, which cannot surpass
-  // 2^31. (f) Accum blocks must not exceed (1 << 31) - 1. (g) Silu blocks must not exceed (1 << 31) - 1. (h) CuRAND
-  // blocks must not exceed (1 << 31) - 1. (i) RMS Norm blocks must not exceed (1 << 31) - 1. (j) RMS Norm scratch pad
-  // must have enough space for calculations. (k) Argmax scratch pad must have enough space.
+  // (e) Config::seq_len must not exceed (1 << 31) - 1. Attention softmax has seq_len blocks, which cannot surpass 2^31.
+  // (f) Accum blocks must not exceed (1 << 31) - 1.
+  // (g) Silu blocks must not exceed (1 << 31) - 1.
+  // (h) CuRAND blocks must not exceed (1 << 31) - 1.
+  // (i) RMS Norm blocks must not exceed (1 << 31) - 1.
+  // (j) RMS Norm scratch pad must have enough space for calculations.
+  // (k) Argmax scratch pad must have enough space.
 
-  static_assert( 1024 >= TPB );                                                                  // (a)
-  static_assert( 1024 >= Config::n_heads );                                                      // (b)
-  static_assert( 1024 >= Config::dim / Config::n_heads / 2 );                                    // (c)
+  static_assert( 1024 >= TPB );                                                                   // (a)
+  static_assert( 1024 >= Config::n_heads );                                                       // (b)
+  static_assert( 1024 >= Config::dim / Config::n_heads / 2 );                                     // (c)
   static_assert( ( 1l << 31 ) - 1 >= Config::n_heads );                                           // (d)
   static_assert( ( 1l << 31 ) - 1 >= Config::seq_len );                                           // (e)
   CHECK_GE( ( 1l << 31 ) - 1, div_ceil( Config::dim * settings.concurrency_limit, TPB ) );        // (f)
@@ -358,7 +367,6 @@ void LlamaOperations<Config, DType, ContextType>::attention_0_gemm(
 {
   static_assert( ContextType::LayerContextType::is_contiguous(), "ContextType::LayerContextType must be contiguous" );
 
-  constexpr cudaDataType_t cuda_arg_type = std::is_same_v<DType, glinthawk::float16_t> ? CUDA_R_16F : CUDA_R_32F;
   const glinthawk::float32_t scale = 1.0f / sqrtf( Config::head_size );
   constexpr uint64_t k = Config::head_size;
   constexpr uint64_t n = Config::gqa_size;
@@ -382,20 +390,20 @@ void LlamaOperations<Config, DType, ContextType>::attention_0_gemm(
                                                             k,
                                                             &scale,
                                                             layer_contexts[i].token( 0 ).key(),
-                                                            cuda_arg_type,
+                                                            common::cuda::Operations<DType>::GH_CUDA_DATA_TYPE,
                                                             lda,
                                                             strideA,
                                                             query + i * dim,
-                                                            cuda_arg_type,
+                                                            common::cuda::Operations<DType>::GH_CUDA_DATA_TYPE,
                                                             ldb,
                                                             strideB,
                                                             &this->beta,
                                                             att + i * att_dim,
-                                                            cuda_arg_type,
+                                                            common::cuda::Operations<DType>::GH_CUDA_DATA_TYPE,
                                                             ldc,
                                                             strideC,
                                                             gemm_batch_count,
-                                                            this->computeType,
+                                                            common::cuda::Operations<DType>::GH_CUDA_COMPUTE_TYPE,
                                                             CUBLAS_GEMM_DEFAULT ) );
   }
 }
@@ -409,8 +417,6 @@ void LlamaOperations<Config, DType, ContextType>::attention_2_gemm(
   const uint32_t* token_positions ) const
 {
   static_assert( ContextType::LayerContextType::is_contiguous(), "ContextType::LayerContextType must be contiguous" );
-
-  constexpr cudaDataType_t cuda_arg_type = std::is_same_v<DType, glinthawk::float16_t> ? CUDA_R_16F : CUDA_R_32F;
 
   constexpr uint64_t m = Config::head_size;
   constexpr uint64_t n = Config::gqa_size;
@@ -440,20 +446,20 @@ void LlamaOperations<Config, DType, ContextType>::attention_2_gemm(
                                                             k,
                                                             &this->alpha,
                                                             layer_contexts[i].token( 0 ).value(),
-                                                            cuda_arg_type,
+                                                            common::cuda::Operations<DType>::GH_CUDA_DATA_TYPE,
                                                             lda,
                                                             strideA,
                                                             att + i * att_dim,
-                                                            cuda_arg_type,
+                                                            common::cuda::Operations<DType>::GH_CUDA_DATA_TYPE,
                                                             ldb,
                                                             strideB,
                                                             &this->beta,
                                                             xb + i * dim,
-                                                            cuda_arg_type,
+                                                            common::cuda::Operations<DType>::GH_CUDA_DATA_TYPE,
                                                             ldc,
                                                             strideC,
                                                             gemm_batch_count,
-                                                            this->computeType,
+                                                            common::cuda::Operations<DType>::GH_CUDA_COMPUTE_TYPE,
                                                             CUBLAS_GEMM_DEFAULT ) );
   }
 }
@@ -564,7 +570,7 @@ void LlamaOperations<Config, DType, ContextType>::convert_and_copy( DTypeDst* ds
       if constexpr ( std::is_same_v<DTypeSrc, DTypeDst> ) {
         common::cuda::CHECK_CUDA( cudaMemcpy( dst, src, size * sizeof( DTypeSrc ), cudaMemcpyHostToDevice ) );
       } else {
-        std::unique_ptr<DTypeSrc> dst_host { reinterpret_cast<DTypeSrc*>( new uint8_t[sizeof( DTypeDst ) * size] ) };
+        std::unique_ptr<DTypeDst> dst_host { reinterpret_cast<DTypeDst*>( new uint8_t[sizeof( DTypeDst ) * size] ) };
         for ( uint64_t i = 0; i < size; i++ ) {
           dst_host.get()[i] = static_cast<DTypeDst>( src[i] );
         }

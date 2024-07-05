@@ -14,8 +14,6 @@ class Operations
 {
 public:
   using DeviceUniquePtr = std::unique_ptr<DType>;
-  using Float16 = glinthawk::float16_t;
-  using Float32 = glinthawk::float32_t;
 
 public:
   Operations() {}
@@ -30,7 +28,8 @@ public:
   void accum( DType* a, const DType* b, const uint64_t batch_size ) const;
 
   template<uint64_t size>
-  void rmsnorm( DType* o, const DType* x, DType* temp, const DType* weight, const uint64_t batch_size ) const;
+  void rmsnorm( DType* o, const DType* x, glinthawk::float32_t* temp, const DType* weight, const uint64_t batch_size )
+    const;
 
   template<uint64_t n>
   void argmax( uint32_t* output, const DType* v, DType* temp, const uint64_t batch_size ) const;
@@ -57,6 +56,7 @@ public:
 
 static_assert( OperationsConcept<Operations<glinthawk::float32_t>, glinthawk::float32_t> );
 static_assert( OperationsConcept<Operations<glinthawk::float16_t>, glinthawk::float16_t> );
+static_assert( OperationsConcept<Operations<glinthawk::bfloat16_t>, glinthawk::bfloat16_t> );
 
 // helper functions are in this anonymous namespace
 namespace {
@@ -105,8 +105,11 @@ void Operations<DType>::accum( DType* a, const DType* b, const uint64_t batch_si
 
 template<typename DType>
 template<uint64_t size>
-void Operations<DType>::rmsnorm( DType* output, const DType* x, DType*, const DType* weight, const uint64_t batch_size )
-  const
+void Operations<DType>::rmsnorm( DType* output,
+                                 const DType* x,
+                                 glinthawk::float32_t*,
+                                 const DType* weight,
+                                 const uint64_t batch_size ) const
 {
   uint64_t b;
 #pragma omp parallel for private( b )
