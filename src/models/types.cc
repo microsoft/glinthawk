@@ -18,6 +18,7 @@ size_t DataTypeSize( const DataType dtype )
   switch ( dtype ) {
     case DataType::Float16: return 2;
     case DataType::Float32: return 4;
+    case DataType::BFloat16: return 2;
   }
 
   throw std::runtime_error( "Unknown DataType" );
@@ -108,6 +109,7 @@ ostream& operator<<( ostream& os, const glinthawk::DataType& v )
   switch ( v ) {
     case glinthawk::DataType::Float16: os << "FP16"; break;
     case glinthawk::DataType::Float32: os << "FP32"; break;
+    case glinthawk::DataType::BFloat16: os << "BF16"; break;
   }
   return os;
 }

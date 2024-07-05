@@ -16,7 +16,8 @@ using ModelID = uint32_t;
 enum class DataType : uint8_t
 {
   Float16 = 0,
-  Float32 = 1
+  Float32 = 1,
+  BFloat16 = 2,
 };
 
 namespace models {

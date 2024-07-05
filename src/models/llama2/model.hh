@@ -112,6 +112,8 @@ std::string dtype_str()
     return { "FP32" };
   } else if constexpr ( std::is_same_v<DType, glinthawk::float16_t> ) {
     return { "FP16" };
+  } else if constexpr ( std::is_same_v<DType, glinthawk::bfloat16_t> ) {
+    return { "BF16" };
   } else {
     LOG( FATAL ) << "invalid dtype";
   }
@@ -122,6 +124,8 @@ void CHECK_DTYPE( const DataType dtype )
 {
   if constexpr ( std::is_same_v<DType, glinthawk::float32_t> ) {
     CHECK( dtype == DataType::Float32 );
+  } else if constexpr ( std::is_same_v<DType, glinthawk::bfloat16_t> ) {
+    CHECK( dtype == DataType::BFloat16 );
   } else if constexpr ( std::is_same_v<DType, glinthawk::float16_t> ) {
     CHECK( dtype == DataType::Float16 );
   } else {
