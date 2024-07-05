@@ -124,10 +124,10 @@ void CHECK_DTYPE( const DataType dtype )
 {
   if constexpr ( std::is_same_v<DType, glinthawk::float32_t> ) {
     CHECK( dtype == DataType::Float32 );
-  } else if constexpr ( std::is_same_v<DType, glinthawk::bfloat16_t> ) {
-    CHECK( dtype == DataType::BFloat16 );
   } else if constexpr ( std::is_same_v<DType, glinthawk::float16_t> ) {
     CHECK( dtype == DataType::Float16 );
+  } else if constexpr ( std::is_same_v<DType, glinthawk::bfloat16_t> ) {
+    CHECK( dtype == DataType::BFloat16 );
   } else {
     LOG( FATAL ) << "invalid dtype";
   }
@@ -280,7 +280,7 @@ void Llama2<Config, DType, LlamaOperations, Context>::pre_attention_ops( const i
   // attention rmsnorm
   ops_.template rmsnorm<Config::dim>( this->scratchpad_.xb,
                                       this->scratchpad_.x,
-                                      this->scratchpad_.xb2,
+                                      reinterpret_cast<glinthawk::float32_t*>( this->scratchpad_.temp ),
                                       layer_weights.rms_att_weight,
                                       this->scratchpad_.curr_concurrency_size );
 
@@ -323,7 +323,7 @@ void Llama2<Config, DType, LlamaOperations, Context>::attention_ops()
   // softmax
   ops_.attention_softmax( this->scratchpad_.att,
                           this->scratchpad_.batch_token_positions,
-                          this->scratchpad_.temp_softmax,
+                          static_cast<DType*>( this->scratchpad_.temp ),
                           this->scratchpad_.curr_concurrency_size );
 
   ops_.attention_2_gemm( this->scratchpad_.att,
@@ -351,7 +351,7 @@ void Llama2<Config, DType, LlamaOperations, Context>::post_attention_ops( const 
   // ffn rmsnorm
   ops_.template rmsnorm<Config::dim>( this->scratchpad_.xb,
                                       this->scratchpad_.x,
-                                      this->scratchpad_.xb2,
+                                      reinterpret_cast<glinthawk::float32_t*>( this->scratchpad_.temp ),
                                       layer_weights.rms_ffn_weight,
                                       this->scratchpad_.curr_concurrency_size );
 
@@ -381,7 +381,7 @@ void Llama2<Config, DType, LlamaOperations, Context>::classify_ops()
   // final rmsnorm
   ops_.template rmsnorm<Config::dim>( this->scratchpad_.x,
                                       this->scratchpad_.x,
-                                      this->scratchpad_.xb2,
+                                      reinterpret_cast<glinthawk::float32_t*>( this->scratchpad_.temp ),
                                       this->base_weights_.rms_final_weight,
                                       this->scratchpad_.curr_concurrency_size );
 
@@ -561,15 +561,22 @@ void Llama2<Config, DType, LlamaOperations, Context>::forward_attention( StateTy
   switch ( states.dtype() ) {
     case DataType::Float16:
       ops_.template convert_and_copy( this->scratchpad_.q,
-                                      reinterpret_cast<LlamaOperations::Float16*>( states.queries().data() ),
-                                      states.queries().len() / sizeof( typename LlamaOperations::Float16 ),
+                                      reinterpret_cast<glinthawk::float16_t*>( states.queries().data() ),
+                                      states.queries().len() / sizeof( glinthawk::float16_t ),
+                                      CopyType::HostToDevice );
+      break;
+
+    case DataType::BFloat16:
+      ops_.template convert_and_copy( this->scratchpad_.q,
+                                      reinterpret_cast<glinthawk::bfloat16_t*>( states.queries().data() ),
+                                      states.queries().len() / sizeof( glinthawk::bfloat16_t ),
                                       CopyType::HostToDevice );
       break;
 
     case DataType::Float32:
       ops_.template convert_and_copy( this->scratchpad_.q,
-                                      reinterpret_cast<LlamaOperations::Float32*>( states.queries().data() ),
-                                      states.queries().len() / sizeof( typename LlamaOperations::Float32 ),
+                                      reinterpret_cast<glinthawk::float32_t*>( states.queries().data() ),
+                                      states.queries().len() / sizeof( glinthawk::float32_t ),
                                       CopyType::HostToDevice );
       break;
 
@@ -582,7 +589,15 @@ void Llama2<Config, DType, LlamaOperations, Context>::forward_attention( StateTy
         case DataType::Float16:
           ops_.template convert_and_copy(
             contexts[i]->layer( states.next_layer() ).token( states.token_pos( i ) ).key(),
-            reinterpret_cast<LlamaOperations::Float16*>( states.kv( i ).data() ),
+            reinterpret_cast<glinthawk::float16_t*>( states.kv( i ).data() ),
+            Config::kv_dim * 2,
+            CopyType::HostToDevice );
+          break;
+
+        case DataType::BFloat16:
+          ops_.template convert_and_copy(
+            contexts[i]->layer( states.next_layer() ).token( states.token_pos( i ) ).key(),
+            reinterpret_cast<glinthawk::bfloat16_t*>( states.kv( i ).data() ),
             Config::kv_dim * 2,
             CopyType::HostToDevice );
           break;
@@ -590,7 +605,7 @@ void Llama2<Config, DType, LlamaOperations, Context>::forward_attention( StateTy
         case DataType::Float32:
           ops_.template convert_and_copy(
             contexts[i]->layer( states.next_layer() ).token( states.token_pos( i ) ).key(),
-            reinterpret_cast<LlamaOperations::Float32*>( states.kv( i ).data() ),
+            reinterpret_cast<glinthawk::float32_t*>( states.kv( i ).data() ),
             Config::kv_dim * 2,
             CopyType::HostToDevice );
           break;
@@ -610,16 +625,23 @@ void Llama2<Config, DType, LlamaOperations, Context>::forward_attention( StateTy
   // query buffer. I'm not proud of this.
   switch ( states.dtype() ) {
     case DataType::Float16:
-      ops_.template convert_and_copy( reinterpret_cast<LlamaOperations::Float16*>( states.queries().data() ),
+      ops_.template convert_and_copy( reinterpret_cast<glinthawk::float16_t*>( states.queries().data() ),
                                       this->scratchpad_.xb,
-                                      states.queries().len() / sizeof( typename LlamaOperations::Float16 ),
+                                      states.queries().len() / sizeof( glinthawk::float16_t ),
+                                      CopyType::DeviceToHost );
+      break;
+
+    case DataType::BFloat16:
+      ops_.template convert_and_copy( reinterpret_cast<glinthawk::bfloat16_t*>( states.queries().data() ),
+                                      this->scratchpad_.xb,
+                                      states.queries().len() / sizeof( glinthawk::bfloat16_t ),
                                       CopyType::DeviceToHost );
       break;
 
     case DataType::Float32:
-      ops_.template convert_and_copy( reinterpret_cast<LlamaOperations::Float32*>( states.queries().data() ),
+      ops_.template convert_and_copy( reinterpret_cast<glinthawk::float32_t*>( states.queries().data() ),
                                       this->scratchpad_.xb,
-                                      states.queries().len() / sizeof( typename LlamaOperations::Float32 ),
+                                      states.queries().len() / sizeof( glinthawk::float32_t ),
                                       CopyType::DeviceToHost );
       break;
 

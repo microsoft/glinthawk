@@ -25,13 +25,18 @@ concept ModelConfig = requires( T t ) {
   requires std::is_unsigned_v<decltype( T::token_bos )>;
   requires std::is_unsigned_v<decltype( T::token_eos )>;
   requires std::is_unsigned_v<decltype( T::token_eot )>;
+
+  // Derived constants
+  requires T::gqa_size == T::n_heads / T::n_kv_heads;
+  requires T::kv_dim == T::dim / T::gqa_size;
+  requires T::head_size == T::dim / T::n_heads;
 };
 
 namespace configs {
 
 struct Llama2
 {
-  constexpr static uint64_t vocab_size = 32000;
+  constexpr static uint64_t vocab_size = 32'000;
   constexpr static uint32_t token_bos = 1; // beginning of sentence
   constexpr static uint32_t token_eos = 2; // end of sentence
   constexpr static uint32_t token_eot = 2; // end of turn
@@ -39,10 +44,10 @@ struct Llama2
 
 struct Llama3
 {
-  constexpr static uint64_t vocab_size = 128256;
-  constexpr static uint32_t token_bos = 128000;
-  constexpr static uint32_t token_eos = 128001;
-  constexpr static uint32_t token_eot = 128009;
+  constexpr static uint64_t vocab_size = 128'256;
+  constexpr static uint32_t token_bos = 128'000;
+  constexpr static uint32_t token_eos = 128'001;
+  constexpr static uint32_t token_eot = 128'009;
 };
 
 struct Llama3_8B_Instruct : public Llama3
