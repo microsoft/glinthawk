@@ -1,13 +1,19 @@
 list ( APPEND GLINTHAWK_TARGETS worker infer ramble )
-list ( APPEND GLINTHAWK_DTYPES FLOAT16 FLOAT32 )
+list ( APPEND GLINTHAWK_DTYPES FLOAT16 FLOAT32 BFLOAT16 )
 
 foreach ( TARGET ${GLINTHAWK_TARGETS} )
   foreach ( DTYPE ${GLINTHAWK_DTYPES} )
+
+    if ( DTYPE STREQUAL BFLOAT16 AND NOT "${__PLATFORM}" STREQUAL "cuda" )
+      continue ()
+    endif ()
 
     if ( DTYPE STREQUAL FLOAT16 )
       set ( TYPE_SUFFIX "fp16" )
     elseif ( DTYPE STREQUAL FLOAT32 )
       set ( TYPE_SUFFIX "fp32" )
+    elseif ( DTYPE STREQUAL BFLOAT16 )
+      set ( TYPE_SUFFIX "bf16" )
     endif ()
 
     if ( "${__PLATFORM}" STREQUAL "cuda" )
