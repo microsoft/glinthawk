@@ -44,6 +44,9 @@ protected:
   mutable cublasHandle_t* cublas_handle_array { nullptr };
   int cublas_handle_count {};
 
+  mutable std::unique_ptr<curandState, models::common::cuda::CUDADeleter<curandState>> rng_state { nullptr };
+  void setup_rng( unsigned long seed, const uint64_t size, const uint64_t batch_size );
+
   constexpr static float alpha = 1.0f;
   constexpr static float beta = 0.0f;
 
@@ -61,7 +64,7 @@ protected:
   }();
 
 public:
-  Operations( const size_t num_streams );
+  Operations( const size_t num_streams, const size_t rng_states, const size_t batch_size = 1 );
   ~Operations();
 
   Operations( const Operations& ) = delete;
@@ -85,8 +88,7 @@ public:
   template<uint64_t s, uint64_t r>
   void matmul( DType* xo, const DType* x, const DType* w, const uint64_t b ) const;
 
-  template<uint64_t vocab_size>
-  void soft_sample( DType* v, const std::vector<glinthawk::float32_t>& temp_s, const uint64_t batch_size ) const;
+  void soft_sample( DType* v, const std::vector<float>& tempratures, const size_t vocab_size ) const;
 
   DeviceUniquePtr device_allocate( const uint64_t size_bytes ) const;
 
@@ -464,31 +466,52 @@ __global__ void silu_direct( glinthawk::float32_t* _hb, const glinthawk::float32
 
 }
 
-namespace { // randomize
+namespace { // soft_sample
 
-// XXX too slow
-/*
 template<typename DType>
-__global__ void init_random_kernel( DType* buffer, uint64_t len, float min, float max, const uint64_t seed )
+__global__ void gumbel_fix( DType* array,
+                            const glinthawk::float32_t temp,
+                            const size_t vocab_size,
+                            curandState* rng_state )
 {
-  const uint64_t idx = blockIdx.x * blockDim.x + threadIdx.x;
+  const uint64_t i = threadIdx.x + blockIdx.x * TPB;
 
-  if ( idx < len ) {
-    curandState state;
-    curand_init( seed, idx, 0, &state );
-    DType val = curand_uniform( &state ) * ( max - min ) + min;
-    buffer[idx] = val;
+  if ( i < vocab_size ) {
+    curandState local_state = rng_state[i];
+
+    glinthawk::float32_t myrandf = curand_uniform( &local_state );
+    myrandf = logf( -logf( myrandf ) );
+
+    if constexpr ( std::is_same_v<DType, glinthawk::float16_t> ) {
+      array[i] = __float2half( __half2float( array[i] ) / temp - myrandf );
+    } else if constexpr ( std::is_same_v<DType, glinthawk::bfloat16_t> ) {
+      array[i] = __float2bfloat16( __bfloat162float( array[i] ) / temp - myrandf );
+    } else {
+      array[i] = array[i] / temp - myrandf;
+    }
+
+    rng_state[i] = local_state;
   }
 }
-*/
 
 }
 
-} // namespace
+namespace { // setup_rng
+
+__global__ void setup_rng_kernel( curandState* state, unsigned long seed )
+{
+  int id = threadIdx.x + blockIdx.x * TPB;
+  curand_init( seed, id, 0, &state[id] );
+}
+
+}
+
+} // end of anonymous namespace for helper functions
 
 template<typename DType>
-Operations<DType>::Operations( const size_t num_streams )
+Operations<DType>::Operations( const size_t num_streams, const size_t rng_states, const size_t batch_size )
 {
+  // setup cuBLAS
   CHECK_CUBLAS( cublasCreate( &cublas_handle_default ) );
   cublas_handle_count = num_streams;
   streams = (cudaStream_t*)malloc( num_streams * sizeof( cudaStream_t ) );
@@ -498,6 +521,9 @@ Operations<DType>::Operations( const size_t num_streams )
     CHECK_CUBLAS( cublasCreate( &( cublas_handle_array[i] ) ) );
     CHECK_CUBLAS( cublasSetStream( cublas_handle_array[i], streams[i] ) );
   }
+
+  // setup cuRAND; must be done after setting up the streams
+  setup_rng( 1234u, rng_states, batch_size );
 }
 
 template<typename DType>
@@ -609,6 +635,17 @@ void Operations<DType>::matmul( DType* xout, const DType* x, const DType* W, con
 }
 
 template<typename DType>
+void Operations<DType>::soft_sample( DType* v, const std::vector<float>& temperatures, const size_t vocab_size ) const
+{
+  for ( uint64_t i = 0; i < temperatures.size(); i++ ) {
+    if ( temperatures[i] > 0 ) {
+      gumbel_fix<DType><<<div_ceil_runtime( vocab_size, TPB ), TPB, 0, this->streams[i]>>>(
+        v + i * vocab_size, temperatures[i], vocab_size, rng_state.get() + i * vocab_size );
+    }
+  }
+}
+
+template<typename DType>
 Operations<DType>::DeviceUniquePtr Operations<DType>::device_allocate( const uint64_t size_bytes ) const
 {
   DType* ptr;
@@ -649,6 +686,18 @@ void Operations<DType>::randomize_device_buffer( DType* buffer,
   std::unique_ptr<DType[]> host_buffer { new DType[len] };
   util::randomize_buffer( host_buffer.get(), len, min, max );
   CHECK_CUDA( cudaMemcpy( buffer, host_buffer.get(), len * sizeof( DType ), cudaMemcpyHostToDevice ) );
+}
+
+template<typename DType>
+void Operations<DType>::setup_rng( unsigned long seed, const uint64_t size, const uint64_t batch_size )
+{
+  curandState* rng_state_ptr = nullptr;
+  common::cuda::CHECK_CUDA( cudaMalloc( &rng_state_ptr, size * batch_size * sizeof( curandState ) ) );
+  rng_state.reset( rng_state_ptr );
+
+  for ( uint64_t i = 0; i < batch_size; i++ ) {
+    setup_rng_kernel<<<div_ceil_runtime( size, TPB ), TPB, 0, this->streams[i]>>>( rng_state.get() + i * size, seed );
+  }
 }
 
 } // namespace glinthawk::models::common::cuda

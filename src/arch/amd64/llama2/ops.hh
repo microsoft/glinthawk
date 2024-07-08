@@ -54,8 +54,6 @@ public:
                    DType* state_q,
                    typename ContextType::TokenContextType token_contexts[] ) const;
 
-  void soft_sample( DType* v, const std::vector<glinthawk::float32_t>& temp_s, const uint64_t batch_size ) const;
-
   void copy_kv_cache( typename ContextType::TokenContextType token_contexts[],
                       const DType* state_kv,
                       const uint64_t batch_size ) const;
@@ -159,20 +157,6 @@ inline void do_rope( const DType* freq_cis_real_row,
     const glinthawk::float32_t q1 = q[i * head_size + elem_idx + 1];
     q[i * head_size + elem_idx] = static_cast<DType>( q0 * fcr - q1 * fci );
     q[i * head_size + elem_idx + 1] = static_cast<DType>( q0 * fci + q1 * fcr );
-  }
-}
-
-}
-
-namespace { // soft_sample
-
-template<typename DType, uint64_t vocab_size>
-void gumbel_fix( DType* array, glinthawk::float32_t temp )
-{
-  for ( uint64_t i = 0; i < vocab_size; i++ ) {
-    glinthawk::float32_t myrandf = static_cast<glinthawk::float32_t>( rand() ) / RAND_MAX;
-    myrandf = logf( -logf( myrandf ) );
-    array[i] = static_cast<DType>( static_cast<glinthawk::float32_t>( array[i] ) / temp - myrandf );
   }
 }
 
@@ -332,20 +316,6 @@ void LlamaOperations<Config, DType, ContextType>::apply_rope(
           head_k_num,
           elem_idx );
       }
-    }
-  }
-}
-
-template<typename Config, typename DType, typename ContextType>
-void LlamaOperations<Config, DType, ContextType>::soft_sample( DType* v,
-                                                               const std::vector<float>& temp_s,
-                                                               const uint64_t batch_size ) const
-{
-  uint64_t i;
-#pragma omp parallel for private( i )
-  for ( i = 0; i < batch_size; i++ ) {
-    if ( temp_s[i] > 0 ) {
-      gumbel_fix<DType, Config::vocab_size>( v + i * Config::vocab_size, temp_s[i] );
     }
   }
 }

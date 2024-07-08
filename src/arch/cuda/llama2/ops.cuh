@@ -27,10 +27,6 @@ public:
   using common::cuda::Operations<DType>::DeviceUniquePtr;
   using ContextType = Ctx;
 
-private:
-  mutable std::unique_ptr<curandState, models::common::cuda::CUDADeleter<curandState>> rng_state { nullptr };
-  void setup_rng( unsigned long seed, const uint64_t size, const uint64_t batch_size );
-
 public:
   LlamaOperations( const ConfigRuntime<Config>& settings );
   ~LlamaOperations() {}
@@ -58,8 +54,6 @@ public:
                    const DType* freq_cis_imag,
                    DType* state_q,
                    typename ContextType::TokenContextType token_contexts[] ) const;
-
-  void soft_sample( DType* v, const std::vector<glinthawk::float32_t>& temp_s, const uint64_t batch_size ) const;
 
   void copy_kv_cache( typename ContextType::TokenContextType token_contexts[],
                       const DType* state_kv,
@@ -280,46 +274,12 @@ __global__ void do_rope( const DType* freq_cis_real_row,
 
 }
 
-namespace { // soft_sample
-
-template<typename DType, uint64_t vocab_size>
-__global__ void gumbel_fix( DType* array, const glinthawk::float32_t temp, curandState* rng_state )
-{
-  const uint64_t i = threadIdx.x + blockIdx.x * TPB;
-
-  if ( i < vocab_size ) {
-    glinthawk::float32_t myrandf = curand_uniform( rng_state + i );
-    myrandf = logf( -logf( myrandf ) );
-    if constexpr ( std::is_same_v<DType, glinthawk::float16_t> ) {
-      array[i] = __float2half( __half2float( array[i] ) / temp - myrandf );
-    } else if constexpr ( std::is_same_v<DType, glinthawk::bfloat16_t> ) {
-      array[i] = __float2bfloat16( __bfloat162float( array[i] ) / temp - myrandf );
-    } else {
-      array[i] = array[i] / temp - myrandf;
-    }
-  }
-}
-
-}
-
-namespace { // setup_rng
-
-__global__ void setup_rng_kernel( curandState* state, unsigned long seed )
-{
-  int id = threadIdx.x + blockIdx.x * TPB;
-  curand_init( seed, id, 0, &state[id] );
-}
-
-}
-
-}
+} // end of anonymous namespace for helper functions
 
 template<typename Config, typename DType, typename ContextType>
 LlamaOperations<Config, DType, ContextType>::LlamaOperations( const ConfigRuntime<Config>& settings )
-  : common::cuda::Operations<DType>( settings.concurrency_limit )
+  : common::cuda::Operations<DType>( settings.concurrency_limit, Config::vocab_size, settings.concurrency_limit )
 {
-  setup_rng( 1234ul, Config::vocab_size, settings.concurrency_limit );
-
   // Summary of Checks:
   // (a) TPB must not exceed 1024. Threads per block cannot surpass 1024.
   // (b) Config::n_heads must not exceed 1024.
@@ -512,19 +472,6 @@ void LlamaOperations<Config, DType, ContextType>::apply_rope(
 }
 
 template<typename Config, typename DType, typename ContextType>
-void LlamaOperations<Config, DType, ContextType>::soft_sample( DType* v,
-                                                               const std::vector<float>& temp_s,
-                                                               const uint64_t batch_size ) const
-{
-  for ( uint64_t i = 0; i < batch_size; i++ ) {
-    if ( temp_s[i] > 0 ) {
-      gumbel_fix<DType, Config::vocab_size><<<div_ceil( Config::vocab_size, TPB ), TPB, 0, this->streams[i]>>>(
-        v + i * Config::vocab_size, temp_s[i], rng_state.get() + i * Config::vocab_size );
-    }
-  }
-}
-
-template<typename Config, typename DType, typename ContextType>
 void LlamaOperations<Config, DType, ContextType>::copy_kv_cache(
   typename ContextType::TokenContextType token_contexts[],
   const DType* state_kv,
@@ -580,20 +527,6 @@ void LlamaOperations<Config, DType, ContextType>::convert_and_copy( DTypeDst* ds
     } break;
 
     default: LOG( FATAL ) << "Invalid copy type";
-  }
-}
-
-template<typename Config, typename DType, typename ContextType>
-void LlamaOperations<Config, DType, ContextType>::setup_rng( unsigned long seed,
-                                                             const uint64_t size,
-                                                             const uint64_t batch_size )
-{
-  curandState* rng_state_ptr = nullptr;
-  common::cuda::CHECK_CUDA( cudaMalloc( &rng_state_ptr, size * batch_size * sizeof( curandState ) ) );
-  rng_state.reset( rng_state_ptr );
-
-  for ( uint64_t i = 0; i < batch_size; i++ ) {
-    setup_rng_kernel<<<div_ceil( size, TPB ), TPB, 0, this->streams[i]>>>( rng_state_ptr + i * size, seed );
   }
 }
 

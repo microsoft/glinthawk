@@ -139,7 +139,7 @@ void extract_batch_token( LlamaOperations& ops,
                           ScratchPad<Config, DType, Context>& state,
                           const std::vector<float>& temp )
 {
-  ops.soft_sample( state.logits, temp, temp.size() );
+  ops.soft_sample( state.logits, temp, Config::vocab_size );
   ops.template argmax<Config::vocab_size>( state.argmax_pos, state.logits, state.x, temp.size() );
 }
 
