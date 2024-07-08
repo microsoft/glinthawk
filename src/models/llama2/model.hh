@@ -12,6 +12,7 @@
 
 #include "models/common/state.hh"
 #include "ops/concept.hh"
+#include "util/demangle.hh"
 #include "util/exception.hh"
 #include "util/file_descriptor.hh"
 #include "util/ring_buffer.hh"
@@ -228,7 +229,7 @@ Llama2<Config, DType, LlamaOperations, Context>::Llama2( const std::filesystem::
                 << " bytes).";
   }
 
-  LOG( INFO ) << "Model " << typeid( decltype( this ) ).name() << " instantiated.";
+  LOG( INFO ) << "Model " << util::demangle( typeid( decltype( this ) ).name() ) << " instantiated.";
 }
 template<typename Config, typename DType, typename LlamaOperations, typename Context>
 template<StateConcept StateType>
