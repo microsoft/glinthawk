@@ -1,11 +1,13 @@
 #pragma once
 
 #include <algorithm>
+#include <cstdlib>
 #include <execution>
 #include <fcntl.h>
 #include <filesystem>
 #include <glog/logging.h>
 #include <random>
+#include <thread>
 
 #include "base.hh"
 #include "variants.hh"
@@ -48,6 +50,14 @@ public:
           const uint64_t concurrency_limit = 1,
           const uint64_t max_context_count = 1,
           const bool randomize_parameters = false );
+
+  ~Llama2()
+  {
+    const static std::filesystem::path _DUMP_DIR { secure_getenv( "GH_DUMP_DIR" ) ? secure_getenv( "GH_DUMP_DIR" )
+                                                                                  : "/dev/shm/model_activations" };
+    std::ofstream fout { _DUMP_DIR / "fin" };
+    fout << "fin";
+  }
 
   /// \note forward_*() functions mutate the input state object.
   // (input token|activations) -> {forward: [(pre -> att -> post) x n_layers] -> (?classify -> output token)}
@@ -152,9 +162,35 @@ void _dump_matrix( const LlamaOperations& ops,
                    DType* data,
                    size_t size )
 {
-  const std::filesystem::path _DUMP_DIR { "/app/activations" };
+  const static std::filesystem::path _DUMP_DIR { secure_getenv( "GH_DUMP_DIR" ) ? secure_getenv( "GH_DUMP_DIR" )
+                                                                                : "/dev/shm/model_activations" };
+
+  constexpr static auto max_unprocessed_count = 4096;
+  constexpr static auto check_interval = std::chrono::seconds( 10 );
+
+  static auto last_check = std::chrono::steady_clock::now();
+
   const auto output_name
     = _DUMP_DIR / ( std::to_string( batch_id ) + "-" + std::to_string( layer_num ) + "-" + mat_name );
+
+  if ( const auto now = std::chrono::steady_clock::now(); now - last_check >= check_interval ) {
+    namespace fs = std::filesystem;
+
+    size_t unprocessed_count = 0;
+
+    do {
+      unprocessed_count = 0;
+      std::ranges::for_each( fs::directory_iterator( _DUMP_DIR ), [&]( const auto& ) { unprocessed_count++; } );
+
+      if ( unprocessed_count >= max_unprocessed_count ) {
+        LOG( WARNING ) << "Too many unprocessed files in " << _DUMP_DIR << ", waiting for " << check_interval.count()
+                       << " seconds...";
+        std::this_thread::sleep_for( check_interval );
+      }
+    } while ( unprocessed_count >= max_unprocessed_count );
+
+    last_check = now;
+  }
 
   // let's create a buffer and copy things into it
   std::vector<DType> buffer( size );
