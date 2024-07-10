@@ -7,12 +7,22 @@ import json
 import socket
 import asyncio
 import logging
+import datetime
 
 from typing import List, Dict, Tuple
 from dataclasses import dataclass, field
 from signal import SIGINT, SIGTERM
 
-from rich.logging import RichHandler
+import rich
+
+from rich.text import Text
+from rich.status import Status
+from rich.panel import Panel
+from rich.align import Align
+from rich.console import Group
+from rich.table import Table
+from rich.live import Live
+
 from google.protobuf.message import Message as ProtoMessage
 from google.protobuf.json_format import MessageToJson, MessageToDict
 
@@ -87,6 +97,7 @@ class Coordinator:
         self.load_prompts(self.prompt_dir, self.output_dir)
 
         self.state = Coordinator.State.Running
+        self.start_time = datetime.datetime.now()
 
     def is_running(self):
         return self.state == Coordinator.State.Running
@@ -354,6 +365,44 @@ class Coordinator:
                 f.write("\n")
                 f.flush()
 
+    async def show_status(self):
+        with Live(transient=True, auto_refresh=False) as live:
+            while self.state != Coordinator.State.Stopped:
+                elapsed_time = datetime.datetime.now() - self.start_time
+                elapsed_time = "{:02d}:{:02d}:{:02d}".format(
+                    int(elapsed_time.total_seconds()) // 3600,
+                    int(elapsed_time.total_seconds()) // 60 % 60,
+                    int(elapsed_time.total_seconds()) % 60,
+                )
+
+                grid = Table(
+                    title=f"\n{elapsed_time}",
+                    expand=False,
+                    show_header=False,
+                    show_lines=True,
+                    box=rich.box.ROUNDED,
+                    title_justify="right",
+                )
+                grid.add_column(justify="left")
+                grid.add_column(justify="left")
+
+                grid.add_row(
+                    "Model",
+                    Text(f"{self.model.n_layers} layers, {self.model.layers_per_worker} per worker"),
+                )
+
+                grid.add_row(
+                    "Prompts",
+                    Text(
+                        f"{self.assigned_prompts} assigned, {self.completed_prompts} completed, {len(self.prompt_queue)} queued",
+                    ),
+                )
+
+                grid.add_row("Workers", Text(f"{len(self.workers)} connected"))
+
+                live.update(Align.right(grid), refresh=True)
+                await asyncio.sleep(1)
+
     async def request_shutdown(self, sig):
         if self.state == Coordinator.State.Stopping:
             self.logger.warning(f"Shutdown was already in progress; force quitting.")
@@ -405,6 +454,7 @@ class Coordinator:
             for sig in (SIGINT, SIGTERM):
                 loop.add_signal_handler(sig, lambda sig=sig: asyncio.create_task(self.request_shutdown(sig)))
 
+            asyncio.create_task(self.show_status())
             asyncio.create_task(self.message_processor())
             asyncio.create_task(self.handle_outgoing_messages())
             asyncio.create_task(self.dump_completions())

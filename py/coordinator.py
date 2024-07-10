@@ -23,19 +23,13 @@ logging.basicConfig(
 )
 
 logo = rich.align.Align.center(
-    rich.panel.Panel(
-        rich.text.Text(
-            """
+    rich.text.Text(
+        """
 ░█▀▀░█░░░▀█▀░█▀█░▀█▀░█░█░█▀█░█░█░█░█
 ░█░█░█░░░░█░░█░█░░█░░█▀█░█▀█░█▄█░█▀▄
 ░▀▀▀░▀▀▀░▀▀▀░▀░▀░░▀░░▀░▀░▀░▀░▀░▀░▀░▀
 """,
-            justify="center",
-        ),
-        expand=False,
-        padding=(0, 2),
-        style="",
-    )
+    ),
 )
 
 # TODO(sadjad): Add option to specify worker count instead of layers per worker
@@ -63,6 +57,7 @@ def main(listen_address, listen_port, **kwargs):
 
     coordinator = Coordinator(**kwargs)
     asyncio.run(coordinator.main(listen_address, listen_port))
+
 
 if __name__ == "__main__":
     main()
