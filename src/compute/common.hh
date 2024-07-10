@@ -150,4 +150,60 @@ struct GlobalQueue
   std::condition_variable cv {};
 };
 
+template<typename ConfigType>
+struct ShardContainer
+{
+private:
+  using StateType = typename glinthawk::models::BatchedInferenceState<ConfigType>;
+  std::deque<StateType> shards_ {};
+  size_t total_states_ {};
+  bool dirty = false;
+
+  bool _pop_to_state( StateType& state )
+  {
+    state = std::move( shards_.front() );
+    shards_.pop_front();
+    total_states_ -= state.batch_size();
+  }
+
+public:
+  ShardContainer() = default;
+  ~ShardContainer() = default;
+  [[nodiscard]] size_t size() const { return shards_.size(); }
+  bool pop_ang_merge( StateType& state, size_t count )
+  {
+    if ( count < total_states_ )
+      return false;
+    std::deque<StateType> shards_to_merge;
+    size_t count_merge = 0;
+    while ( count_merge < count ) {
+      if ( _pop_to_state( state ) ) {
+        count_merge += state.batch_size();
+        shards_to_merge.push_back( std::move( state ) );
+      }
+    }
+    if ( count_merge > count ) {
+      state = std::move( shards_to_merge.back() );
+      shards_to_merge.pop_back();
+
+      StateType remainder;
+      std::tie( remainder, state ) = state.split( count_merge - count );
+
+      this->push_back( std::move( remainder ) );
+      shards_to_merge.push_back( std::move( state ) );
+    }
+    state = std::move( StateType::merge_states( std::move( shards_to_merge ) ) );
+    return true;
+  }
+
+  bool push_back( StateType&& state )
+  {
+    total_states_ += state.batch_size();
+    shards_.push_back( std::move( state ) );
+    dirty = true;
+  }
+
+  void clean() { dirty = true; }
+};
+
 } // namespace glinthawk::compute
