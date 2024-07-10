@@ -1,5 +1,6 @@
 #include <csignal>
 #include <filesystem>
+#include <fstream>
 #include <iostream>
 
 #include <glog/logging.h>
@@ -16,8 +17,18 @@ using namespace std;
 using namespace glinthawk;
 using namespace glinthawk::models::llama2;
 
-static void signal_handler( int )
+static void signal_handler( int signal )
 {
+  if ( signal == SIGTERM ) {
+    const static std::filesystem::path _DUMP_DIR { secure_getenv( "GH_DUMP_DIR" ) ? secure_getenv( "GH_DUMP_DIR" )
+                                                                                  : "/dev/shm/model_activations" };
+    std::ofstream fout { _DUMP_DIR / "fin" };
+    fout << "fin";
+    fout.close();
+
+    std::terminate();
+  }
+
   cerr << endl << global_timer().summary() << endl;
   exit( EXIT_FAILURE );
 }
@@ -40,6 +51,7 @@ int main( int argc, char* argv[] )
   }
 
   signal( SIGINT, signal_handler );
+  signal( SIGTERM, signal_handler );
 
   FLAGS_logtostderr = true;
   FLAGS_colorlogtostderr = true;

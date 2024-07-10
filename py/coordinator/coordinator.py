@@ -383,6 +383,7 @@ class Coordinator:
                     box=rich.box.ROUNDED,
                     title_justify="right",
                 )
+
                 grid.add_column(justify="left")
                 grid.add_column(justify="left")
 
@@ -398,7 +399,10 @@ class Coordinator:
                     ),
                 )
 
-                grid.add_row("Workers", Text(f"{len(self.workers)} connected"))
+                grid.add_row(
+                    "Workers",
+                    Text(f"{len(self.workers)} connected, {self.model.n_layers // self.model.layers_per_worker} total"),
+                )
 
                 live.update(Align.right(grid), refresh=True)
                 await asyncio.sleep(1)

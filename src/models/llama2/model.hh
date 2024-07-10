@@ -51,14 +51,6 @@ public:
           const uint64_t max_context_count = 1,
           const bool randomize_parameters = false );
 
-  ~Llama2()
-  {
-    const static std::filesystem::path _DUMP_DIR { secure_getenv( "GH_DUMP_DIR" ) ? secure_getenv( "GH_DUMP_DIR" )
-                                                                                  : "/dev/shm/model_activations" };
-    std::ofstream fout { _DUMP_DIR / "fin" };
-    fout << "fin";
-  }
-
   /// \note forward_*() functions mutate the input state object.
   // (input token|activations) -> {forward: [(pre -> att -> post) x n_layers] -> (?classify -> output token)}
 
