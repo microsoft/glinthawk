@@ -203,7 +203,9 @@ public:
     dirty = true;
   }
 
-  void clean() { dirty = true; }
+  bool is_dirty() const { return dirty; }
+
+  void set_clean() { dirty = true; }
 };
 
 } // namespace glinthawk::compute

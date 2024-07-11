@@ -318,6 +318,8 @@ public:
                                                                  std::vector<size_t> vec_n,
                                                                  bool ignore_empty );
 
+  static std::deque<BatchedInferenceState<Config>> split_on_kv( BatchedInferenceState<Config>&& state );
+
   /// @brief Like `split`, but creates spans of the current state instead of a new state.
   /// @param n The size of the first state span.
   /// @return A pair of StateSpans.
@@ -411,7 +413,8 @@ public:
                    int8_t kv_tier,
                    uint8_t kv_rank )
   {
-    state_.set_prompt( off_ + i, prompt_id, context_id, token, token_pos, temperature, prompt_length, kv_tier, kv_rank );
+    state_.set_prompt(
+      off_ + i, prompt_id, context_id, token, token_pos, temperature, prompt_length, kv_tier, kv_rank );
   }
 
   PromptID prompt_id( const size_t i ) const { return state_.prompt_id( off_ + i ); }
@@ -790,6 +793,22 @@ std::deque<BatchedInferenceState<Config>> BatchedInferenceState<Config>::split_s
 }
 
 template<typename Config>
+std::deque<BatchedInferenceState<Config>> BatchedInferenceState<Config>::split_on_kv(
+  BatchedInferenceState<Config>&& state )
+{
+  std::vector<size_t> vec_n {};
+  size_t last_cut = 0;
+  for ( size_t pi = 1; pi < state.metadata_.batch_size; pi++ ) {
+    if ( state.kv_tier( pi ) != state.kv_tier( pi - 1 ) or state.kv_rank( pi ) != state.kv_rank( pi - 1 ) ) {
+      vec_n.push_back( pi - last_cut );
+      last_cut = pi;
+    }
+  }
+  vec_n.push_back( state.metadata_.batch_size - last_cut );
+  return std::move( BatchedInferenceState<Config>::split_states( std::move( state ), vec_n, true ) );
+}
+
+template<typename Config>
 std::pair<BatchedInferenceState<Config>, BatchedInferenceState<Config>> BatchedInferenceState<Config>::split(
   const size_t n )
 {
@@ -1042,7 +1061,7 @@ std::string BatchedInferenceState<Config>::debug_string( const bool prompt_detai
     for ( const auto& p : prompts_ ) {
       oss << " (" << p.prompt_id.base58digest().substr( 0, 8 ) << ", " << p.context_id << ", " << p.token << ", "
           << p.token_pos << ", " << ( static_cast<float>( p.temperature ) / 255.0f ) << ", " << p.prompt_length << ", "
-          << p.finished << ", {" << static_cast<int>(p.kv_tier) << ", " << static_cast<int>(p.kv_rank) << "}) ";
+          << p.finished << ", {" << static_cast<int>( p.kv_tier ) << ", " << static_cast<int>( p.kv_rank ) << "}) ";
     }
 
     oss << "]";
