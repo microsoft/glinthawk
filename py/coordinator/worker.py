@@ -3,7 +3,7 @@ import socket
 import itertools
 import asyncio
 
-from typing import Tuple
+from typing import Tuple, Any
 from dataclasses import dataclass, field
 
 from .base import Stage, Platform
@@ -25,8 +25,8 @@ class Worker:
     reader: asyncio.StreamReader = None
     writer: asyncio.StreamWriter = None
 
-    model_slice_start: Tuple[int, Stage] = (0, Stage.PreAttention)
-    model_slice_end: Tuple[int, Stage] = (0, Stage.Classification)
+    model_slice_start: Tuple[int, Any] = (0, Stage.PreAttention)
+    model_slice_end: Tuple[int, Any] = (0, Stage.Classification)
 
     concurrency_size_pre: int = 16
     concurrency_size_att: int = 16
