@@ -32,6 +32,40 @@ struct CUDADeleter
   }
 };
 
+template<bool flag = false>
+void STATIC_ASSERT_NO_MATCH()
+{
+  static_assert( flag, "Unsupported type" );
+}
+
+template<typename DType>
+__host__ __device__ cudaDataType_t get_cuda_data_type()
+{
+  if constexpr ( std::is_same_v<DType, glinthawk::float16_t> ) {
+    return CUDA_R_16F;
+  } else if constexpr ( std::is_same_v<DType, glinthawk::bfloat16_t> ) {
+    return CUDA_R_16BF;
+  } else if constexpr ( std::is_same_v<DType, glinthawk::float32_t> ) {
+    return CUDA_R_32F;
+  } else {
+    STATIC_ASSERT_NO_MATCH();
+  }
+}
+
+template<typename DType>
+__host__ __device__ DType get_dtype_infinity()
+{
+  if constexpr ( std::is_same_v<DType, glinthawk::float16_t> ) {
+    return CUDART_INF_FP16;
+  } else if constexpr ( std::is_same_v<DType, glinthawk::bfloat16_t> ) {
+    return CUDART_INF_BF16;
+  } else if constexpr ( std::is_same_v<DType, glinthawk::float32_t> ) {
+    return INFINITY;
+  } else {
+    STATIC_ASSERT_NO_MATCH();
+  }
+}
+
 template<typename DType>
 class Operations
 {
@@ -51,17 +85,6 @@ protected:
   constexpr static float beta = 0.0f;
 
   constexpr static cublasComputeType_t GH_CUDA_COMPUTE_TYPE = CUBLAS_COMPUTE_32F;
-  constexpr static cudaDataType_t GH_CUDA_DATA_TYPE = []() consteval -> cudaDataType_t {
-    if constexpr ( std::is_same_v<DType, glinthawk::float16_t> ) {
-      return CUDA_R_16F;
-    } else if constexpr ( std::is_same_v<DType, glinthawk::bfloat16_t> ) {
-      return CUDA_R_16BF;
-    } else if constexpr ( std::is_same_v<DType, glinthawk::float32_t> ) {
-      return CUDA_R_32F;
-    } else {
-      []<bool flag = false>() { static_assert( flag, "Unsupported type" ); }();
-    }
-  }();
 
 public:
   Operations( const size_t num_streams, const size_t rng_states, const size_t batch_size = 1 );
@@ -150,7 +173,7 @@ __global__ void normalize_and_scale(
     } else if constexpr ( std::is_same_v<DType, glinthawk::bfloat16_t> ) {
       output[gb_i] = weight[i] * __float2bfloat16( __bfloat162float( x[gb_i] ) / denom );
     } else {
-      []<bool flag = false>() { static_assert( flag, "Unsupported type" ); }();
+      STATIC_ASSERT_NO_MATCH();
     }
   }
 }
@@ -301,21 +324,13 @@ __global__ void argmax_batched_init( uint32_t* output_arg, DType* output, const 
     s_out[tid] = x[global_tid];
     a_out[tid] = local_tid;
   } else {
-    if constexpr ( std::is_same_v<DType, glinthawk::float16_t> ) {
-      s_out[tid] = -CUDART_INF_FP16;
-    } else {
-      s_out[tid] = -INFINITY;
-    }
+    s_out[tid] = -get_dtype_infinity<DType>();
   }
   if ( local_tid + AMRBS < size ) {
     s_out[tid + AMRBS] = x[global_tid + AMRBS];
     a_out[tid + AMRBS] = local_tid + AMRBS;
   } else {
-    if constexpr ( std::is_same_v<DType, glinthawk::float16_t> ) {
-      s_out[tid + AMRBS] = -CUDART_INF_FP16;
-    } else {
-      s_out[tid + AMRBS] = -INFINITY;
-    }
+    s_out[tid + AMRBS] = -get_dtype_infinity<DType>();
   }
 
   for ( unsigned int s = AMRBS; s > 1; s >>= 1 ) {
@@ -355,21 +370,13 @@ __global__ void argmax_batched_next( uint32_t* output_arg, DType* output, const 
     s_out[tid] = x[global_tid];
     a_out[tid] = x_arg[global_tid];
   } else {
-    if constexpr ( std::is_same_v<DType, glinthawk::float16_t> ) {
-      s_out[tid] = -CUDART_INF_FP16;
-    } else {
-      s_out[tid] = -INFINITY;
-    }
+    s_out[tid] = -get_dtype_infinity<DType>();
   }
   if ( local_tid + AMRBS < size ) {
     s_out[tid + AMRBS] = x[global_tid + AMRBS];
     a_out[tid + AMRBS] = x_arg[global_tid + AMRBS];
   } else {
-    if constexpr ( std::is_same_v<DType, glinthawk::float16_t> ) {
-      s_out[tid + AMRBS] = -CUDART_INF_FP16;
-    } else {
-      s_out[tid + AMRBS] = -INFINITY;
-    }
+    s_out[tid + AMRBS] = -get_dtype_infinity<DType>();
   }
 
   for ( unsigned int s = AMRBS; s > 1; s >>= 1 ) {
@@ -486,8 +493,10 @@ __global__ void gumbel_fix( DType* array,
       array[i] = __float2half( __half2float( array[i] ) / temp - myrandf );
     } else if constexpr ( std::is_same_v<DType, glinthawk::bfloat16_t> ) {
       array[i] = __float2bfloat16( __bfloat162float( array[i] ) / temp - myrandf );
-    } else {
+    } else if constexpr ( std::is_same_v<DType, glinthawk::float32_t> ) {
       array[i] = array[i] / temp - myrandf;
+    } else {
+      STATIC_ASSERT_NO_MATCH();
     }
 
     rng_state[i] = local_state;
@@ -621,14 +630,14 @@ void Operations<DType>::matmul( DType* xout, const DType* x, const DType* W, con
                               k,
                               &alpha,
                               W,
-                              GH_CUDA_DATA_TYPE,
+                              get_cuda_data_type<DType>(),
                               lda,
                               x,
-                              GH_CUDA_DATA_TYPE,
+                              get_cuda_data_type<DType>(),
                               ldb,
                               &beta,
                               xout,
-                              GH_CUDA_DATA_TYPE,
+                              get_cuda_data_type<DType>(),
                               ldc,
                               GH_CUDA_COMPUTE_TYPE,
                               CUBLAS_GEMM_DEFAULT ) );
