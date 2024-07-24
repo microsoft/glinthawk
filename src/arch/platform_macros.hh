@@ -29,7 +29,7 @@
 #if defined( TARGET_PLATFORM_CUDA )
 #define _GLINTHAWK_DTYPE_ __nv_bfloat16
 #elif defined( TARGET_PLATFORM_AMD64 )
-#define _GLINTHAWK_DTYPE_ _Float16
+#error "BFloat16 is not supported on AMD64"
 #endif
 #endif
 
