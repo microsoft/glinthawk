@@ -11,6 +11,7 @@ import struct
 import json
 import tempfile
 import ctypes
+import math
 import torch
 
 from tqdm import tqdm
@@ -19,9 +20,37 @@ from collections import defaultdict
 from typing import List, Dict, Tuple, BinaryIO
 
 
-def precompute_freqs_cis(dim: int, end: int, theta: float = 10000.0):
+def apply_scaling(freqs: torch.Tensor):
+    scale_factor = 8
+    low_freq_factor = 1
+    high_freq_factor = 4
+    old_context_len = 8192
+
+    low_freq_wavelen = old_context_len / low_freq_factor
+    high_freq_wavelen = old_context_len / high_freq_factor
+    new_freqs = []
+
+    for freq in freqs:
+        wavelen = 2 * math.pi / freq
+        if wavelen < high_freq_wavelen:
+            new_freqs.append(freq)
+        elif wavelen > low_freq_wavelen:
+            new_freqs.append(freq / scale_factor)
+        else:
+            assert low_freq_wavelen != high_freq_wavelen
+            smooth = (old_context_len / wavelen - low_freq_factor) / (high_freq_factor - low_freq_factor)
+            new_freqs.append((1 - smooth) * freq / scale_factor + smooth * freq)
+
+    return torch.tensor(new_freqs, dtype=freqs.dtype, device=freqs.device)
+
+
+def precompute_freqs_cis(dim: int, end: int, theta: float = 10000.0, use_scaled: bool = False):
     freqs = 1.0 / (theta ** (torch.arange(0, dim, 2)[: (dim // 2)].float() / dim))
     t = torch.arange(end, device=freqs.device, dtype=torch.float32)
+
+    if use_scaled:
+        freqs = apply_scaling(freqs)
+
     freqs = torch.outer(t, freqs).float()
     freqs_cos = torch.cos(freqs)  # real part
     freqs_sin = torch.sin(freqs)  # imaginary part
@@ -89,7 +118,10 @@ def export(p: Dict[str, int], state_dict_map: Dict[str, List[Path,]], dest_dir: 
 
     # Writing base weights
     with open(os.path.join(dest_dir, f"BASEWEIGHTS_{dtype_text}"), "wb") as fout:
-        freqs_cos, freqs_sin = precompute_freqs_cis(p["dim"] // p["n_heads"], p["max_seq_len"] * 2, p["rope_theta"])
+        freqs_cos, freqs_sin = precompute_freqs_cis(
+            p["dim"] // p["n_heads"], p["max_seq_len"] * 2, p["rope_theta"], p["use_scaled_rope"]
+        )
+
         state_dict_map["freqs_cos.weight"] = freqs_cos[: p["max_seq_len"]]
         state_dict_map["freqs_sin.weight"] = freqs_sin[: p["max_seq_len"]]
 
@@ -131,7 +163,7 @@ def form_dict(params: Dict[str, int], model_paths: List[Path], temp_path) -> Dic
     hidden_dim = 0
 
     for p in tqdm(model_paths, desc="Loading checkpoint pieces"):
-        state_dict_piece = torch.load(p, map_location="cpu", mmap=True)
+        state_dict_piece = torch.load(p, map_location="cpu", mmap=True, weights_only=True)
 
         if not hidden_dim and "layers.0.feed_forward.w1.weight" in state_dict_piece:
             hidden_dim = state_dict_piece["layers.0.feed_forward.w1.weight"].shape[0]
