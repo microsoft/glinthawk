@@ -55,8 +55,8 @@ private:
 
   float current_temp() const
   {
-    constexpr float T0 = 0.1f;
-    constexpr float T1 = 0.9f;
+    constexpr float T0 = 0.9f;
+    constexpr float T1 = 0.1f;
     constexpr size_t N = 5;
     // i.e., first N tokens will be sampled with temperature T0, then T1
 
