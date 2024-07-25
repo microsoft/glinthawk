@@ -291,7 +291,9 @@ BaseWeights<Config, DType>::BaseWeights( const DType* model )
   rms_final_weight = _advance_pointer( ptr, Config::dim );
   freq_cis_real = _advance_pointer( ptr, Config::seq_len * head_size / 2 );
   freq_cis_imag = _advance_pointer( ptr, Config::seq_len * head_size / 2 );
-  wcls = Config::wcls_present ? ptr : token_embedding_table;
+  wcls = Config::wcls_present ? _advance_pointer( ptr, Config::vocab_size * Config::dim ) : token_embedding_table;
+
+  CHECK_EQ( ptr - model, BaseWeights::base_size() / sizeof( DType ) ) << "Base weights size mismatch";
 }
 
 /* LAYER WEIGHTS */
@@ -310,6 +312,8 @@ LayerWeights<Config, DType>::LayerWeights( const DType* model )
   this->w1 = _advance_pointer( ptr, Config::dim * Config::hidden_dim );
   this->w2 = _advance_pointer( ptr, Config::dim * Config::hidden_dim );
   this->w3 = _advance_pointer( ptr, Config::dim * Config::hidden_dim );
+
+  CHECK_EQ( ptr - model, LayerWeights::layer_size() / sizeof( DType ) ) << "Layer weights size mismatch";
 }
 
 /* RUN STATE */
