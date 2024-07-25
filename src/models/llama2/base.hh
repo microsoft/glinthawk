@@ -16,6 +16,7 @@
 #include "context.hh"
 #include "models/llama2/ops/concept.hh"
 #include "models/types.hh"
+#include "util/demangle.hh"
 #include "variants.hh"
 
 namespace glinthawk::models::llama2 {
@@ -252,7 +253,7 @@ ConfigRuntime<T>::ConfigRuntime( const std::filesystem::path& config_file,
   CHECK_LT( end_layer_num, T::n_layers ) << "End layer must be less than the number of layers.";
   CHECK_LE( start_layer_num, end_layer_num ) << "Start layer must be less than or equal to end layer.";
 
-  LOG( INFO ) << "Instantiated settings for " << typeid( T ).name() << ": " << to_string();
+  LOG( INFO ) << "Instantiated settings for " << util::demangle( typeid( T ).name() ) << ": " << to_string();
 }
 
 template<typename T>
@@ -321,17 +322,19 @@ LayerWeights<Config, DType>::LayerWeights( const DType* model )
 template<typename Config, typename DType, typename ContextType>
 ScratchPad<Config, DType, ContextType>::ScratchPad( const ConfigRuntime<Config>& settings, DType* buffer )
   : buffer_( buffer )
-  , x( buffer_ )
-  , xb( buffer_ + Config::dim * settings.concurrency_limit )
-  , xb2( xb + Config::dim * settings.concurrency_limit )
-  , q( xb2 + Config::dim * settings.concurrency_limit )
-  , kv( q + Config::dim * settings.concurrency_limit )
-  , hb( kv + Config::kv_dim * 2 * settings.concurrency_limit )
-  , hb2( hb + Config::hidden_dim * settings.concurrency_limit )
-  , att( hb2 + Config::hidden_dim * settings.concurrency_limit )
-  , logits( att + Config::n_heads * Config::seq_len * settings.concurrency_limit )
-  , temp( logits + Config::vocab_size * settings.concurrency_limit )
 {
+  auto ptr = buffer_;
+
+  x = _advance_pointer( ptr, Config::dim * settings.concurrency_limit );
+  xb = _advance_pointer( ptr, Config::dim * settings.concurrency_limit );
+  xb2 = _advance_pointer( ptr, Config::dim * settings.concurrency_limit );
+  q = _advance_pointer( ptr, Config::dim * settings.concurrency_limit );
+  kv = _advance_pointer( ptr, Config::kv_dim * 2 * settings.concurrency_limit );
+  hb = _advance_pointer( ptr, Config::hidden_dim * settings.concurrency_limit );
+  hb2 = _advance_pointer( ptr, Config::hidden_dim * settings.concurrency_limit );
+  att = _advance_pointer( ptr, Config::n_heads * Config::seq_len * settings.concurrency_limit );
+  logits = _advance_pointer( ptr, Config::vocab_size * settings.concurrency_limit );
+  temp = _advance_pointer( ptr, temp_buffer_size( settings ) );
 }
 
 template<typename Config, typename DType, typename ContextType>
