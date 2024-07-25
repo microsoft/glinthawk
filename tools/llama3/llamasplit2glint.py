@@ -102,8 +102,8 @@ def export(p: Dict[str, int], state_dict_map: Dict[str, List[Path,]], dest_dir: 
     with open(os.path.join(dest_dir, "CONFIG"), "wb") as fout:
         fout.write(header)
 
-    base_weight_names = ["tok_embeddings", "norm", "output", "freqs_cos", "freqs_sin"]
-
+    # Unfortunately, the order matters. (refer to models/llama2/base.hh)
+    base_weight_names = ["tok_embeddings", "norm", "freqs_cos", "freqs_sin", "output", ]
     weight_names = [
         "attention_norm",
         "attention.wq",
