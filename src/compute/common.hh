@@ -161,9 +161,14 @@ private:
 
   bool _pop_to_state( StateType& state )
   {
+    if ( shards_.size() == 0 ) {
+      CHECK_EQ( total_states_, 0 );
+      return false;
+    }
     state = std::move( shards_.front() );
     shards_.pop_front();
     total_states_ -= state.batch_size();
+    return true;
   }
 
 public:
@@ -172,17 +177,20 @@ public:
   [[nodiscard]] size_t size() const { return shards_.size(); }
   bool pop_ang_merge( StateType& state, size_t count )
   {
-    if ( count < total_states_ )
+    LOG (INFO) << "total_states_: " << total_states_ << ", count: " << count;
+    if ( count > total_states_ )
       return false;
     std::deque<StateType> shards_to_merge;
     size_t count_merge = 0;
     while ( count_merge < count ) {
       if ( _pop_to_state( state ) ) {
         count_merge += state.batch_size();
+        LOG (INFO) << "Popped state with size state.batch_size(): " << state.batch_size() << ", count_merge is " << count_merge;
         shards_to_merge.push_back( std::move( state ) );
       }
     }
     if ( count_merge > count ) {
+      LOG (INFO) << "Overflow: count_merge is " << count_merge << " but target is " << count;
       state = std::move( shards_to_merge.back() );
       shards_to_merge.pop_back();
 
@@ -196,14 +204,14 @@ public:
     return true;
   }
 
-  bool push_back( StateType&& state )
+  void push_back( StateType&& state )
   {
     total_states_ += state.batch_size();
     shards_.push_back( std::move( state ) );
     dirty = true;
   }
 
-  bool is_dirty() const { return dirty; }
+  [[nodiscard]] bool is_dirty() const { return dirty; }
 
   void set_clean() { dirty = true; }
 };

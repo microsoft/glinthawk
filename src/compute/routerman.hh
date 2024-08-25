@@ -57,6 +57,10 @@ protected:
 };
 
 /// @brief
+/// NOTE: in this simple version of ParentTierRouter, only the parent node (tier=0, rank=0) runs non-attention
+/// computation.
+///
+///
 /// ParentTierRouter is only run on tier=0_rank=0 machines, i.e., it only runs on one node in each `slice' that may
 /// serve multiple layers. The other nodes in the slice have a ChildTierRouter that pass states through with no delay.
 /// There is a possibility for improving this, where the tier-to-tier gather and scatter operations are distributed.
@@ -108,7 +112,7 @@ public:
 protected:
   using Stage = glinthawk::models::InferenceStage;
   using StateType = typename glinthawk::models::BatchedInferenceState<ModelConfig>;
-  using Shards = typename ShardContainer<ModelConfig>;
+  using Shards = typename glinthawk::compute::ShardContainer<ModelConfig>;
 
   /// @brief
   /// For now we assume:
@@ -128,8 +132,6 @@ protected:
   std::vector<std::vector<Shards>> attention_idle_shards_ {};
   // Layer, Stage -> Shards
   std::vector<Shards> non_attention_idle_shards_ {};
-  // Layer, Stage -> Tier, Rank
-  std::vector<std::pair<int8_t, uint8_t>> non_attention_routing_ {};
 
   std::mutex ctx_mutex_ {};
   std::mutex shards_mutex_ {};
@@ -154,13 +156,9 @@ protected:
   /// 1. Push sharded state from kernel -> process_shard, may internally call process_monolith
   void pull_from_kernel();
 
-  void enqueue_shard( StateType&& state );
-
-  void trigger_next_shards( const size_t layer, const Stage stage );
-
   void route_shard( StateType&& state );
 
-  void clean_queue( Shards& queue, size_t target_conc );
+  void clean_queue_if_dirty( Shards& queue, size_t target_conc );
 
   /// @brief
   /// assign_ranks assigns tier_routing_group indices to states that have not been assigned them before. The
@@ -203,9 +201,11 @@ ParentTierRouter<ComputeKernel, ModelConfig>::ParentTierRouter( std::unique_ptr<
   , start_layer_( start_layer )
   , end_layer_( end_layer )
   , non_attention_idle_shards_( ( end_layer_ - start_layer_ + 1 ) * util::to_underlying( Stage::__COUNT__ ) )
-  , non_attention_routing_( ( end_layer_ - start_layer_ + 1 ) * util::to_underlying( Stage::__COUNT__ ), { 0, 0 } )
   , event_loop_thread_( std::bind( &ParentTierRouter::run_event_loop, this, std::placeholders::_1 ) )
 {
+  // Only one tier 0 machine.
+  CHECK_EQ( concurrency_.num_ranks( 0 ), 1 );
+
   // TODO(pouya): if there is only one slice, a generated batch never gets pushed to worker to report generations.
   CHECK( start_layer_ != 0 or end_layer_ != ModelConfig::n_layers - 1 );
 
@@ -243,6 +243,7 @@ ParentTierRouter<ComputeKernel, ModelConfig>::ParentTierRouter( std::unique_ptr<
 template<typename ComputeKernel, typename ModelConfig>
 void ParentTierRouter<ComputeKernel, ModelConfig>::pull_from_kernel()
 {
+  LOG( INFO ) << "Got state in pull_from_kernel()";
   TierRouter<ComputeKernel, ModelConfig>::compute_kernel_->event_fd().read_event();
   models::BatchedInferenceState<ModelConfig> state;
   while ( TierRouter<ComputeKernel, ModelConfig>::compute_kernel_->pop( state ) ) {
@@ -264,6 +265,7 @@ void ParentTierRouter<ComputeKernel, ModelConfig>::pull_from_kernel()
 template<typename ComputeKernel, typename ModelConfig>
 void ParentTierRouter<ComputeKernel, ModelConfig>::push( models::BatchedInferenceState<ModelConfig>&& state )
 {
+  LOG( INFO ) << "Got state in push( models::BatchedInferenceState<ModelConfig>&& state )";
   if ( state.is_sharded() ) {
     CHECK_EQ( state.next_tier(), 0 );
     CHECK_EQ( state.next_rank(), 0 );
@@ -276,6 +278,7 @@ void ParentTierRouter<ComputeKernel, ModelConfig>::push( models::BatchedInferenc
 template<typename ComputeKernel, typename ModelConfig>
 bool ParentTierRouter<ComputeKernel, ModelConfig>::pop( models::BatchedInferenceState<ModelConfig>& state )
 {
+  LOG( INFO ) << "Got state in pop( models::BatchedInferenceState<ModelConfig>& state )";
   std::lock_guard lock { outgoing_.mutex };
 
   if ( outgoing_.queue.empty() ) {
@@ -290,6 +293,7 @@ bool ParentTierRouter<ComputeKernel, ModelConfig>::pop( models::BatchedInference
 template<typename ComputeKernel, typename ModelConfig>
 bool ParentTierRouter<ComputeKernel, ModelConfig>::is_context_available()
 {
+  LOG( INFO ) << "Got state in is_context_available()";
   std::lock_guard lock { ctx_mutex_ };
 
   for ( int tier_i = 0; tier_i < concurrency_.num_tiers(); tier_i++ ) {
@@ -304,7 +308,8 @@ bool ParentTierRouter<ComputeKernel, ModelConfig>::is_context_available()
 template<typename ComputeKernel, typename ModelConfig>
 void ParentTierRouter<ComputeKernel, ModelConfig>::assign_ranks( StateType& state )
 {
-  CHECK( not state.is_sharded() ) << "Cannot assign ranks to shards since sharding is done after assinging ranks!";
+  LOG( INFO ) << "Got state in assign_ranks( StateType& state )";
+  CHECK( not state.is_sharded() ) << "Cannot assign ranks to shards since sharding is done after assigning ranks!";
   CHECK_EQ( state.batch_size(), concurrency_.full_batch() );
 
   bool already_assigned = state.assigned_to_node( 0 );
@@ -327,131 +332,121 @@ void ParentTierRouter<ComputeKernel, ModelConfig>::assign_ranks( StateType& stat
 template<typename ComputeKernel, typename ModelConfig>
 void ParentTierRouter<ComputeKernel, ModelConfig>::route_shard( StateType&& state )
 {
+  LOG( INFO ) << "Got state in route_shard( StateType&& state )";
   CHECK( is_served_in_this_slice( state ) );
   if ( state.next_tier() == 0 and state.next_rank() == 0 ) {
+    LOG( INFO ) << "Sent state to compute_kernel_->push( std::move( state ) )";
     TierRouter<ComputeKernel, ModelConfig>::compute_kernel_->push( std::move( state ) );
   } else {
     {
       std::lock_guard lock { outgoing_.mutex };
       outgoing_.queue.emplace( std::move( state ) );
     }
+    LOG( INFO ) << "Sent state to outgoing_.queue.emplace( std::move( state ) )";
     TierRouter<ComputeKernel, ModelConfig>::event_fd_.write_event();
   };
 }
 
 template<typename ComputeKernel, typename ModelConfig>
-void ParentTierRouter<ComputeKernel, ModelConfig>::clean_queue( Shards& queue, size_t target_conc )
+void ParentTierRouter<ComputeKernel, ModelConfig>::clean_queue_if_dirty( Shards& queue, size_t target_conc )
 {
+  LOG( INFO ) << "Got state in clean_queue_if_dirty( Shards& queue, size_t target_conc ): " << target_conc;
   StateType next_shard;
   bool have_next_shard;
   {
     std::lock_guard lock { shards_mutex_ };
+    if ( queue.is_dirty() == false ) {
+      return;
+    }
     have_next_shard = queue.pop_ang_merge( next_shard, target_conc );
   }
   while ( have_next_shard ) {
-    switch ( next_shard.next_stage() ) {
-      case glinthawk::models::InferenceStage::Attention:
-        next_shard.set_next_tier( next_shard.kv_tier( 0 ) );
-        next_shard.set_next_rank( next_shard.kv_rank( 0 ) );
-        break;
-      case glinthawk::models::InferenceStage::PreAttention:
-      case glinthawk::models::InferenceStage::PostAttention:
-      case glinthawk::models::InferenceStage::Classification:
-        const auto vi = vector_index( next_shard.next_layer(), next_shard.next_stage() );
-        {
-          // TODO: figure this out
-          next_shard.set_next_tier( tier );
-          next_shard.set_next_rank( rank );
-          std::lock_guard lock { shards_mutex_ };
-          have_next_shard = non_attention_idle_shards_[vi].pop_ang_merge( next_shard, target_conc );
-        }
-        if ( have_next_shard ) {
-          route_shard( std::move( next_shard ) );
-        }
-        break;
-      default: LOG( FATAL ) << "Invalid stage: " << next_shard.next_stage(); break;
+    LOG( INFO ) << "1";
+    if ( next_shard.next_stage() == glinthawk::models::InferenceStage::Attention ) {
+      next_shard.set_next_tier( next_shard.kv_tier( 0 ) );
+      next_shard.set_next_rank( next_shard.kv_rank( 0 ) );
+      LOG( INFO ) << "1.1";
+    } else {
+      // Non-attention operations are performed locally
+      next_shard.set_next_tier( 0 );
+      next_shard.set_next_rank( 0 );
+      LOG( INFO ) << "1.2";
     }
     route_shard( std::move( next_shard ) );
-    // TODO: inefficient pop and merge
-    have_next_shard = queue.pop_ang_merge( next_shard, target_conc );
-  }
-  queue.set_clean();
-}
-
-template<typename ComputeKernel, typename ModelConfig>
-void ParentTierRouter<ComputeKernel, ModelConfig>::trigger_next_shards( const size_t layer, const Stage stage )
-{
-  bool trigger_clean = false;
-  CHECK_EQ( stage, glinthawk::models::InferenceStage::Attention );
-  for ( int tier_i = 0; tier_i < concurrency_.num_tiers(); tier_i++ ) {
-    for ( int rank_i = 0; rank_i < concurrency_.num_ranks( tier_i ); rank_i++ ) {
-      {
-        std::lock_guard lock { shards_mutex_ };
-        trigger_clean = attention_idle_shards_[tier_i][rank_i].is_dirty();
-      }
-      if ( trigger_clean ) {
-        clean_queue( attention_idle_shards_[tier_i][rank_i], concurrency_.get( tier_i, stage ) );
-      }
+    LOG( INFO ) << "2";
+    {
+      std::lock_guard lock { shards_mutex_ };
+      LOG( INFO ) << "3.1";
+      have_next_shard = queue.pop_ang_merge( next_shard, target_conc );
+      LOG( INFO ) << "3.2";
     }
+    LOG( INFO ) << "4";
   }
+  LOG( INFO ) << "5";
+  queue.set_clean();
+  LOG( INFO ) << "6";
 }
 
 template<typename ComputeKernel, typename ModelConfig>
 void ParentTierRouter<ComputeKernel, ModelConfig>::process_monolith( StateType&& state )
 {
+  LOG( INFO ) << "Got state in process_monolith( StateType&& state )";
   // This function will only be called a finite number of times, and afterwards monoliths will no longer exist
   assign_ranks( state );
   CHECK( is_served_in_this_slice( state ) );
 
   std::deque<StateType> shards
     = std::move( StateType::split_states( std::move( state ), concurrency_.cutting_plan( state.next_stage() ), true ) );
-  bool trigger_event_fd = false;
   for ( StateType& shard : shards ) {
     shard.set_is_sharded( true );
-    // TODO: set next_tier and next_rank
-    route_shard( shard );
-  }
-}
-
-template<typename ComputeKernel, typename ModelConfig>
-void ParentTierRouter<ComputeKernel, ModelConfig>::enqueue_shard( StateType&& state )
-{
-  CHECK( state.all_assigned_to_nodes() ) << "Sharded states must always be already routed.";
-  switch ( state.next_stage() ) {
-    case glinthawk::models::InferenceStage::Attention: {
-      std::lock_guard lock { shards_mutex_ };
-      auto split_shards = std::move( StateType::split_on_kv( std::move( state ) ) );
-      for ( StateType& shard : split_shards ) {
-        attention_idle_shards_[shard.kv_tier( 0 )][shard.kv_rank( 0 )].push_back( std::move( shard ) );
-      }
-    } break;
-    case glinthawk::models::InferenceStage::PreAttention:
-    case glinthawk::models::InferenceStage::PostAttention:
-    case glinthawk::models::InferenceStage::Classification:
-      const auto vi = vector_index( state.next_layer(), state.next_stage() );
-      {
-        std::lock_guard lock { shards_mutex_ };
-        non_attention_idle_shards_[vi].push_back( std::move( state ) );
-      }
-      // TODO: figure this out
-      clean_queue( non_attention_idle_shards_[vi], 0 );
-      break;
-    default: LOG( FATAL ) << "Invalid stage: " << state.next_stage(); break;
+    if ( shard.next_stage() == glinthawk::models::InferenceStage::Attention ) {
+      shard.set_next_tier( shard.kv_tier( 0 ) );
+      shard.set_next_rank( shard.kv_rank( 0 ) );
+    } else {
+      // Non-attention operations are done locally.
+      shard.set_next_tier( 0 );
+      shard.set_next_rank( 0 );
+    }
+    route_shard( std::move( shard ) );
   }
 }
 
 template<typename ComputeKernel, typename ModelConfig>
 void ParentTierRouter<ComputeKernel, ModelConfig>::process_shard( StateType&& state )
 {
-  auto layer = state.next_layer();
-  auto stage = state.next_stage();
-  enqueue_shard( std::move( state ) );
-  trigger_next_shards( layer, stage );
+  LOG( INFO ) << "Got state in process_shard( StateType&& state )";
+  CHECK( state.all_assigned_to_nodes() ) << "Sharded states must always be already routed.";
+  if ( state.next_stage() == glinthawk::models::InferenceStage::Attention ) {
+    {
+      std::lock_guard lock { shards_mutex_ };
+
+      auto split_shards = std::move( StateType::split_on_kv( std::move( state ) ) );
+      for ( StateType& shard : split_shards ) {
+        attention_idle_shards_[shard.kv_tier( 0 )][shard.kv_rank( 0 )].push_back( std::move( shard ) );
+      }
+    }
+
+    for ( int tier_i = 0; tier_i < concurrency_.num_tiers(); tier_i++ ) {
+      for ( int rank_i = 0; rank_i < concurrency_.num_ranks( tier_i ); rank_i++ ) {
+        clean_queue_if_dirty( attention_idle_shards_[tier_i][rank_i],
+                              concurrency_.get( tier_i, glinthawk::models::InferenceStage::Attention ) );
+      }
+    }
+
+  } else {
+    const auto vi = vector_index( state.next_layer(), state.next_stage() );
+    {
+      std::lock_guard lock { shards_mutex_ };
+      non_attention_idle_shards_[vi].push_back( std::move( state ) );
+    }
+    clean_queue_if_dirty( non_attention_idle_shards_[vi], concurrency_.get( 0, state.next_stage() ) );
+  }
 }
 
 template<typename ComputeKernel, typename ModelConfig>
 void ParentTierRouter<ComputeKernel, ModelConfig>::run_event_loop( std::stop_token stoken )
 {
+  LOG( INFO ) << "Got state in run_event_loop( std::stop_token stoken )";
   while ( event_loop_.wait_next_event( 1'000 ) != EventLoop::Result::Exit ) {
     if ( stoken.stop_requested() ) {
       return;
