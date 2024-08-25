@@ -499,7 +499,10 @@ ChildTierRouter<ComputeKernel, ModelConfig>::ChildTierRouter( std::unique_ptr<Co
     "Compute Kernel",
     Direction::In,
     this->compute_kernel_->event_fd(),
-    [this] { TierRouter<ComputeKernel, ModelConfig>::event_fd_.write_event(); },
+    [this] {
+      TierRouter<ComputeKernel, ModelConfig>::compute_kernel_->event_fd().read_event();
+      TierRouter<ComputeKernel, ModelConfig>::event_fd_.write_event();
+    },
     // Not sure what interest means here. Should check with Sadjad.
     [] { return true; },
     [] { LOG( ERROR ) << "TierRouter stopped pulling from kernel."; } );
