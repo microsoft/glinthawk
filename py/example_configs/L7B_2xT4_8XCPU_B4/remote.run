@@ -1,0 +1,12 @@
+mkdir -p ~/completions/
+mkdir -p ~/worker_logs/L7B_2xT4_8XCPU_B/
+
+python3 run-command-remotes.py  --workers-file example_configs/L7B_2xT4_8XCPU_B4/remote.tier0.conf --ssh-user glinthawk --ssh-key ~/.ssh/glinthawk --command "sudo reboot" --log-stdout ~/worker_logs/L7B_2xT4_8XCPU_B4/ --log-stderr ~/worker_logs/L7B_2xT4_8XCPU_B4/
+python3 run-command-remotes.py  --workers-file example_configs/L7B_2xT4_8XCPU_B4/remote.tier1.conf --ssh-user glinthawk --ssh-key ~/.ssh/glinthawk --command "sudo reboot" --log-stdout ~/worker_logs/L7B_2xT4_8XCPU_B4/ --log-stderr ~/worker_logs/L7B_2xT4_8XCPU_B4/
+
+python3 run-command-remotes.py  --workers-file example_configs/L7B_2xT4_8XCPU_B4/remote.tier0.conf --ssh-user glinthawk --ssh-key ~/.ssh/glinthawk --command "docker pull glinthawk.azurecr.io/glinthawk-worker-cuda:latest" --log-stdout ~/worker_logs/L7B_2xT4_8XCPU_B4/ --log-stderr ~/worker_logs/L7B_2xT4_8XCPU_B4/
+python3 run-command-remotes.py  --workers-file example_configs/L7B_2xT4_8XCPU_B4/remote.tier1.conf --ssh-user glinthawk --ssh-key ~/.ssh/glinthawk --command "docker pull glinthawk.azurecr.io/glinthawk-worker-cuda:latest" --log-stdout ~/worker_logs/L7B_2xT4_8XCPU_B4/ --log-stderr ~/worker_logs/L7B_2xT4_8XCPU_B4/
+
+python3 run.py -C example_configs/L7B_2xT4_8XCPU_B4/coord.json -N 2048 -O ~/completions/ &
+python3 run-docker-remotes.py  --workers-file example_configs/L7B_2xT4_8XCPU_B4/remote.tier0.conf --ssh-user glinthawk --ssh-key ~/.ssh/glinthawk --docker-options "--runtime=nvidia" --docker-options "--gpus all" --mount-ro "/mnt/models/llama-2-7b-chat-glint/" "/app/model/" --mount-rw "/tmp/telegraf.sock" "/tmp/telegraf.sock" --log-stdout ~/worker_logs/L7B_2xT4_8XCPU_B4/ --log-stderr ~/worker_logs/L7B_2xT4_8XCPU_B4/ glinthawk.azurecr.io/glinthawk-worker-cuda:latest '/app/model/' 'llama2-7b-chat' 'simple_piped' __addr__ __port__ $(hostname -i) 3020
+python3 run-docker-remotes.py  --workers-file example_configs/L7B_2xT4_8XCPU_B4/remote.tier1.conf --ssh-user glinthawk --ssh-key ~/.ssh/glinthawk --mount-ro "/mnt/models/llama-2-7b-chat-glint/" "/app/model/" --mount-rw "/tmp/telegraf.sock" "/tmp/telegraf.sock" --log-stdout ~/worker_logs/L7B_2xT4_8XCPU_B4/ --log-stderr ~/worker_logs/L7B_2xT4_8XCPU_B4/ --docker-options "--entrypoint /app/worker-amd64-fp32" glinthawk.azurecr.io/glinthawk-worker-cuda:latest '/app/model/' 'llama2-7b-chat' 'simple_piped' __addr__ __port__ $(hostname -i) 3020

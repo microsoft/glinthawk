@@ -213,6 +213,7 @@ ParentTierRouter<ComputeKernel, ModelConfig>::ParentTierRouter( std::unique_ptr<
     CHECK( kv_slots_tier_s[tier_i] > 0
            or concurrency_.get( tier_i, glinthawk::models::InferenceStage::Attention ) == 0 );
     attention_idle_shards_.emplace_back( concurrency_.num_ranks( tier_i ) );
+    free_contexts_[tier_i] *= concurrency_.num_ranks( tier_i );
   }
 
   if constexpr ( ComputeKernel::Type == KernelType::Batched or ComputeKernel::Type == KernelType::SimpleHybrid ) {
@@ -243,7 +244,6 @@ ParentTierRouter<ComputeKernel, ModelConfig>::ParentTierRouter( std::unique_ptr<
 template<typename ComputeKernel, typename ModelConfig>
 void ParentTierRouter<ComputeKernel, ModelConfig>::pull_from_kernel()
 {
-  LOG( INFO ) << "Got state in pull_from_kernel()";
   TierRouter<ComputeKernel, ModelConfig>::compute_kernel_->event_fd().read_event();
   models::BatchedInferenceState<ModelConfig> state;
   while ( TierRouter<ComputeKernel, ModelConfig>::compute_kernel_->pop( state ) ) {
@@ -265,7 +265,6 @@ void ParentTierRouter<ComputeKernel, ModelConfig>::pull_from_kernel()
 template<typename ComputeKernel, typename ModelConfig>
 void ParentTierRouter<ComputeKernel, ModelConfig>::push( models::BatchedInferenceState<ModelConfig>&& state )
 {
-  LOG( INFO ) << "Got state in push( models::BatchedInferenceState<ModelConfig>&& state )";
   if ( state.is_sharded() ) {
     CHECK_EQ( state.next_tier(), 0 );
     CHECK_EQ( state.next_rank(), 0 );
@@ -278,7 +277,6 @@ void ParentTierRouter<ComputeKernel, ModelConfig>::push( models::BatchedInferenc
 template<typename ComputeKernel, typename ModelConfig>
 bool ParentTierRouter<ComputeKernel, ModelConfig>::pop( models::BatchedInferenceState<ModelConfig>& state )
 {
-  LOG( INFO ) << "Got state in pop( models::BatchedInferenceState<ModelConfig>& state )";
   std::lock_guard lock { outgoing_.mutex };
 
   if ( outgoing_.queue.empty() ) {
@@ -293,7 +291,6 @@ bool ParentTierRouter<ComputeKernel, ModelConfig>::pop( models::BatchedInference
 template<typename ComputeKernel, typename ModelConfig>
 bool ParentTierRouter<ComputeKernel, ModelConfig>::is_context_available()
 {
-  LOG( INFO ) << "Got state in is_context_available()";
   std::lock_guard lock { ctx_mutex_ };
 
   for ( int tier_i = 0; tier_i < concurrency_.num_tiers(); tier_i++ ) {
@@ -308,7 +305,6 @@ bool ParentTierRouter<ComputeKernel, ModelConfig>::is_context_available()
 template<typename ComputeKernel, typename ModelConfig>
 void ParentTierRouter<ComputeKernel, ModelConfig>::assign_ranks( StateType& state )
 {
-  LOG( INFO ) << "Got state in assign_ranks( StateType& state )";
   CHECK( not state.is_sharded() ) << "Cannot assign ranks to shards since sharding is done after assigning ranks!";
   CHECK_EQ( state.batch_size(), concurrency_.full_batch() );
 
@@ -332,17 +328,14 @@ void ParentTierRouter<ComputeKernel, ModelConfig>::assign_ranks( StateType& stat
 template<typename ComputeKernel, typename ModelConfig>
 void ParentTierRouter<ComputeKernel, ModelConfig>::route_shard( StateType&& state )
 {
-  LOG( INFO ) << "Got state in route_shard( StateType&& state )";
   CHECK( is_served_in_this_slice( state ) );
   if ( state.next_tier() == 0 and state.next_rank() == 0 ) {
-    LOG( INFO ) << "Sent state to compute_kernel_->push( std::move( state ) )";
     TierRouter<ComputeKernel, ModelConfig>::compute_kernel_->push( std::move( state ) );
   } else {
     {
       std::lock_guard lock { outgoing_.mutex };
       outgoing_.queue.emplace( std::move( state ) );
     }
-    LOG( INFO ) << "Sent state to outgoing_.queue.emplace( std::move( state ) )";
     TierRouter<ComputeKernel, ModelConfig>::event_fd_.write_event();
   };
 }
@@ -350,7 +343,6 @@ void ParentTierRouter<ComputeKernel, ModelConfig>::route_shard( StateType&& stat
 template<typename ComputeKernel, typename ModelConfig>
 void ParentTierRouter<ComputeKernel, ModelConfig>::clean_queue_if_dirty( Shards& queue, size_t target_conc )
 {
-  LOG( INFO ) << "Got state in clean_queue_if_dirty( Shards& queue, size_t target_conc ): " << target_conc;
   StateType next_shard;
   bool have_next_shard;
   {
@@ -361,36 +353,26 @@ void ParentTierRouter<ComputeKernel, ModelConfig>::clean_queue_if_dirty( Shards&
     have_next_shard = queue.pop_ang_merge( next_shard, target_conc );
   }
   while ( have_next_shard ) {
-    LOG( INFO ) << "1";
     if ( next_shard.next_stage() == glinthawk::models::InferenceStage::Attention ) {
       next_shard.set_next_tier( next_shard.kv_tier( 0 ) );
       next_shard.set_next_rank( next_shard.kv_rank( 0 ) );
-      LOG( INFO ) << "1.1";
     } else {
       // Non-attention operations are performed locally
       next_shard.set_next_tier( 0 );
       next_shard.set_next_rank( 0 );
-      LOG( INFO ) << "1.2";
     }
     route_shard( std::move( next_shard ) );
-    LOG( INFO ) << "2";
     {
       std::lock_guard lock { shards_mutex_ };
-      LOG( INFO ) << "3.1";
       have_next_shard = queue.pop_ang_merge( next_shard, target_conc );
-      LOG( INFO ) << "3.2";
     }
-    LOG( INFO ) << "4";
   }
-  LOG( INFO ) << "5";
   queue.set_clean();
-  LOG( INFO ) << "6";
 }
 
 template<typename ComputeKernel, typename ModelConfig>
 void ParentTierRouter<ComputeKernel, ModelConfig>::process_monolith( StateType&& state )
 {
-  LOG( INFO ) << "Got state in process_monolith( StateType&& state )";
   // This function will only be called a finite number of times, and afterwards monoliths will no longer exist
   assign_ranks( state );
   CHECK( is_served_in_this_slice( state ) );
@@ -414,7 +396,6 @@ void ParentTierRouter<ComputeKernel, ModelConfig>::process_monolith( StateType&&
 template<typename ComputeKernel, typename ModelConfig>
 void ParentTierRouter<ComputeKernel, ModelConfig>::process_shard( StateType&& state )
 {
-  LOG( INFO ) << "Got state in process_shard( StateType&& state )";
   CHECK( state.all_assigned_to_nodes() ) << "Sharded states must always be already routed.";
   if ( state.next_stage() == glinthawk::models::InferenceStage::Attention ) {
     {
@@ -446,7 +427,6 @@ void ParentTierRouter<ComputeKernel, ModelConfig>::process_shard( StateType&& st
 template<typename ComputeKernel, typename ModelConfig>
 void ParentTierRouter<ComputeKernel, ModelConfig>::run_event_loop( std::stop_token stoken )
 {
-  LOG( INFO ) << "Got state in run_event_loop( std::stop_token stoken )";
   while ( event_loop_.wait_next_event( 1'000 ) != EventLoop::Result::Exit ) {
     if ( stoken.stop_requested() ) {
       return;

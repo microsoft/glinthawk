@@ -56,14 +56,14 @@ class Model:
 
         assert self.separate_cls is False, "We don't support separate classification worker yet!"
 
-        assert sum(self.tier_config[i]['concurrency_size_cls'] for i in range(self.n_tiers)) == sum(
-            self.tier_config[i]['concurrency_size_pre'] for i in range(self.n_tiers))
+        assert sum(self.tier_config[i]['concurrency_size_cls']*self.tier_config[i]['ranks'] for i in range(self.n_tiers)) == sum(
+            self.tier_config[i]['concurrency_size_pre']*self.tier_config[i]['ranks'] for i in range(self.n_tiers))
 
-        assert sum(self.tier_config[i]['concurrency_size_cls'] for i in range(self.n_tiers)) == sum(
-            self.tier_config[i]['concurrency_size_att'] for i in range(self.n_tiers))
+        assert sum(self.tier_config[i]['concurrency_size_cls']*self.tier_config[i]['ranks'] for i in range(self.n_tiers)) == sum(
+            self.tier_config[i]['concurrency_size_att']*self.tier_config[i]['ranks'] for i in range(self.n_tiers))
 
-        assert sum(self.tier_config[i]['concurrency_size_cls'] for i in range(self.n_tiers)) == sum(
-            self.tier_config[i]['concurrency_size_post'] for i in range(self.n_tiers))
+        assert sum(self.tier_config[i]['concurrency_size_cls']*self.tier_config[i]['ranks'] for i in range(self.n_tiers)) == sum(
+            self.tier_config[i]['concurrency_size_post']*self.tier_config[i]['ranks'] for i in range(self.n_tiers))
 
         # For each tier, what is the next (slice, rank) to place the worker at.
         self._next_worker_loc = [{"slice": 0, "rank": 0} for _ in range(self.n_tiers)]

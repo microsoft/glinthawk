@@ -177,7 +177,6 @@ public:
   [[nodiscard]] size_t size() const { return shards_.size(); }
   bool pop_ang_merge( StateType& state, size_t count )
   {
-    LOG (INFO) << "total_states_: " << total_states_ << ", count: " << count;
     if ( count > total_states_ )
       return false;
     std::deque<StateType> shards_to_merge;
@@ -185,12 +184,10 @@ public:
     while ( count_merge < count ) {
       if ( _pop_to_state( state ) ) {
         count_merge += state.batch_size();
-        LOG (INFO) << "Popped state with size state.batch_size(): " << state.batch_size() << ", count_merge is " << count_merge;
         shards_to_merge.push_back( std::move( state ) );
       }
     }
     if ( count_merge > count ) {
-      LOG (INFO) << "Overflow: count_merge is " << count_merge << " but target is " << count;
       state = std::move( shards_to_merge.back() );
       shards_to_merge.pop_back();
 
