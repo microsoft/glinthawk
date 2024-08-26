@@ -1,0 +1,16 @@
+PATH_EXP=L7B_2xT4_78xCPU_B312
+PATH_CFG="example_configs/${PATH_EXP}"
+
+mkdir -p ~/completions/$PATH_EXP/
+mkdir -p ~/worker_logs/$PATH_EXP/
+
+python3 run-command-remotes.py --workers-file $PATH_CFG/remote.tier0.conf --workers-file $PATH_CFG/remote.tier1.conf --ssh-user glinthawk --ssh-key ~/.ssh/glinthawk --command "sudo reboot" --log-stdout ~/worker_logs/$PATH_EXP/ --log-stderr ~/worker_logs/$PATH_EXP/
+python3 run-command-remotes.py --workers-file $PATH_CFG/remote.tier0.conf --workers-file $PATH_CFG/remote.tier1.conf --ssh-user glinthawk --ssh-key ~/.ssh/glinthawk --command "docker pull glinthawk.azurecr.io/glinthawk-worker-cuda:latest" --log-stdout ~/worker_logs/$PATH_EXP/ --log-stderr ~/worker_logs/$PATH_EXP/
+python3 run-command-remotes.py --workers-file $PATH_CFG/remote.tier0.conf --workers-file $PATH_CFG/remote.tier1.conf --ssh-user glinthawk --ssh-key ~/.ssh/glinthawk --command "sudo mkdir /mnt/models/; sudo chown glinthawk /mnt/models" --log-stdout ~/worker_logs/$PATH_EXP/ --log-stderr ~/worker_logs/$PATH_EXP/
+python3 send-to-remotes.py --workers-file $PATH_CFG/remote.tier0.conf --workers-file $PATH_CFG/remote.tier1.conf --ssh-user glinthawk --ssh-key ~/.ssh/glinthawk --src_path /mnt/models/llama-2-7b-chat-glint/ --dst_path /mnt/models/ --log-stdout ~/worker_logs/$PATH_EXP/ --log-stderr ~/worker_logs/$PATH_EXP/
+python3 send-to-remotes.py --workers-file $PATH_CFG/remote.tier0.conf --workers-file $PATH_CFG/remote.tier1.conf --ssh-user glinthawk --ssh-key ~/.ssh/glinthawk --src_path /mnt/models/llama-2-70b-chat-glint/ --dst_path /mnt/models/ --log-stdout ~/worker_logs/$PATH_EXP/ --log-stderr ~/worker_logs/$PATH_EXP/
+for i in {0..31}; do python3 run-command-remotes.py --workers-file $PATH_CFG/remote.tier0.conf --workers-file $PATH_CFG/remote.tier1.conf --ssh-user glinthawk --ssh-key ~/.ssh/glinthawk --command "fallocate -l 809533440 /mnt/models/llama-2-7b-chat-glint/LAYER${i}_FP32" --log-stdout ~/worker_logs/$PATH_EXP/ --log-stderr ~/worker_logs/$PATH_EXP/; done
+
+python3 run.py -C $PATH_CFG/coord.json -N 2048 -O ~/completions/
+python3 run-docker-remotes.py --workers-file $PATH_CFG/remote.tier0.conf --ssh-user glinthawk --ssh-key ~/.ssh/glinthawk --docker-options "--runtime=nvidia" --docker-options "--gpus all" --mount-ro "/mnt/models/llama-2-7b-chat-glint/" "/app/model/" --mount-rw "/tmp/telegraf.sock" "/tmp/telegraf.sock" --log-stdout ~/worker_logs/$PATH_EXP/ --log-stderr ~/worker_logs/$PATH_EXP/ glinthawk.azurecr.io/glinthawk-worker-cuda:latest '/app/model/' 'llama2-7b-chat' 'simple_piped' __addr__ __port__ $(hostname -i) 3020
+python3 run-docker-remotes.py --workers-file $PATH_CFG/remote.tier1.conf --ssh-user glinthawk --ssh-key ~/.ssh/glinthawk --mount-ro "/mnt/models/llama-2-7b-chat-glint/" "/app/model/" --mount-rw "/tmp/telegraf.sock" "/tmp/telegraf.sock" --log-stdout ~/worker_logs/$PATH_EXP/ --log-stderr ~/worker_logs/$PATH_EXP/ --docker-options "--entrypoint /app/worker-amd64-fp32" glinthawk.azurecr.io/glinthawk-worker-cuda:latest '/app/model/' 'llama2-7b-chat' 'simple_piped' __addr__ __port__ $(hostname -i) 3020
