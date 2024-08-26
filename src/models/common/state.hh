@@ -1049,11 +1049,12 @@ std::string BatchedInferenceState<Config>::debug_string( const bool prompt_detai
   oss << "BatchedInferenceState(" << "local_id=" << metadata_.id << ", " << "batch_size=" << metadata_.batch_size
       << ", " << "dtype=" << metadata_.dtype << ", " << "route_id=" << metadata_.route_id << ", "
       << "model_id=" << metadata_.model_id << ", " << "next_layer=" << metadata_.next_layer << ", "
-      << "next_stage=" << metadata_.next_stage << ", " << "next_tier=" << metadata_.next_tier << ", "
-      << "next_rank=" << metadata_.next_rank << ", " << "has_activations=" << metadata_.has_activations << ", "
-      << "activations.len=" << activations_.len() << ", " << "has_queries=" << metadata_.has_queries << ", "
-      << "queries.len=" << queries_.len() << ", " << "has_kvs=" << metadata_.has_kvs << ", " << "kvs.len=" << kvs_.len()
-      << ", " << "is_sharded=" << metadata_.is_sharded << ", ";
+      << "next_stage=" << metadata_.next_stage << ", " << "next_tier=" << static_cast<int>( metadata_.next_tier )
+      << ", " << "next_rank=" << static_cast<int>( metadata_.next_rank ) << ", "
+      << "has_activations=" << metadata_.has_activations << ", " << "activations.len=" << activations_.len() << ", "
+      << "has_queries=" << metadata_.has_queries << ", " << "queries.len=" << queries_.len() << ", "
+      << "has_kvs=" << metadata_.has_kvs << ", " << "kvs.len=" << kvs_.len() << ", "
+      << "is_sharded=" << metadata_.is_sharded << ", ";
 
   if ( not prompt_details ) {
     oss << "prompts=[";
