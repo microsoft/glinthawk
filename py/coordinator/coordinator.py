@@ -238,6 +238,13 @@ class Coordinator:
                         f"The first layer is at {socket.inet_ntoa(self.first_worker.ip)}:{self.first_worker.port}."
                     )
 
+                    # TODO: find a direct solution
+                    # We have tp delay a bit here so we can be certain all nodes have received the route. If we don't,
+                    # some nodes will received & process an inference state before know where it should go to.
+                    for i in range(10, 0, -1):
+                        self.logger.info(f"Starting inference in {i}s")
+                        await asyncio.sleep(1)
+
                     # Telling the first worker to generate dummy prompts
                     if self.initial_dummy_count:
                         self.push_message(
