@@ -91,47 +91,52 @@ def shutdown():
 
 async def main(**kwargs):
     workers_file = kwargs["workers_file"]
+    workers = []
+    for path in workers_file:
+        with open(path, "r") as f:
+            for line in f.readlines():
+                line = line.strip().split(" ")
+                assert len(line) >= 2
+
+                worker_address = line[0]
+                worker_port = int(line[1])
+
+                workers.append((worker_address, worker_port))
 
     for sig in (signal.SIGINT, signal.SIGTERM):
         asyncio.get_event_loop().add_signal_handler(sig, lambda: shutdown())
 
+    time_string = time.strftime('%Y-%m-%d-%H-%M-%S', time.gmtime())
+
+    log_std_out = kwargs.get("log_stdout")
+    if log_std_out:
+        log_std_out = os.path.join(log_std_out, time_string)
+        os.makedirs(log_std_out, exist_ok=True)
+
+    log_std_err = kwargs.get("log_stderr")
+    if log_std_err:
+        log_std_err = os.path.join(log_std_err, time_string)
+        os.makedirs(log_std_err, exist_ok=True)
+
     logging.info("Starting workers...")
-
     tasks = []
-    with open(workers_file, "r") as f:
-        for line in f:
-            line = line.strip().split(" ")
-            assert len(line) >= 2
+    for waddr, wip in workers:
 
-            worker_address = line[0]
-            worker_port = int(line[1])
-
-            time_string = time.strftime('%Y-%m-%d-%H-%M-%S', time.gmtime())
-            log_std_out = kwargs.get("log_stdout")
-            log_std_err = kwargs.get("log_stderr")
-
-            if log_std_out:
-                log_std_out = os.path.join(log_std_out, time_string)
-                os.makedirs(log_std_out, exist_ok=True)
-            if log_std_err:
-                log_std_err = os.path.join(log_std_err, time_string)
-                os.makedirs(log_std_err, exist_ok=True)
-
-            tasks += [
-                run_command(
-                    get_ssh_command(
-                        kwargs.get("command"),
-                        worker_address,
-                        kwargs.get("ssh_user"),
-                        kwargs.get("ssh_port"),
-                        kwargs.get("ssh_key"),
-                    ),
-                    worker_address,
-                    worker_port,
-                    log_stdout_dir=log_std_out,
-                    log_stderr_dir=log_std_err,
-                )
-            ]
+        tasks += [
+            run_command(
+                get_ssh_command(
+                    kwargs.get("command"),
+                    waddr,
+                    kwargs.get("ssh_user"),
+                    kwargs.get("ssh_port"),
+                    kwargs.get("ssh_key"),
+                ),
+                waddr,
+                wip,
+                log_stdout_dir=log_std_out,
+                log_stderr_dir=log_std_err,
+            )
+        ]
 
     logging.info(f"{len(tasks)} worker(s) started.")
     logging.info("Press Ctrl+C to stop all workers.")
@@ -147,6 +152,7 @@ async def main(**kwargs):
     "--workers-file",
     "-W",
     help="File containing worker addresses. Each line should contain an address and a port separated by a space.",
+    multiple=True,
     required=True,
 )
 @click.option("--ssh-user", "-u", help="SSH username to connect to hosts.", required=False)
