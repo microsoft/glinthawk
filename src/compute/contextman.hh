@@ -138,7 +138,7 @@ PreallocatingContextManager<Model>::get_contexts( const StateType& state )
     }
   }
 
-  if ( no_context_count < free() ) {
+  if ( no_context_count > free() ) {
     // not enough free contexts to allocate
     return std::nullopt;
   }
@@ -151,7 +151,7 @@ PreallocatingContextManager<Model>::get_contexts( const StateType& state )
       auto& ctx = free_contexts_.front();
       auto [it_new, inserted] = allocated_contexts_.emplace( state.context_id( i ), std::move( ctx ) );
       contexts.push_back( it_new->second );
-      free_contexts_.pop();
+      free_contexts_.pop_front();
     }
   }
 
