@@ -337,7 +337,7 @@ void ParentTierRouter<ComputeKernel, ModelConfig>::route_shard( StateType&& stat
       outgoing_.queue.emplace( std::move( state ) );
     }
     TierRouter<ComputeKernel, ModelConfig>::event_fd_.write_event();
-  };
+  }
 }
 
 template<typename ComputeKernel, typename ModelConfig>

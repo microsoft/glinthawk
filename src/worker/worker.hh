@@ -469,7 +469,7 @@ bool BatchedWorker<ModelConfig, ComputeKernel>::handle_coordinator_message( core
         },
         [] { return true; },
         [] { LOG( ERROR ) << "Shutdown timer stopped."; } );
-      LOG( INFO ) << "5Stopping tier router...";
+      LOG( INFO ) << "Stopping tier router...";
 
       return false;
     }
@@ -703,50 +703,51 @@ bool BatchedWorker<ModelConfig, ComputeKernel>::handle_peer_message( core::Messa
       if ( state.next_layer() == 0 and state.next_stage() == models::InferenceStage::PreAttention and first_parent_ ) {
         /* first worker in the chain */
         for ( size_t i = 0; i < state.batch_size(); i++ ) {
-          const auto& prompt_id = state.prompt_id( i );
-          auto& prompt = prompt_store_.get( prompt_id );
+          if ( state.active( i ) ) {
+            const auto& prompt_id = state.prompt_id( i );
+            auto& prompt = prompt_store_.get( prompt_id );
 
-          // Have we finished processing the prompt?
-          if ( state.token_pos( i ) >= state.prompt_length( i ) ) {
-            // prompt processing has already finished, and this is a generated token
-            __stats__.increment<Counters::TokensGenerated>();
-            prompt.completion().append( state.token( i ) );
-          } else {
-            __stats__.increment<Counters::TokensProcessed>();
-            // we are still processing the prompt tokens; the next token comes directly from the prompt
-            const auto next_token = prompt.prompt().at( state.token_pos( i ) );
-            state.set_token( i, next_token );
+            // Have we finished processing the prompt?
+            if ( state.token_pos( i ) >= state.prompt_length( i ) ) {
+              // prompt processing has already finished, and this is a generated token
+              __stats__.increment<Counters::TokensGenerated>();
+              prompt.completion().append( state.token( i ) );
+            } else {
+              __stats__.increment<Counters::TokensProcessed>();
+              // we are still processing the prompt tokens; the next token comes directly from the prompt
+              const auto next_token = prompt.prompt().at( state.token_pos( i ) );
+              state.set_token( i, next_token );
+            }
+
+            if ( state.finished( i ) ) {
+              prompt_store_.complete( prompt_id );
+
+              // XXX(sadjad): this is actually the length of the prompt+completion; will adjust later.
+              __stats__.add_point<IntDistributions::PromptLength>( state.token_pos( i ) );
+              __stats__.increment<Counters::PromptsCompleted>();
+
+              // TODO(pouya): make sure discarded prompts are ignored in context manager and forward calls
+              state.discard( i );
+            }
           }
 
-          if ( state.finished( i ) ) {
-            prompt_store_.complete( prompt_id );
-
-            // XXX(sadjad): this is actually the length of the prompt+completion; will adjust later.
-            __stats__.add_point<IntDistributions::PromptLength>( state.token_pos( i ) );
-            __stats__.increment<Counters::PromptsCompleted>();
-
-            // TODO(pouya): make sure discarded prompts are ignored in context manager and forward calls
-            state.discard( i );
-
-            // let's replace this with the next prompt, if one is available
-            if ( not prompt_queue_.empty() ) {
-              auto next_prompt_id = prompt_queue_.front();
-              prompt_queue_.pop();
-              auto& next_prompt = prompt_store_.get( next_prompt_id );
-              state.set_prompt( i,
-                                next_prompt_id,
-                                state.context_id( i ),
-                                next_prompt.prompt().at( 0 ),
-                                0,
-                                next_prompt.temperature(),
-                                next_prompt.prompt().count(),
-                                state.kv_tier( i ),
-                                state.kv_rank( i ) );
-            }
+          // let's replace this with the next prompt, if one is available
+          if ( not state.active( i ) and not prompt_queue_.empty() ) {
+            auto next_prompt_id = prompt_queue_.front();
+            prompt_queue_.pop();
+            auto& next_prompt = prompt_store_.get( next_prompt_id );
+            state.set_prompt( i,
+                              next_prompt_id,
+                              state.context_id( i ),
+                              next_prompt.prompt().at( 0 ),
+                              0,
+                              next_prompt.temperature(),
+                              next_prompt.prompt().count(),
+                              state.kv_tier( i ),
+                              state.kv_rank( i ) );
           }
         }
       }
-
       this->tier_router_->push( std::move( state ) );
       break;
     }
