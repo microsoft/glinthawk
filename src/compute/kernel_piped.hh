@@ -233,19 +233,12 @@ void PipedComputeKernel<Model>::bookkeeping_thread_func()
 
     if ( state.next_stage() == Stage::Attention ) {
       CHECK( context_map_.find( state.id() ) == context_map_.end() );
-      std::vector<ContextPtr> contexts;
-      contexts.reserve( model_.concurrency.get( Stage::Attention ) );
+      auto contexts_opt = model_.context_manager.get_contexts( state );
+      CHECK( contexts_opt.has_value() ) << "tier router guaranteed space, but context manager doesn't have enough";
 
-      for ( size_t i = 0; i < state.batch_size(); i++ ) {
-        // context_manager has an internal thread safety lock, we should never hold a lock while calling it
-        auto ctx = model_.context_manager.get_context( state.context_id( i ) );
-        CHECK( ctx ) << "TierRouter has guaranteed context space, but compute kernel doesn't have any";
-        contexts.push_back( std::move( ctx ) );
-      }
       {
         std::lock_guard lock { context_mutex_ };
-        // TODO(pouya): why move vector of context? is context non-copyable? Will this line even work on a map?
-        context_map_[state.id()] = std::move( contexts );
+        context_map_[state.id()] = contexts_opt.value();
       }
     }
 
