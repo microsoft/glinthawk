@@ -210,6 +210,8 @@ public:
 
   [[nodiscard]] bool is_dirty() const { return dirty; }
 
+  [[nodiscard]] size_t total_states() const { return total_states_; }
+
   void set_clean() { dirty = true; }
 };
 
