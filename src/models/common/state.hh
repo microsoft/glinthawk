@@ -1056,7 +1056,7 @@ std::string BatchedInferenceState<Config>::debug_string( const bool prompt_detai
       << "has_kvs=" << metadata_.has_kvs << ", " << "kvs.len=" << kvs_.len() << ", "
       << "is_sharded=" << metadata_.is_sharded << ", ";
 
-  if ( not prompt_details ) {
+  if ( prompt_details ) {
     oss << "prompts=[";
 
     for ( const auto& p : prompts_ ) {
