@@ -73,6 +73,11 @@ message SetRoute
   repeated LayerToAddress layer_to_address = 2;
 }
 
+message AckRoute
+{
+  uint32 route_id = 1;
+}
+
 message WorkerStats
 {
   uint64 states_received = 1;

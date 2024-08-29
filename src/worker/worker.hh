@@ -440,6 +440,7 @@ bool BatchedWorker<ModelConfig, ComputeKernel>::handle_coordinator_message( core
                                             static_cast<uint8_t>( proto.rank() ),
                                             proto.randomize() );
 
+      this->coordinator_.message_handler.push_message( { Message::OpCode::AckInitialize, "" } );
       LOG( INFO ) << "Worker initialized.";
       break;
     }
@@ -518,6 +519,10 @@ bool BatchedWorker<ModelConfig, ComputeKernel>::handle_coordinator_message( core
       }
 
       route_set_.emplace( proto.route_id(), new_route );
+
+      protobuf::AckRoute ack_proto;
+      ack_proto.set_route_id(proto.route_id());
+      coordinator_.message_handler.push_message( { Message::OpCode::AckRoute, ack_proto.SerializeAsString() } );
 
       LOG( INFO ) << "Route set: " << route_str.str();
       break;

@@ -15,7 +15,9 @@ class Message:
         Bye = enum.auto()
 
         InitializeWorker = enum.auto()
+        AckInitialize = enum.auto()
         SetRoute = enum.auto()
+        AckRoute = enum.auto()
         PushDummyPrompts = enum.auto()
         PushPrompts = enum.auto()
         PushCompletions = enum.auto()

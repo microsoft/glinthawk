@@ -15,8 +15,14 @@ class Worker:
         Connected = enum.auto()
         Disconnected = enum.auto()
 
+    class Handshake(enum.Enum):
+        Uninitiated = enum.auto()
+        LayerAssigned = enum.auto()
+        RouteAssigned = enum.auto()
+
     id: int = field(default_factory=itertools.count().__next__)
     state: State = State.Connected
+    handshake_status: Handshake = Handshake.Uninitiated
     platform: Platform_Type = None
     kernel: Kernel_Type = None
 

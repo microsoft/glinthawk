@@ -20,7 +20,9 @@ public:
     Bye,
 
     InitializeWorker,
+    AckInitialize,
     SetRoute,
+    AckRoute,
     PushDummyPrompts,
     PushPrompts,
     PushCompletions,
@@ -37,7 +39,9 @@ public:
     "Bye",
 
     "InitializeWorker",
+    "AckInitialize",
     "SetRoute",
+    "AckRoute",
     "PushDummyPrompts",
     "PushPrompts",
     "PushCompletions",

@@ -225,7 +225,11 @@ class Coordinator:
 
                 self.logger.info(f"Worker {worker.id} is at {proto.ip}:{worker.port} [{worker}].")
 
-                if self.model.all_assigned():
+            elif message.opcode == Message.OpCode.AckInitialize:
+                worker.handshake_status = worker.Handshake.LayerAssigned
+
+                if self.model.all_assigned() and all(w_.handshake_status == Worker.Handshake.LayerAssigned for w_ in
+                                                     self.workers):
                     assert self.first_worker is not None
                     self.logger.info("All workers have been assigned layers; setting routes.")
                     routing_message = self.create_routing_message().SerializeToString()
@@ -238,24 +242,21 @@ class Coordinator:
                         f"The first layer is at {socket.inet_ntoa(self.first_worker.ip)}:{self.first_worker.port}."
                     )
 
-                    # TODO: find a direct solution
-                    # We have tp delay a bit here so we can be certain all nodes have received the route. If we don't,
-                    # some nodes will received & process an inference state before know where it should go to.
-                    for i in range(10, 0, -1):
-                        self.logger.info(f"Starting inference in {i}s")
-                        await asyncio.sleep(1)
+            elif message.opcode == Message.OpCode.AckRoute:
+                worker.handshake_status = Worker.Handshake.RouteAssigned
 
+                if all(w_.handshake_status == Worker.Handshake.RouteAssigned for w_ in
+                       self.workers) and self.initial_dummy_count:
                     # Telling the first worker to generate dummy prompts
-                    if self.initial_dummy_count:
-                        self.push_message(
-                            self.first_worker,
-                            Message.OpCode.PushDummyPrompts,
-                            protobuf.PushDummyPrompts(
-                                count=self.initial_dummy_count,
-                            ),
-                        )
+                    self.push_message(
+                        self.first_worker,
+                        Message.OpCode.PushDummyPrompts,
+                        protobuf.PushDummyPrompts(
+                            count=self.initial_dummy_count,
+                        ),
+                    )
 
-                        self.generated_dummies += self.initial_dummy_count
+                    self.generated_dummies += self.initial_dummy_count
 
             elif message.opcode == Message.OpCode.PushCompletions:
                 proto = protobuf.PushCompletions()
@@ -281,8 +282,12 @@ class Coordinator:
         while self.initial_dummy_count > 0:
             await asyncio.sleep(10)
 
-            if not self.is_running() or not self.model.all_assigned():
+            if not self.is_running():
                 break
+
+            if not (self.model.all_assigned() and all(w_.handshake_status == Worker.Handshake.RouteAssigned for w_ in
+                                                      self.workers)):
+                continue
 
             count = (self.initial_dummy_count // 2) - (self.generated_dummies - self.completed_dummies)
             if count <= 0:
@@ -304,7 +309,11 @@ class Coordinator:
         while True:
             await asyncio.sleep(10)
 
-            if not self.is_running() or not self.model.all_assigned():
+            if not self.is_running():
+                break
+
+            if not (self.model.all_assigned() and all(w_.handshake_status == Worker.Handshake.RouteAssigned for w_ in
+                                                      self.workers)):
                 continue
 
             if not self.prompt_queue:
