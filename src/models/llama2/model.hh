@@ -262,12 +262,14 @@ template<StateConcept StateType>
 void Llama2<Config, DType, LlamaOperations, Context>::load_embedding( const StateType& states )
 {
   for ( size_t i = 0; i < states.batch_size(); i++ ) {
-    const auto token = states.token( i );
-    CHECK_LT( token, Config::vocab_size );
+    if ( states.active( i ) ) {
+      const auto token = states.token( i );
+      CHECK_LT( token, Config::vocab_size );
 
-    const DType* content_row = this->base_weights_.token_embedding_table + token * Config::dim;
-    ops_.copy(
-      this->scratchpad_.x + i * Config::dim, content_row, Config::dim * sizeof( DType ), CopyType::HostToDevice );
+      const DType* content_row = this->base_weights_.token_embedding_table + token * Config::dim;
+      ops_.copy(
+        this->scratchpad_.x + i * Config::dim, content_row, Config::dim * sizeof( DType ), CopyType::HostToDevice );
+    }
   }
 }
 
@@ -444,12 +446,14 @@ void Llama2<Config, DType, LlamaOperations, Context>::forward_postlude( StateTyp
     states.set_next_stage( InferenceStage::PreAttention );
 
     for ( size_t i = 0; i < states.batch_size(); i++ ) {
-      states.set_token( i, this->scratchpad_.argmax_pos[i] );
-      states.set_token_pos( i, states.token_pos( i ) + 1 );
+      if ( states.active( i ) ) {
+        states.set_token( i, this->scratchpad_.argmax_pos[i] );
+        states.set_token_pos( i, states.token_pos( i ) + 1 );
 
-      if ( states.token( i ) == TOKEN_EOS or states.token_pos( i ) >= Config::seq_len ) {
-        // Discarding the prompt entry is left to the caller, we just set the finished flag here
-        states.set_finished( i );
+        if ( states.token( i ) == TOKEN_EOS or states.token_pos( i ) >= Config::seq_len ) {
+          // Discarding the prompt entry is left to the caller, we just set the finished flag here
+          states.set_finished( i );
+        }
       }
     }
   } else {
@@ -570,24 +574,26 @@ void Llama2<Config, DType, LlamaOperations, Context>::forward_attention( StateTy
 
   if ( states.has_kvs() ) {
     for ( size_t i = 0; i < states.batch_size(); i++ ) {
-      switch ( states.dtype() ) {
-        case DataType::Float16:
-          ops_.template convert_and_copy(
-            contexts[i]->layer( states.next_layer() ).token( states.token_pos( i ) ).key(),
-            reinterpret_cast<LlamaOperations::Float16*>( states.kv( i ).data() ),
-            Config::kv_dim * 2,
-            CopyType::HostToDevice );
-          break;
+      if ( states.active( i ) ) {
+        switch ( states.dtype() ) {
+          case DataType::Float16:
+            ops_.template convert_and_copy(
+              contexts[i]->layer( states.next_layer() ).token( states.token_pos( i ) ).key(),
+              reinterpret_cast<LlamaOperations::Float16*>( states.kv( i ).data() ),
+              Config::kv_dim * 2,
+              CopyType::HostToDevice );
+            break;
 
-        case DataType::Float32:
-          ops_.template convert_and_copy(
-            contexts[i]->layer( states.next_layer() ).token( states.token_pos( i ) ).key(),
-            reinterpret_cast<LlamaOperations::Float32*>( states.kv( i ).data() ),
-            Config::kv_dim * 2,
-            CopyType::HostToDevice );
-          break;
+          case DataType::Float32:
+            ops_.template convert_and_copy(
+              contexts[i]->layer( states.next_layer() ).token( states.token_pos( i ) ).key(),
+              reinterpret_cast<LlamaOperations::Float32*>( states.kv( i ).data() ),
+              Config::kv_dim * 2,
+              CopyType::HostToDevice );
+            break;
 
-        default: LOG( FATAL ) << "invalid dtype";
+          default: LOG( FATAL ) << "invalid dtype";
+        }
       }
     }
   }
