@@ -234,7 +234,8 @@ void PipedComputeKernel<Model>::bookkeeping_thread_func()
     if ( state.next_stage() == Stage::Attention ) {
       CHECK( context_map_.find( state.id() ) == context_map_.end() );
       auto contexts_opt = model_.context_manager.get_contexts( state );
-      CHECK( contexts_opt.has_value() ) << "tier router guaranteed space, but context manager doesn't have enough";
+      CHECK( contexts_opt.has_value() )
+        << "TierRouter has guaranteed context space, but compute kernel doesn't have enough";
 
       {
         std::lock_guard lock { context_mutex_ };

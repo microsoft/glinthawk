@@ -120,6 +120,7 @@ public:
       return { nullptr };
     return { buffer_ + token_num * Config::kv_dim * 2 };
   }
+  bool empty() const { return buffer_ == nullptr; }
 
   constexpr static size_t max_size() { return Config::seq_len * TokenContext<Config, DType>::size(); }
   constexpr static bool is_contiguous() { return true; } // i.e., all kv-pairs for a layer are contiguous in memory

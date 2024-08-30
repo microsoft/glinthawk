@@ -313,15 +313,10 @@ void SimpleHybridComputeKernel<ModelA, ModelB>::bookkeeping_thread_func()
 
     CHECK_EQ( incoming_state.batch_size(), concurrency_ * 2 ) << "Batch size mismatch.";
 
-    // First, let's see if we have enough space for contexts.
-    std::vector<ContextPtrB> incoming_contexts;
-    incoming_contexts.reserve( incoming_state.batch_size() );
-
-    for ( size_t i = 0; i < incoming_state.batch_size(); i++ ) {
-      auto ctx = b_.context_manager.get_context( incoming_state.context_id( i ) );
-      CHECK( ctx ) << "TierRouter has guaranteed context space, but compute kernel doesn't have any";
-      incoming_contexts.push_back( std::move( ctx ) );
-    }
+    auto incoming_contexts_opt = b_.context_manager.get_contexts( incoming_state );
+    CHECK( incoming_contexts_opt.has_value() )
+      << "TierRouter has guaranteed context space, but compute kernel doesn't have enough";
+    auto incoming_contexts = incoming_contexts_opt.value();
 
     // If we're processing the active_states_ at the moment, we prepare the next batch and put it in next_states_.
     // It will be swapped for active_states_ when the processing threads are done.

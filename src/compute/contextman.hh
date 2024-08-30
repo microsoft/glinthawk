@@ -69,6 +69,7 @@ public:
   /// @param state The state for which we want to allocate contexts.
   /// @return An optional containing the contexts for all the prompts in the state, or an empty optional if context
   /// cannot be allocated for some of the prompts.
+  std::optional<std::vector<ContextPtr>> get_contexts( const StateType& state, size_t start_ind, size_t end_ind );
   std::optional<std::vector<ContextPtr>> get_contexts( const StateType& state );
 
   bool release_context( const ContextID& context_id );
@@ -98,6 +99,7 @@ template<typename Model>
 typename PreallocatingContextManager<Model>::ContextPtr PreallocatingContextManager<Model>::get_context(
   const ContextID& context_id )
 {
+  // Deprecated in favor of get_contexts( const StateType& state, size_t start_ind, size_t end_ind )
   std::lock_guard lock { mutex_ };
 
   auto it = allocated_contexts_.find( context_id );
@@ -118,23 +120,23 @@ typename PreallocatingContextManager<Model>::ContextPtr PreallocatingContextMana
 
 template<typename Model>
 std::optional<std::vector<typename PreallocatingContextManager<Model>::ContextPtr>>
-PreallocatingContextManager<Model>::get_contexts( const StateType& state )
+PreallocatingContextManager<Model>::get_contexts( const StateType& state, const size_t start_ind, const size_t end_ind )
 {
   size_t no_context_count = 0;
   std::vector<ContextPtr> contexts;
-  std::vector<bool> allocated;
-  allocated.resize( state.batch_size(), false );
-  contexts.reserve( state.batch_size() );
+  contexts.reserve( end_ind - start_ind );
 
   std::lock_guard lock { mutex_ };
 
+  // TODO: can probably avoid two map lookups
+
   // (1) let's make sure we can assign contexts to all the prompts first
-  for ( size_t i = 0; i < state.batch_size(); i++ ) {
-    const auto it = allocated_contexts_.find( state.context_id( i ) );
-    if ( it == allocated_contexts_.end() ) {
-      no_context_count++;
-    } else {
-      allocated[i] = true;
+  for ( size_t i = start_ind; i < end_ind; i++ ) {
+    if ( state.active( i ) ) {
+      const auto it = allocated_contexts_.find( state.context_id( i ) );
+      if ( it == allocated_contexts_.end() ) {
+        no_context_count++;
+      }
     }
   }
 
@@ -144,18 +146,30 @@ PreallocatingContextManager<Model>::get_contexts( const StateType& state )
   }
 
   // (2) now we can assign the contexts
-  for ( size_t i = 0; i < state.batch_size(); i++ ) {
-    if ( allocated[i] ) {
-      contexts.push_back( allocated_contexts_.at( state.context_id( i ) ) );
+  for ( size_t i = start_ind; i < end_ind; i++ ) {
+    if ( not state.active( i ) ) {
+      contexts.push_back( {} );
     } else {
-      auto& ctx = free_contexts_.front();
-      auto [it_new, inserted] = allocated_contexts_.emplace( state.context_id( i ), std::move( ctx ) );
-      contexts.push_back( it_new->second );
-      free_contexts_.pop_front();
+      const auto it = allocated_contexts_.find( state.context_id( i ) );
+      if ( it == allocated_contexts_.end() ) {
+        auto& ctx = free_contexts_.front();
+        auto [it_new, inserted] = allocated_contexts_.emplace( state.context_id( i ), std::move( ctx ) );
+        contexts.push_back( it_new->second );
+        free_contexts_.pop_front();
+      } else {
+        contexts.push_back( it->second );
+      }
     }
   }
 
   return contexts;
+}
+
+template<typename Model>
+std::optional<std::vector<typename PreallocatingContextManager<Model>::ContextPtr>>
+PreallocatingContextManager<Model>::get_contexts( const StateType& state )
+{
+  return get_contexts( state, 0, state.batch_size() );
 }
 
 template<typename Model>

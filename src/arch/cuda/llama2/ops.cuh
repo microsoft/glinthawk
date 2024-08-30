@@ -265,9 +265,9 @@ LlamaOperations<Config, DType, ContextType>::LlamaOperations( const ConfigRuntim
   // blocks must not exceed (1 << 31) - 1. (i) RMS Norm blocks must not exceed (1 << 31) - 1. (j) RMS Norm scratch pad
   // must have enough space for calculations. (k) Argmax scratch pad must have enough space.
 
-  static_assert( 1024 >= TPB );                                                                  // (a)
-  static_assert( 1024 >= Config::n_heads );                                                      // (b)
-  static_assert( 1024 >= Config::dim / Config::n_heads / 2 );                                    // (c)
+  static_assert( 1024 >= TPB );                                                                   // (a)
+  static_assert( 1024 >= Config::n_heads );                                                       // (b)
+  static_assert( 1024 >= Config::dim / Config::n_heads / 2 );                                     // (c)
   static_assert( ( 1l << 31 ) - 1 >= Config::n_heads );                                           // (d)
   static_assert( ( 1l << 31 ) - 1 >= Config::seq_len );                                           // (e)
   CHECK_GE( ( 1l << 31 ) - 1, div_ceil( Config::dim * settings.concurrency_limit, TPB ) );        // (f)
@@ -314,6 +314,9 @@ void LlamaOperations<Config, DType, ContextType>::attention_0_gemm(
   constexpr uint64_t att_dim = Config::seq_len * Config::n_kv_heads * Config::gqa_size;
 
   for ( size_t i = 0; i < batch_size; i++ ) {
+    if ( layer_contexts[i].empty() ) {
+      continue;
+    }
     const uint64_t m = token_positions[i] + 1;
     common::cuda::CHECK_CUBLAS( cublasGemmStridedBatchedEx( this->cublas_handle_array[i],
                                                             CUBLAS_OP_T,
@@ -371,6 +374,9 @@ void LlamaOperations<Config, DType, ContextType>::attention_2_gemm(
   constexpr uint64_t att_dim = Config::seq_len * Config::n_kv_heads * Config::gqa_size;
 
   for ( size_t i = 0; i < batch_size; i++ ) {
+    if ( layer_contexts[i].empty() ) {
+      continue;
+    }
     const uint64_t k = token_positions[i] + 1;
 
     common::cuda::CHECK_CUBLAS( cublasGemmStridedBatchedEx( this->cublas_handle_array[i],
@@ -437,6 +443,9 @@ void LlamaOperations<Config, DType, ContextType>::apply_rope(
   typename ContextType::TokenContextType token_contexts[] ) const
 {
   for ( uint64_t i = 0; i < curr_batch_size; i++ ) {
+    if ( token_contexts[i].empty() ) {
+      continue;
+    }
     do_rope<DType, Config::head_size, Config::gqa_size>
       <<<Config::n_kv_heads, Config::head_size / 2, 0, this->streams[i]>>>(
         freq_cis_real + token_positions[i] * Config::head_size / 2,

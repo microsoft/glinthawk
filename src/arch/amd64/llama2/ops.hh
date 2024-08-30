@@ -202,6 +202,9 @@ void LlamaOperations<Config, DType, ContextType>::attention_0_gemm(
 #pragma omp parallel for private( i, kv_head ) shared( token_positions, layer_contexts, att, query ) collapse( 2 )
   for ( i = 0; i < batch_size; i++ ) {
     for ( kv_head = 0; kv_head < Config::n_kv_heads; kv_head++ ) {
+      if ( layer_contexts[i].empty() ) {
+        continue;
+      }
       const DType* current_query = query + i * dim_ + kv_head * stride_qry;
       DType* current_att = att + i * att_dim_ + kv_head * stride_att;
 
@@ -254,6 +257,9 @@ void LlamaOperations<Config, DType, ContextType>::attention_2_gemm(
 #pragma omp parallel for private( i, kv_head ) shared( xb, token_positions, layer_contexts, att ) collapse( 2 )
   for ( i = 0; i < batch_size; i++ ) {
     for ( kv_head = 0; kv_head < Config::n_kv_heads; kv_head += Config::attention_rounds ) {
+      if ( layer_contexts[i].empty() ) {
+        continue;
+      }
 
       glinthawk::float32_t sum_s[Config::attention_rounds * Config::gqa_size * Config::head_size];
       std::memset(
@@ -315,6 +321,9 @@ void LlamaOperations<Config, DType, ContextType>::apply_rope(
 #pragma omp parallel for private( i, j ) collapse( 2 )
   for ( i = 0; i < batch_size; i++ ) {
     for ( j = 0; j < Config::n_kv_heads; j++ ) {
+      if ( token_contexts[i].empty() ) {
+        continue;
+      }
       for ( uint64_t k = 0; k < Config::head_size / 2; k++ ) {
         const uint64_t head_q_num = Config::gqa_size * j;
         const uint64_t head_k_num = j;

@@ -289,27 +289,18 @@ void HybridComputeKernel<ModelA, ModelB>::bookkeeping_thread_func()
     if ( state.next_stage() == Stage::Attention ) {
       CHECK( context_map_.find( state.id() ) == context_map_.end() );
 
-      std::vector<ContextPtrA> contexts_a;
-      std::vector<ContextPtrB> contexts_b;
+      auto contexts_a_opt = a_.context_manager.get_contexts( state, 0, a_.concurrency.get( Stage::Attention ) );
+      auto contexts_b_opt
+        = b_.context_manager.get_contexts( state, a_.concurrency.get( Stage::Attention ), state.batch_size() );
 
-      contexts_a.reserve( a_.concurrency.get( Stage::Attention ) );
-      contexts_b.reserve( b_.concurrency.get( Stage::Attention ) );
+      CHECK( contexts_a_opt.has_value() )
+        << "TierRouter has guaranteed context space, but compute kernel doesn't have enough in A";
+      CHECK( contexts_b_opt.has_value() )
+        << "TierRouter has guaranteed context space, but compute kernel doesn't have enough in B";
 
-      for ( size_t i = 0; i < state.batch_size(); i++ ) {
-        if ( i < a_.concurrency.get( Stage::Attention ) ) {
-          auto ctx = a_.context_manager.get_context( state.context_id( i ) );
-          CHECK( ctx ) << "TierRouter has guaranteed context space, but compute kernel doesn't have any";
-          contexts_a.push_back( std::move( ctx ) );
-        } else {
-          auto ctx = b_.context_manager.get_context( state.context_id( i ) );
-          CHECK( ctx ) << "TierRouter has guaranteed context space, but compute kernel doesn't have any";
-          contexts_b.push_back( std::move( ctx ) );
-        }
-      }
       {
         std::lock_guard lock { context_mutex_ };
-        // TODO(pouya): why move vector of context? is context non-copyable? Will this line even work on a map?
-        context_map_[state.id()] = std::make_pair( std::move( contexts_a ), std::move( contexts_b ) );
+        context_map_[state.id()] = std::make_pair( contexts_a_opt.value(), contexts_b_opt.value() );
       }
     }
 

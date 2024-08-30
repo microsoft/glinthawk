@@ -66,22 +66,10 @@ private:
 
   std::vector<ContextPtr> assemble_contexts( const BatchedState& state )
   {
-    bool all_contexts_assigned = true;
-
-    std::vector<ContextPtr> contexts;
-    for ( size_t i = 0; i < state.batch_size(); i++ ) {
-      if ( state.active( i ) ) {
-        auto context = context_manager_->get_context( state.context_id( i ) );
-        all_contexts_assigned = all_contexts_assigned && !context->empty();
-        contexts.push_back( std::move( context ) );
-      } else {
-        contexts.push_back( nullptr );
-      }
-    }
-
-    CHECK( all_contexts_assigned ) << "TierRouter has guaranteed context space, but compute kernel doesn't have any";
-
-    return contexts;
+    auto contexts_opt = context_manager_->get_contexts( state );
+    CHECK( contexts_opt.has_value() )
+      << "TierRouter has guaranteed context space, but compute kernel doesn't have enough";
+    return contexts_opt.value();
   }
 
 public:
@@ -108,9 +96,7 @@ public:
 
   EventFD& event_fd() { return event_fd_; }
 
-  ~BatchedComputeKernel() {
-    LOG( INFO ) << "BatchedComputeKernel shutting down...";
-  }
+  ~BatchedComputeKernel() { LOG( INFO ) << "BatchedComputeKernel shutting down..."; }
 };
 
 template<typename Model>
