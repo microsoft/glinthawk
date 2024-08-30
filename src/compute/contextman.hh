@@ -82,11 +82,13 @@ private:
   std::mutex mutex_ {};
 
   std::list<ContextPtr> free_contexts_ {};
+  const ContextPtr empty_context_;
   std::unordered_map<ContextID, ContextPtr> allocated_contexts_ {};
 };
 
 template<typename Model>
 PreallocatingContextManager<Model>::PreallocatingContextManager( const typename Model::SettingsType& settings )
+  : empty_context_( std::make_shared<typename Model::ContextType>( settings, true ) )
 {
   for ( size_t i = 0; i < settings.max_context_count; i++ ) {
     free_contexts_.emplace_back( std::make_shared<typename Model::ContextType>( settings ) );
@@ -148,7 +150,7 @@ PreallocatingContextManager<Model>::get_contexts( const StateType& state, const 
   // (2) now we can assign the contexts
   for ( size_t i = start_ind; i < end_ind; i++ ) {
     if ( not state.active( i ) ) {
-      contexts.push_back( {} );
+      contexts.push_back( empty_context_ );
     } else {
       const auto it = allocated_contexts_.find( state.context_id( i ) );
       if ( it == allocated_contexts_.end() ) {

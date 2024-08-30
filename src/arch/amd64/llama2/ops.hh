@@ -91,6 +91,7 @@ Context<Config, DType>::Context( const ConfigRuntime<Config>& settings, const bo
     } else {
       ptr = reinterpret_cast<DType*>( new ( std::nothrow )
                                         uint8_t[Context<Config, DType>::max_size( settings.n_layers_loaded() )] );
+      CHECK_NE( ptr, nullptr ) << "Failed to create context vector on AMD64 device";
     }
     return decltype( storage_ ) { ptr };
   }() )

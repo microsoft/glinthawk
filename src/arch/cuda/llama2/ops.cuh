@@ -105,11 +105,8 @@ Context<Config, DType>::Context( const ConfigRuntime<Config>& settings, const bo
       ptr = nullptr;
     } else {
       const cudaError_t err = cudaMalloc( &ptr, Context<Config, DType>::max_size( settings.n_layers_loaded() ) );
-      if ( err == cudaSuccess ) {
-        return decltype( storage_ ) { ptr };
-      } else {
-        return decltype( storage_ ) { nullptr };
-      }
+      CHECK_EQ( err, cudaSuccess ) << "Failed to create context vector on CUDA device";
+      return decltype( storage_ ) { ptr };
     }
     return decltype( storage_ ) { ptr };
   }() )
