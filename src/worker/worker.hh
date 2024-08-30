@@ -192,15 +192,18 @@ void BatchedWorker<ModelConfig, ComputeKernel>::setup_stats_handler()
 template<typename ModelConfig, typename ComputeKernel>
 void BatchedWorker<ModelConfig, ComputeKernel>::setup_peer( std::map<net::Address, Peer>::iterator peer_it )
 {
+  const std::string addr = peer_it->first.to_string();
   peer_it->second.message_handler.install_rules(
     this->event_loop_,
     this->rule_categories_,
     std::bind( &BatchedWorker<ModelConfig, ComputeKernel>::handle_peer_message, this, std::placeholders::_1 ),
-    [] { LOG( INFO ) << "Connection to peer closed."; } );
+    [addr] { LOG( INFO ) << "Connection to peer " << addr << " closed."; },
+    [addr] { LOG( INFO ) << "An exception was triggered in the session for peer " << addr; });
 
   event_loop_.add_rule(
     "Outgoing message",
-    [this, peer_it] {
+    [this, peer_it, addr] {
+      LOG( INFO ) << "handle_msg to " << addr << " begin";
       for ( auto& state : peer_it->second.outgoing_states ) {
         auto state_ser = state.serialize();
         peer_it->second.message_handler.push_message(
@@ -208,6 +211,7 @@ void BatchedWorker<ModelConfig, ComputeKernel>::setup_peer( std::map<net::Addres
       }
 
       peer_it->second.outgoing_states.clear();
+      LOG( INFO ) << "handle_msg to " << addr << " end";
     },
     [peer_it] { return not peer_it->second.outgoing_states.empty(); } );
 }
@@ -296,6 +300,7 @@ void BatchedWorker<ModelConfig, ComputeKernel>::setup_tier_router_and_compute_ke
 template<typename ModelConfig, typename ComputeKernel>
 void BatchedWorker<ModelConfig, ComputeKernel>::handle_completions( const bool reset_timer )
 {
+  LOG( INFO ) << "handle_completions begin";
   // commit all completions
   if ( prompt_store_.completed_count() > 0 ) {
     if ( reset_timer ) {
@@ -308,6 +313,7 @@ void BatchedWorker<ModelConfig, ComputeKernel>::handle_completions( const bool r
     coordinator_.message_handler.push_message( { Message::OpCode::PushCompletions, proto.SerializeAsString() } );
     LOG( INFO ) << "Pushed " << completed_count << " completions to coordinator.";
   }
+  LOG( INFO ) << "handle_completions end";
 }
 
 template<typename ModelConfig, typename ComputeKernel>
@@ -384,6 +390,8 @@ BatchedWorker<ModelConfig, ComputeKernel>::BatchedWorker( const net::Address& wo
 template<typename ModelConfig, typename ComputeKernel>
 void BatchedWorker<ModelConfig, ComputeKernel>::listen_callback()
 {
+
+  LOG( INFO ) << "listen_callback begin";
   net::TCPSocket socket = listen_socket_.accept();
   auto addr = socket.peer_address();
   LOG( INFO ) << "Accepted connection from " << addr.to_string();
@@ -393,6 +401,7 @@ void BatchedWorker<ModelConfig, ComputeKernel>::listen_callback()
 
   CHECK( peer_new ) << "A peer with this address already exists.";
   setup_peer( peer_it );
+  LOG( INFO ) << "listen_callback end";
 }
 
 template<typename ModelConfig, typename ComputeKernel>
@@ -521,7 +530,7 @@ bool BatchedWorker<ModelConfig, ComputeKernel>::handle_coordinator_message( core
       route_set_.emplace( proto.route_id(), new_route );
 
       protobuf::AckRoute ack_proto;
-      ack_proto.set_route_id(proto.route_id());
+      ack_proto.set_route_id( proto.route_id() );
       coordinator_.message_handler.push_message( { Message::OpCode::AckRoute, ack_proto.SerializeAsString() } );
 
       LOG( INFO ) << "Route set: " << route_str.str();
@@ -574,6 +583,7 @@ bool BatchedWorker<ModelConfig, ComputeKernel>::handle_coordinator_message( core
       }
 
       // TODO(pouya): fix the copy paste
+      // TODO: this will break if length of contexts is not a multiple of monolith concurrency size
       size_t added_prompt_count = 0;
       while ( prompt_queue_.size() >= monolith_concurrency_size_ and tier_router_ != nullptr
               and tier_router_->is_context_available() ) {
@@ -661,11 +671,14 @@ bool BatchedWorker<ModelConfig, ComputeKernel>::handle_coordinator_message( core
 template<typename ModelConfig, typename ComputeKernel>
 void BatchedWorker<ModelConfig, ComputeKernel>::handle_tier_router_event()
 {
+
+  LOG( INFO ) << "handle_tier_router_event begin";
   this->tier_router_->event_fd().read_event();
 
   models::BatchedInferenceState<ModelConfig> state;
 
   while ( this->tier_router_->pop( state ) ) {
+    LOG( INFO ) << "handle_tier_router_event loop " << state.debug_string( true );
     __stats__.increment<Counters::StatesProcessed>( state.batch_size() );
 
     const auto next_worker = find_next_worker( route_set_.at( state.route_id() ), state );
@@ -686,12 +699,13 @@ void BatchedWorker<ModelConfig, ComputeKernel>::handle_tier_router_event()
 
     peer_it->second.outgoing_states.push_back( std::move( state ) );
   }
+  LOG( INFO ) << "handle_tier_router_event end";
 }
 
 template<typename ModelConfig, typename ComputeKernel>
 bool BatchedWorker<ModelConfig, ComputeKernel>::handle_peer_message( core::Message&& msg )
 {
-  DLOG( INFO ) << "(Peer) Incoming message: " << msg.info();
+  LOG( INFO ) << "(Peer) Incoming message: " << msg.info();
 
   switch ( msg.opcode() ) {
     case Message::OpCode::BatchedInferenceState: {
@@ -699,7 +713,7 @@ bool BatchedWorker<ModelConfig, ComputeKernel>::handle_peer_message( core::Messa
 
       BatchedState state { msg.payload() };
 
-      DLOG( INFO ) << state.debug_string( true );
+      LOG( INFO ) << state.debug_string( true );
 
       if ( route_set_.find( state.route_id() ) == route_set_.end() ) {
         LOG( FATAL ) << "No route with id=" << state.route_id() << " in route set.";
@@ -769,6 +783,7 @@ bool BatchedWorker<ModelConfig, ComputeKernel>::handle_peer_message( core::Messa
 template<typename ModelConfig, typename ComputeKernel>
 void BatchedWorker<ModelConfig, ComputeKernel>::handle_stats()
 {
+  LOG( INFO ) << "handle_stats begin";
   stats_timer_.read_event();
   if ( telegraf_logger_ != nullptr ) {
     telegraf_logger_->push_measurement( __stats__ );
@@ -777,6 +792,7 @@ void BatchedWorker<ModelConfig, ComputeKernel>::handle_stats()
   // TODO(sadjad): allow pluggable stats handlers
 
   __stats__.zero_out();
+  LOG( INFO ) << "handle_stats end";
 }
 
 template<typename ModelConfig, typename ComputeKernel>
