@@ -36,28 +36,6 @@
 
 namespace glinthawk::core {
 
-namespace {
-
-// XXX(sadjad): this is not ideal. We should unify the way we describe the datatypes across the codebase.
-template<typename DType>
-constexpr DataType get_datatype()
-{
-  if constexpr ( std::is_same_v<DType, float> ) {
-    return DataType::Float32;
-  }
-#if defined( TARGET_PLATFORM_AMD64 )
-  else if constexpr ( std::is_same_v<DType, _Float16> ) {
-    return DataType::Float16;
-  }
-#elif defined( TARGET_PLATFORM_CUDA )
-  else if constexpr ( std::is_same_v<DType, __half> ) {
-    return DataType::Float16;
-  }
-#endif
-}
-
-} // anonymous namespace
-
 template<typename ModelConfig, typename ComputeKernel>
 requires models::llama2::ModelConfig<ModelConfig>
          && compute::KernelConcept<ComputeKernel, models::BatchedInferenceState<ModelConfig>>
@@ -569,7 +547,7 @@ bool BatchedWorker<ModelConfig, ComputeKernel>::handle_coordinator_message( core
       std::uniform_int_distribution<uint8_t> temp_dist { 0, 255 };
 
       for ( size_t i = 0; i < prompt_count; i++ ) {
-        prompt::Prompt new_prompt { generate_next_hash_id(), temp_dist( temp_gen ), 1, { 1 /* TOKEN_BOS */ } };
+        prompt::Prompt new_prompt { generate_next_hash_id(), temp_dist( temp_gen ), 1, { ModelConfig::token_bos } };
         prompt_queue_.push( new_prompt.id() );
         prompt_store_.add( new_prompt.id(), std::move( new_prompt ) );
       }
@@ -734,7 +712,6 @@ bool BatchedWorker<ModelConfig, ComputeKernel>::handle_peer_message( core::Messa
               __stats__.add_point<IntDistributions::PromptLength>( state.token_pos( i ) );
               __stats__.increment<Counters::PromptsCompleted>();
 
-              // TODO(pouya): make sure discarded prompts are ignored in context manager and forward calls
               state.discard( i );
             }
           }

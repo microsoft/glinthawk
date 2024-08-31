@@ -18,7 +18,7 @@ Vocabulary::Vocabulary( const std::filesystem::path& vocabulary_path )
 
   int i;
   for ( i = 0;; i++ ) {
-    if ( not fin.read( reinterpret_cast<char*>( &len ), sizeof( int ) ) ) {
+    if ( not fin.read( reinterpret_cast<char*>( &len ), sizeof( uint32_t ) ) ) {
       break;
     }
 

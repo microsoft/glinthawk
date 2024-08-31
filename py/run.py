@@ -23,19 +23,13 @@ logging.basicConfig(
 )
 
 logo = rich.align.Align.center(
-    rich.panel.Panel(
-        rich.text.Text(
-            """
+    rich.text.Text(
+        """
 ░█▀▀░█░░░▀█▀░█▀█░▀█▀░█░█░█▀█░█░█░█░█
 ░█░█░█░░░░█░░█░█░░█░░█▀█░█▀█░█▄█░█▀▄
 ░▀▀▀░▀▀▀░▀▀▀░▀░▀░░▀░░▀░▀░▀░▀░▀░▀░▀░▀
 """,
-            justify="center",
-        ),
-        expand=False,
-        padding=(0, 2),
-        style="",
-    )
+    ),
 )
 
 
@@ -56,6 +50,7 @@ def main(config_file, **kwargs):
 
     coordinator = Coordinator(**config)
     asyncio.run(coordinator.main(config['listen_address'], config['listen_port']))
+
 
 
 if __name__ == "__main__":

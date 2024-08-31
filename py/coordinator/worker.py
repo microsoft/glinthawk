@@ -3,7 +3,7 @@ import socket
 import itertools
 import asyncio
 
-from typing import Tuple
+from typing import Tuple, Any
 from dataclasses import dataclass, field
 
 from .base import Stage, Platform, Kernel, Stage_Type, Platform_Type, Kernel_Type

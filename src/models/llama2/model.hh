@@ -12,6 +12,7 @@
 
 #include "models/common/state.hh"
 #include "ops/concept.hh"
+#include "util/demangle.hh"
 #include "util/exception.hh"
 #include "util/file_descriptor.hh"
 #include "util/ring_buffer.hh"
@@ -70,10 +71,6 @@ public:
   ConfigRuntime<Config> settings() const { return instance_config_; }
   Operations& ops() { return ops_; }
 
-private:
-  static constexpr uint32_t TOKEN_BOS = 1; // Beginning-of-sequence token
-  static constexpr uint32_t TOKEN_EOS = 2; // End-of-sequence token
-
 protected:
   const ConfigRuntime<Config> instance_config_;
   Operations ops_ { instance_config_ };
@@ -116,8 +113,10 @@ std::string dtype_str()
     return { "FP32" };
   } else if constexpr ( std::is_same_v<DType, glinthawk::float16_t> ) {
     return { "FP16" };
+  } else if constexpr ( std::is_same_v<DType, glinthawk::bfloat16_t> ) {
+    return { "BF16" };
   } else {
-    LOG( FATAL ) << "invalid dtype";
+    []<bool flag = false>() { static_assert( flag, "invalid dtype" ); }();
   }
 }
 
@@ -128,8 +127,10 @@ void CHECK_DTYPE( const DataType dtype )
     CHECK( dtype == DataType::Float32 );
   } else if constexpr ( std::is_same_v<DType, glinthawk::float16_t> ) {
     CHECK( dtype == DataType::Float16 );
+  } else if constexpr ( std::is_same_v<DType, glinthawk::bfloat16_t> ) {
+    CHECK( dtype == DataType::BFloat16 );
   } else {
-    LOG( FATAL ) << "invalid dtype";
+    []<bool flag = false>() { static_assert( flag, "invalid dtype" ); }();
   }
 }
 
@@ -138,7 +139,7 @@ void extract_batch_token( LlamaOperations& ops,
                           ScratchPad<Config, DType, Context>& state,
                           const std::vector<float>& temp )
 {
-  ops.soft_sample( state.logits, temp, temp.size() );
+  ops.soft_sample( state.logits, temp, Config::vocab_size );
   ops.template argmax<Config::vocab_size>( state.argmax_pos, state.logits, state.x, temp.size() );
 }
 
@@ -228,7 +229,7 @@ Llama2<Config, DType, LlamaOperations, Context>::Llama2( const std::filesystem::
                 << " bytes).";
   }
 
-  LOG( INFO ) << "Model " << typeid( decltype( this ) ).name() << " instantiated.";
+  LOG( INFO ) << "Model " << util::demangle( typeid( decltype( this ) ).name() ) << " instantiated.";
 }
 template<typename Config, typename DType, typename LlamaOperations, typename Context>
 template<StateConcept StateType>
@@ -282,7 +283,7 @@ void Llama2<Config, DType, LlamaOperations, Context>::pre_attention_ops( const i
   // attention rmsnorm
   ops_.template rmsnorm<Config::dim>( this->scratchpad_.xb,
                                       this->scratchpad_.x,
-                                      this->scratchpad_.xb2,
+                                      reinterpret_cast<glinthawk::float32_t*>( this->scratchpad_.temp ),
                                       layer_weights.rms_att_weight,
                                       this->scratchpad_.curr_concurrency_size );
 
@@ -325,7 +326,7 @@ void Llama2<Config, DType, LlamaOperations, Context>::attention_ops()
   // softmax
   ops_.attention_softmax( this->scratchpad_.att,
                           this->scratchpad_.batch_token_positions,
-                          this->scratchpad_.temp_softmax,
+                          static_cast<DType*>( this->scratchpad_.temp ),
                           this->scratchpad_.curr_concurrency_size );
 
   ops_.attention_2_gemm( this->scratchpad_.att,
@@ -353,7 +354,7 @@ void Llama2<Config, DType, LlamaOperations, Context>::post_attention_ops( const 
   // ffn rmsnorm
   ops_.template rmsnorm<Config::dim>( this->scratchpad_.xb,
                                       this->scratchpad_.x,
-                                      this->scratchpad_.xb2,
+                                      reinterpret_cast<glinthawk::float32_t*>( this->scratchpad_.temp ),
                                       layer_weights.rms_ffn_weight,
                                       this->scratchpad_.curr_concurrency_size );
 
@@ -383,7 +384,7 @@ void Llama2<Config, DType, LlamaOperations, Context>::classify_ops()
   // final rmsnorm
   ops_.template rmsnorm<Config::dim>( this->scratchpad_.x,
                                       this->scratchpad_.x,
-                                      this->scratchpad_.xb2,
+                                      reinterpret_cast<glinthawk::float32_t*>( this->scratchpad_.temp ),
                                       this->base_weights_.rms_final_weight,
                                       this->scratchpad_.curr_concurrency_size );
 
@@ -403,6 +404,9 @@ void Llama2<Config, DType, LlamaOperations, Context>::forward_prelude( StateType
   const uint32_t next_layer_batch = states.next_layer();
 
   for ( size_t i = 0; i < contexts.size(); i++ ) {
+    // TODO: Make sure empty contexts do not clash with DynamicContext
+    CHECK( contexts[i]->prepare( next_layer_batch, states.token_pos( i ) + 1 ) );
+
     this->scratchpad_.batch_token_positions[i] = states.token_pos( i );
     this->scratchpad_.batch_layer_contexts[i] = contexts[i]->layer( next_layer_batch );
     this->scratchpad_.batch_token_contexts[i] = contexts[i]->layer( next_layer_batch ).token( states.token_pos( i ) );
@@ -450,7 +454,8 @@ void Llama2<Config, DType, LlamaOperations, Context>::forward_postlude( StateTyp
         states.set_token( i, this->scratchpad_.argmax_pos[i] );
         states.set_token_pos( i, states.token_pos( i ) + 1 );
 
-        if ( states.token( i ) == TOKEN_EOS or states.token_pos( i ) >= Config::seq_len ) {
+        if ( states.token( i ) == Config::token_eos or states.token( i ) == Config::token_eot
+           or states.token_pos( i ) >= Config::seq_len ) {
           // Discarding the prompt entry is left to the caller, we just set the finished flag here
           states.set_finished( i );
         }
@@ -484,6 +489,10 @@ void Llama2<Config, DType, LlamaOperations, Context>::forward( StateType& states
 
   for ( size_t layer_num = states.next_layer(); layer_num <= this->instance_config_.end_layer_num; layer_num++ ) {
     for ( size_t i = 0; i < contexts.size(); i++ ) {
+      // make sure the context is allocated
+      // TODO: Make sure empty contexts do not clash with DynamicContext
+      CHECK( contexts[i]->prepare( layer_num, states.token_pos( i ) + 1 ) );
+
       this->scratchpad_.batch_layer_contexts[i] = contexts[i]->layer( layer_num );
       this->scratchpad_.batch_token_contexts[i] = contexts[i]->layer( layer_num ).token( states.token_pos( i ) );
     }
@@ -546,6 +555,9 @@ void Llama2<Config, DType, LlamaOperations, Context>::forward_attention( StateTy
   this->scratchpad_.curr_concurrency_size = states.batch_size();
 
   for ( size_t i = 0; i < states.batch_size(); i++ ) {
+    // TODO: Make sure empty contexts do not clash with DynamicContext
+    CHECK( contexts[i]->prepare( states.next_layer(), states.token_pos( i ) ) );
+
     this->scratchpad_.batch_token_positions[i] = states.token_pos( i );
     this->scratchpad_.batch_layer_contexts[i] = contexts[i]->layer( states.next_layer() );
     this->scratchpad_.batch_token_contexts[i]
@@ -557,15 +569,22 @@ void Llama2<Config, DType, LlamaOperations, Context>::forward_attention( StateTy
   switch ( states.dtype() ) {
     case DataType::Float16:
       ops_.template convert_and_copy( this->scratchpad_.q,
-                                      reinterpret_cast<LlamaOperations::Float16*>( states.queries().data() ),
-                                      states.queries().len() / sizeof( typename LlamaOperations::Float16 ),
+                                      reinterpret_cast<glinthawk::float16_t*>( states.queries().data() ),
+                                      states.queries().len() / sizeof( glinthawk::float16_t ),
+                                      CopyType::HostToDevice );
+      break;
+
+    case DataType::BFloat16:
+      ops_.template convert_and_copy( this->scratchpad_.q,
+                                      reinterpret_cast<glinthawk::bfloat16_t*>( states.queries().data() ),
+                                      states.queries().len() / sizeof( glinthawk::bfloat16_t ),
                                       CopyType::HostToDevice );
       break;
 
     case DataType::Float32:
       ops_.template convert_and_copy( this->scratchpad_.q,
-                                      reinterpret_cast<LlamaOperations::Float32*>( states.queries().data() ),
-                                      states.queries().len() / sizeof( typename LlamaOperations::Float32 ),
+                                      reinterpret_cast<glinthawk::float32_t*>( states.queries().data() ),
+                                      states.queries().len() / sizeof( glinthawk::float32_t ),
                                       CopyType::HostToDevice );
       break;
 
@@ -579,7 +598,15 @@ void Llama2<Config, DType, LlamaOperations, Context>::forward_attention( StateTy
           case DataType::Float16:
             ops_.template convert_and_copy(
               contexts[i]->layer( states.next_layer() ).token( states.token_pos( i ) ).key(),
-              reinterpret_cast<LlamaOperations::Float16*>( states.kv( i ).data() ),
+              reinterpret_cast<glinthawk::float16_t*>( states.kv( i ).data() ),
+            Config::kv_dim * 2,
+            CopyType::HostToDevice );
+          break;
+
+        case DataType::BFloat16:
+          ops_.template convert_and_copy(
+            contexts[i]->layer( states.next_layer() ).token( states.token_pos( i ) ).key(),
+            reinterpret_cast<glinthawk::bfloat16_t*>( states.kv( i ).data() ),
               Config::kv_dim * 2,
               CopyType::HostToDevice );
             break;
@@ -587,7 +614,7 @@ void Llama2<Config, DType, LlamaOperations, Context>::forward_attention( StateTy
           case DataType::Float32:
             ops_.template convert_and_copy(
               contexts[i]->layer( states.next_layer() ).token( states.token_pos( i ) ).key(),
-              reinterpret_cast<LlamaOperations::Float32*>( states.kv( i ).data() ),
+              reinterpret_cast<glinthawk::float32_t*>( states.kv( i ).data() ),
               Config::kv_dim * 2,
               CopyType::HostToDevice );
             break;
@@ -608,16 +635,23 @@ void Llama2<Config, DType, LlamaOperations, Context>::forward_attention( StateTy
   // query buffer. I'm not proud of this.
   switch ( states.dtype() ) {
     case DataType::Float16:
-      ops_.template convert_and_copy( reinterpret_cast<LlamaOperations::Float16*>( states.queries().data() ),
+      ops_.template convert_and_copy( reinterpret_cast<glinthawk::float16_t*>( states.queries().data() ),
                                       this->scratchpad_.xb,
-                                      states.queries().len() / sizeof( typename LlamaOperations::Float16 ),
+                                      states.queries().len() / sizeof( glinthawk::float16_t ),
+                                      CopyType::DeviceToHost );
+      break;
+
+    case DataType::BFloat16:
+      ops_.template convert_and_copy( reinterpret_cast<glinthawk::bfloat16_t*>( states.queries().data() ),
+                                      this->scratchpad_.xb,
+                                      states.queries().len() / sizeof( glinthawk::bfloat16_t ),
                                       CopyType::DeviceToHost );
       break;
 
     case DataType::Float32:
-      ops_.template convert_and_copy( reinterpret_cast<LlamaOperations::Float32*>( states.queries().data() ),
+      ops_.template convert_and_copy( reinterpret_cast<glinthawk::float32_t*>( states.queries().data() ),
                                       this->scratchpad_.xb,
-                                      states.queries().len() / sizeof( typename LlamaOperations::Float32 ),
+                                      states.queries().len() / sizeof( glinthawk::float32_t ),
                                       CopyType::DeviceToHost );
       break;
 

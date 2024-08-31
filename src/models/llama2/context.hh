@@ -35,6 +35,7 @@ template<typename T, typename DType>
 concept ContextConcept = LayerContextConcept<typename T::LayerContextType, DType>
                          && TokenContextConcept<typename T::TokenContextType, DType> && requires( T t ) {
                               { T() };
+                              { t.prepare( 0ull, 0ull ) } -> std::same_as<bool>;
                               { t.layer( 0ull ) } -> std::same_as<typename T::LayerContextType>;
                               { t.empty() } -> std::same_as<bool>;
                               { T::max_size( 0ull ) } -> std::same_as<size_t>;
@@ -114,6 +115,7 @@ public:
       return { nullptr };
     return { buffer_ + token_num * Config::kv_dim * 2 };
   }
+
   const TokenContextType token( const int token_num ) const
   {
     if ( buffer_ == nullptr )
@@ -162,6 +164,11 @@ public:
     , buffer_( nullptr )
   {
   }
+
+  // This function is always called before processing a state, with the current layer number
+  // and token position. For dynamic contexts that allocate memory differently, this function
+  // should be overridden. Returns true on success, false otherwise.
+  bool prepare( [[maybe_unused]] const size_t layer_num, [[maybe_unused]] const size_t token_pos ) { return true; }
 
   LayerContextType layer( const int layer_num ) const
   {

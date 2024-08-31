@@ -32,13 +32,45 @@ struct CUDADeleter
   }
 };
 
+template<bool flag = false>
+void STATIC_ASSERT_NO_MATCH()
+{
+  static_assert( flag, "Unsupported type" );
+}
+
+template<typename DType>
+__host__ __device__ cudaDataType_t get_cuda_data_type()
+{
+  if constexpr ( std::is_same_v<DType, glinthawk::float16_t> ) {
+    return CUDA_R_16F;
+  } else if constexpr ( std::is_same_v<DType, glinthawk::bfloat16_t> ) {
+    return CUDA_R_16BF;
+  } else if constexpr ( std::is_same_v<DType, glinthawk::float32_t> ) {
+    return CUDA_R_32F;
+  } else {
+    STATIC_ASSERT_NO_MATCH();
+  }
+}
+
+template<typename DType>
+__host__ __device__ DType get_dtype_infinity()
+{
+  if constexpr ( std::is_same_v<DType, glinthawk::float16_t> ) {
+    return CUDART_INF_FP16;
+  } else if constexpr ( std::is_same_v<DType, glinthawk::bfloat16_t> ) {
+    return CUDART_INF_BF16;
+  } else if constexpr ( std::is_same_v<DType, glinthawk::float32_t> ) {
+    return INFINITY;
+  } else {
+    STATIC_ASSERT_NO_MATCH();
+  }
+}
+
 template<typename DType>
 class Operations
 {
 public:
   using DeviceUniquePtr = std::unique_ptr<DType, CUDADeleter<DType>>;
-  using Float16 = glinthawk::float16_t;
-  using Float32 = glinthawk::float32_t;
 
 protected:
   mutable cudaStream_t* streams { nullptr };
@@ -46,12 +78,16 @@ protected:
   mutable cublasHandle_t* cublas_handle_array { nullptr };
   int cublas_handle_count {};
 
-  constexpr static cublasComputeType_t computeType = CUBLAS_COMPUTE_32F;
+  mutable std::unique_ptr<curandState, models::common::cuda::CUDADeleter<curandState>> rng_state { nullptr };
+  void setup_rng( unsigned long seed, const uint64_t size, const uint64_t batch_size );
+
   constexpr static float alpha = 1.0f;
   constexpr static float beta = 0.0f;
 
+  constexpr static cublasComputeType_t GH_CUDA_COMPUTE_TYPE = CUBLAS_COMPUTE_32F;
+
 public:
-  Operations( const size_t num_streams );
+  Operations( const size_t num_streams, const size_t rng_states, const size_t batch_size = 1 );
   ~Operations();
 
   Operations( const Operations& ) = delete;
@@ -63,7 +99,8 @@ public:
   void accum( DType* a, const DType* b, const uint64_t batch_size ) const;
 
   template<uint64_t size>
-  void rmsnorm( DType* o, const DType* x, DType* temp, const DType* weight, const uint64_t batch_size ) const;
+  void rmsnorm( DType* o, const DType* x, glinthawk::float32_t* temp, const DType* weight, const uint64_t batch_size )
+    const;
 
   template<uint64_t n>
   void argmax( uint32_t* output, const DType* v, DType* temp, const uint64_t batch_size ) const;
@@ -74,8 +111,7 @@ public:
   template<uint64_t s, uint64_t r>
   void matmul( DType* xo, const DType* x, const DType* w, const uint64_t b ) const;
 
-  template<uint64_t vocab_size>
-  void soft_sample( DType* v, const std::vector<float>& temp_s, const uint64_t batch_size ) const;
+  void soft_sample( DType* v, const std::vector<float>& tempratures, const size_t vocab_size ) const;
 
   DeviceUniquePtr device_allocate( const uint64_t size_bytes ) const;
 
@@ -90,17 +126,25 @@ public:
 
 static_assert( OperationsConcept<Operations<glinthawk::float32_t>, glinthawk::float32_t> );
 static_assert( OperationsConcept<Operations<glinthawk::float16_t>, glinthawk::float16_t> );
+static_assert( OperationsConcept<Operations<glinthawk::bfloat16_t>, glinthawk::bfloat16_t> );
 
 // helper functions are in this anonymous namespace
 namespace {
 
 template<std::unsigned_integral T>
-constexpr T div_ceil( const T x, const T y )
+consteval T div_ceil( const T x, const T y )
 {
   return x / y + ( x % y != 0 );
 }
 
-__global__ void accum_cuda( glinthawk::float16_t* a, const glinthawk::float16_t* b, const uint64_t size )
+template<std::unsigned_integral T>
+T div_ceil_runtime( const T x, const T y )
+{
+  return x / y + ( x % y != 0 );
+}
+
+template<typename DType>
+__global__ void accum_cuda( DType* a, const DType* b, const uint64_t size )
 {
   const uint64_t i = blockIdx.x * TPB + threadIdx.x;
   if ( i < size ) {
@@ -110,11 +154,37 @@ __global__ void accum_cuda( glinthawk::float16_t* a, const glinthawk::float16_t*
 
 namespace { // rmsnorm
 
-template<uint64_t size>
-__global__ void normalize_and_scale_full( glinthawk::float32_t* output,
-                                          const glinthawk::float32_t* x,
-                                          const glinthawk::float32_t* weight,
-                                          const glinthawk::float32_t* ss )
+template<uint64_t size, typename DType>
+__global__ void normalize_and_scale(
+  DType* output,
+  const DType* x,
+  const DType* weight,
+  const glinthawk::float32_t* ss,
+  typename std::enable_if<!std::is_same_v<DType, glinthawk::float32_t>>::type* = nullptr )
+{
+  const uint64_t gb_i = threadIdx.x + blockIdx.x * TPB + blockIdx.y * size;
+  const uint64_t i = threadIdx.x + blockIdx.x * TPB;
+
+  if ( i < size ) {
+    const glinthawk::float32_t denom = sqrtf( ss[blockIdx.y] / size + 1e-5f );
+
+    if constexpr ( std::is_same_v<DType, glinthawk::float16_t> ) {
+      output[gb_i] = weight[i] * __float2half( __half2float( x[gb_i] ) / denom );
+    } else if constexpr ( std::is_same_v<DType, glinthawk::bfloat16_t> ) {
+      output[gb_i] = weight[i] * __float2bfloat16( __bfloat162float( x[gb_i] ) / denom );
+    } else {
+      STATIC_ASSERT_NO_MATCH();
+    }
+  }
+}
+
+template<uint64_t size, typename DType>
+__global__ void normalize_and_scale(
+  glinthawk::float32_t* output,
+  const glinthawk::float32_t* x,
+  const glinthawk::float32_t* weight,
+  const glinthawk::float32_t* ss,
+  typename std::enable_if<std::is_same_v<DType, glinthawk::float32_t>>::type* = nullptr )
 {
   const uint64_t i = threadIdx.x + blockIdx.x * TPB;
 
@@ -124,24 +194,12 @@ __global__ void normalize_and_scale_full( glinthawk::float32_t* output,
   }
 }
 
-template<uint64_t size>
-__global__ void normalize_and_scale_half( glinthawk::float16_t* output,
-                                          const glinthawk::float16_t* x,
-                                          const glinthawk::float16_t* weight,
-                                          const glinthawk::float32_t* ss )
-{
-  const uint64_t gb_i = threadIdx.x + blockIdx.x * TPB + blockIdx.y * size;
-  const uint64_t i = threadIdx.x + blockIdx.x * TPB;
-
-  if ( i < size ) {
-    const glinthawk::float32_t denom = sqrtf( ss[blockIdx.y] / size + 1e-5f );
-    output[gb_i] = weight[i] * __float2half( __half2float( x[gb_i] ) / denom );
-  }
-}
-
-__global__ void reduce_norm_v2_square_batched( glinthawk::float32_t* output,
-                                               const glinthawk::float16_t* x,
-                                               const uint64_t size )
+template<typename DType>
+__global__ void reduce_norm_v2_square_batched(
+  glinthawk::float32_t* output,
+  const DType* x,
+  const uint64_t size,
+  typename std::enable_if<!std::is_same_v<DType, glinthawk::float32_t>>::type* = nullptr )
 {
   extern __shared__ glinthawk::float32_t s_out[];
 
@@ -150,13 +208,13 @@ __global__ void reduce_norm_v2_square_batched( glinthawk::float32_t* output,
   const uint64_t tid = threadIdx.x;                                                    // index within block
 
   if ( local_tid < size ) {
-    const glinthawk::float32_t _x_f = __half2float( x[global_tid] );
+    const glinthawk::float32_t _x_f = static_cast<glinthawk::float32_t>( x[global_tid] );
     s_out[tid] = _x_f * _x_f;
   } else {
     s_out[tid] = 0;
   }
   if ( local_tid + NRBS < size ) {
-    const glinthawk::float32_t _x_f = __half2float( x[global_tid + NRBS] );
+    const glinthawk::float32_t _x_f = static_cast<glinthawk::float32_t>( x[global_tid + NRBS] );
     s_out[tid + NRBS] = _x_f * _x_f;
   } else {
     s_out[tid + NRBS] = 0;
@@ -205,42 +263,44 @@ __global__ void reduce_norm_v2_sum_batched( glinthawk::float32_t* output,
     output[blockIdx.y * gridDim.x + blockIdx.x] = s_out[0] + s_out[1];
 }
 
+template<uint64_t size>
 void square_reduce_step_2( glinthawk::float32_t* output,
                            const glinthawk::float32_t* x,
                            glinthawk::float32_t* temp_1,
                            glinthawk::float32_t* temp_2,
-                           const uint64_t size,
                            const uint64_t batch_size )
-{
-  const uint64_t max_elems_per_block = NRBS * 2;
-  const uint64_t shmem_size = sizeof( glinthawk::float32_t ) * max_elems_per_block;
-
-  const uint64_t grid_size = div_ceil( size, max_elems_per_block );
-
-  dim3 grids( grid_size, batch_size );
-  if ( grid_size == 1 ) {
-    reduce_norm_v2_sum_batched<<<grids, NRBS, shmem_size>>>( output, x, size );
-  } else {
-    reduce_norm_v2_sum_batched<<<grids, NRBS, shmem_size>>>( temp_1, x, size );
-    square_reduce_step_2( output, temp_1, temp_2, temp_1, grid_size, batch_size );
-  }
-}
-
-template<uint64_t size>
-void square_reduce_step_1( glinthawk::float32_t* output, const glinthawk::float16_t* x, const uint64_t batch_size )
 {
   constexpr uint64_t max_elems_per_block = NRBS * 2;
   constexpr uint64_t shmem_size = sizeof( glinthawk::float32_t ) * max_elems_per_block;
   constexpr uint64_t grid_size = div_ceil( size, max_elems_per_block );
 
   dim3 grids( grid_size, batch_size );
-  if ( grid_size == 1 ) {
+  if constexpr ( grid_size == 1 ) {
+    reduce_norm_v2_sum_batched<<<grids, NRBS, shmem_size>>>( output, x, size );
+  } else {
+    reduce_norm_v2_sum_batched<<<grids, NRBS, shmem_size>>>( temp_1, x, size );
+    square_reduce_step_2<grid_size>( output, temp_1, temp_2, temp_1, batch_size );
+  }
+}
+
+template<uint64_t size, typename DType>
+void square_reduce_step_1( glinthawk::float32_t* output,
+                           const DType* x,
+                           const uint64_t batch_size,
+                           typename std::enable_if<!std::is_same_v<DType, glinthawk::float32_t>>::type* = nullptr )
+{
+  constexpr uint64_t max_elems_per_block = NRBS * 2;
+  constexpr uint64_t shmem_size = sizeof( glinthawk::float32_t ) * max_elems_per_block;
+  constexpr uint64_t grid_size = div_ceil( size, max_elems_per_block );
+
+  dim3 grids( grid_size, batch_size );
+  if constexpr ( grid_size == 1 ) {
     reduce_norm_v2_square_batched<<<grids, NRBS, shmem_size>>>( output, x, size );
   } else {
     glinthawk::float32_t* temp_1 = output + batch_size;
     glinthawk::float32_t* temp_2 = temp_1 + batch_size * grid_size;
     reduce_norm_v2_square_batched<<<grids, NRBS, shmem_size>>>( temp_1, x, size );
-    square_reduce_step_2( output, temp_1, temp_2, temp_1, grid_size, batch_size );
+    square_reduce_step_2<grid_size>( output, temp_1, temp_2, temp_1, batch_size );
   }
 }
 
@@ -264,21 +324,13 @@ __global__ void argmax_batched_init( uint32_t* output_arg, DType* output, const 
     s_out[tid] = x[global_tid];
     a_out[tid] = local_tid;
   } else {
-    if constexpr ( std::is_same_v<DType, glinthawk::float16_t> ) {
-      s_out[tid] = -CUDART_INF_FP16;
-    } else {
-      s_out[tid] = -INFINITY;
-    }
+    s_out[tid] = -get_dtype_infinity<DType>();
   }
   if ( local_tid + AMRBS < size ) {
     s_out[tid + AMRBS] = x[global_tid + AMRBS];
     a_out[tid + AMRBS] = local_tid + AMRBS;
   } else {
-    if constexpr ( std::is_same_v<DType, glinthawk::float16_t> ) {
-      s_out[tid + AMRBS] = -CUDART_INF_FP16;
-    } else {
-      s_out[tid + AMRBS] = -INFINITY;
-    }
+    s_out[tid + AMRBS] = -get_dtype_infinity<DType>();
   }
 
   for ( unsigned int s = AMRBS; s > 1; s >>= 1 ) {
@@ -318,21 +370,13 @@ __global__ void argmax_batched_next( uint32_t* output_arg, DType* output, const 
     s_out[tid] = x[global_tid];
     a_out[tid] = x_arg[global_tid];
   } else {
-    if constexpr ( std::is_same_v<DType, glinthawk::float16_t> ) {
-      s_out[tid] = -CUDART_INF_FP16;
-    } else {
-      s_out[tid] = -INFINITY;
-    }
+    s_out[tid] = -get_dtype_infinity<DType>();
   }
   if ( local_tid + AMRBS < size ) {
     s_out[tid + AMRBS] = x[global_tid + AMRBS];
     a_out[tid + AMRBS] = x_arg[global_tid + AMRBS];
   } else {
-    if constexpr ( std::is_same_v<DType, glinthawk::float16_t> ) {
-      s_out[tid + AMRBS] = -CUDART_INF_FP16;
-    } else {
-      s_out[tid + AMRBS] = -INFINITY;
-    }
+    s_out[tid + AMRBS] = -get_dtype_infinity<DType>();
   }
 
   for ( unsigned int s = AMRBS; s > 1; s >>= 1 ) {
@@ -376,7 +420,8 @@ void argmax_step_2( uint32_t* output_arg,
     argmax_batched_next<DType, size><<<grids, AMRBS, shmem_size>>>( output_arg, temp_1, x_arg, x );
   } else {
     argmax_batched_next<DType, size><<<grids, AMRBS, shmem_size>>>( temp_1_arg, temp_1, x_arg, x );
-    argmax_step_2<grid_size>( output_arg, temp_1_arg, temp_1, temp_2_arg, temp_2, temp_1_arg, temp_1, batch_size );
+    argmax_step_2<DType, grid_size>(
+      output_arg, temp_1_arg, temp_1, temp_2_arg, temp_2, temp_1_arg, temp_1, batch_size );
   }
 }
 
@@ -406,6 +451,17 @@ void argmax_step_1( uint32_t* output_arg, const DType* x, const uint64_t batch_s
 
 namespace { // silu
 
+template<typename DType>
+__global__ void silu_direct( DType* _hb, const DType* _hb2, const uint64_t hidden_dim )
+{
+  const uint64_t i = threadIdx.x + blockIdx.x * TPB;
+  if ( i < hidden_dim ) {
+    const DType x = _hb[i];
+    _hb[i] = x / ( DType( 1.0f ) + hexp( -x ) ) * _hb2[i];
+  }
+}
+
+template<>
 __global__ void silu_direct( glinthawk::float32_t* _hb, const glinthawk::float32_t* _hb2, const uint64_t hidden_dim )
 {
   const uint64_t i = threadIdx.x + blockIdx.x * TPB;
@@ -415,51 +471,68 @@ __global__ void silu_direct( glinthawk::float32_t* _hb, const glinthawk::float32
   }
 }
 
-__global__ void silu_direct( glinthawk::float16_t* _hb, const glinthawk::float16_t* _hb2, const uint64_t hidden_dim )
+}
+
+namespace { // soft_sample
+
+template<typename DType>
+__global__ void gumbel_fix( DType* array,
+                            const glinthawk::float32_t temp,
+                            const size_t vocab_size,
+                            curandState* rng_state )
 {
   const uint64_t i = threadIdx.x + blockIdx.x * TPB;
-  if ( i < hidden_dim ) {
-    const glinthawk::float16_t x = _hb[i];
-    _hb[i] = x / ( glinthawk::float16_t( 1.0f ) + hexp( -x ) ) * _hb2[i];
+
+  if ( i < vocab_size ) {
+    curandState local_state = rng_state[i];
+
+    glinthawk::float32_t myrandf = curand_uniform( &local_state );
+    myrandf = logf( -logf( myrandf ) );
+
+    if constexpr ( std::is_same_v<DType, glinthawk::float16_t> ) {
+      array[i] = __float2half( __half2float( array[i] ) / temp - myrandf );
+    } else if constexpr ( std::is_same_v<DType, glinthawk::bfloat16_t> ) {
+      array[i] = __float2bfloat16( __bfloat162float( array[i] ) / temp - myrandf );
+    } else if constexpr ( std::is_same_v<DType, glinthawk::float32_t> ) {
+      array[i] = array[i] / temp - myrandf;
+    } else {
+      STATIC_ASSERT_NO_MATCH();
+    }
+
+    rng_state[i] = local_state;
   }
 }
 
 }
 
-namespace { // randomize
+namespace { // setup_rng
 
-// XXX too slow
-/*
-template<typename DType>
-__global__ void init_random_kernel( DType* buffer, uint64_t len, float min, float max, const uint64_t seed )
+__global__ void setup_rng_kernel( curandState* state, unsigned long seed )
 {
-  const uint64_t idx = blockIdx.x * blockDim.x + threadIdx.x;
-
-  if ( idx < len ) {
-    curandState state;
-    curand_init( seed, idx, 0, &state );
-    DType val = curand_uniform( &state ) * ( max - min ) + min;
-    buffer[idx] = val;
-  }
+  int id = threadIdx.x + blockIdx.x * TPB;
+  curand_init( seed, id, 0, &state[id] );
 }
-*/
 
 }
 
-} // namespace
+} // end of anonymous namespace for helper functions
 
 template<typename DType>
-Operations<DType>::Operations( const size_t num_streams )
+Operations<DType>::Operations( const size_t num_streams, const size_t rng_states, const size_t batch_size )
 {
+  // setup cuBLAS
   CHECK_CUBLAS( cublasCreate( &cublas_handle_default ) );
   cublas_handle_count = num_streams;
   streams = (cudaStream_t*)malloc( num_streams * sizeof( cudaStream_t ) );
   cublas_handle_array = (cublasHandle_t*)malloc( num_streams * sizeof( cublasHandle_t ) );
   for ( size_t i = 0; i < num_streams; i++ ) {
-    cudaStreamCreate( &( streams[i] ) );
+    CHECK_CUDA( cudaStreamCreate( &( streams[i] ) ) );
     CHECK_CUBLAS( cublasCreate( &( cublas_handle_array[i] ) ) );
     CHECK_CUBLAS( cublasSetStream( cublas_handle_array[i], streams[i] ) );
   }
+
+  // setup cuRAND; must be done after setting up the streams
+  setup_rng( 1234u, rng_states, batch_size );
 }
 
 template<typename DType>
@@ -474,6 +547,13 @@ Operations<DType>::~Operations()
   free( cublas_handle_array );
 }
 
+template<typename DType>
+template<uint64_t size>
+void Operations<DType>::accum( DType* a, const DType* b, const uint64_t batch_size ) const
+{
+  accum_cuda<<<div_ceil_runtime( size * batch_size, TPB ), TPB>>>( a, b, size * batch_size );
+}
+
 template<>
 template<uint64_t size>
 void Operations<glinthawk::float32_t>::accum( glinthawk::float32_t* a,
@@ -483,27 +563,17 @@ void Operations<glinthawk::float32_t>::accum( glinthawk::float32_t* a,
   CHECK_CUBLAS( cublasSaxpy( cublas_handle_default, size * batch_size, &alpha, b, 1, a, 1 ) );
 }
 
-template<>
+template<typename DType>
 template<uint64_t size>
-void Operations<glinthawk::float16_t>::accum( glinthawk::float16_t* a,
-                                              const glinthawk::float16_t* b,
-                                              const uint64_t batch_size ) const
+void Operations<DType>::rmsnorm( DType* output,
+                                 const DType* x,
+                                 glinthawk::float32_t* temp,
+                                 const DType* weight,
+                                 const uint64_t batch_size ) const
 {
-  accum_cuda<<<div_ceil( size * batch_size, TPB ), TPB>>>( a, b, size * batch_size );
-}
-
-template<>
-template<uint64_t size>
-void Operations<glinthawk::float16_t>::rmsnorm( glinthawk::float16_t* output,
-                                                const glinthawk::float16_t* x,
-                                                glinthawk::float16_t* temp,
-                                                const glinthawk::float16_t* weight,
-                                                const uint64_t batch_size ) const
-{
-  square_reduce_step_1<size>( reinterpret_cast<glinthawk::float32_t*>( temp ), x, batch_size );
-
   dim3 grid { div_ceil( size, TPB ), static_cast<uint32_t>( batch_size ) };
-  normalize_and_scale_half<size><<<grid, TPB>>>( output, x, weight, reinterpret_cast<glinthawk::float32_t*>( temp ) );
+  square_reduce_step_1<size>( temp, x, batch_size );
+  normalize_and_scale<size, DType><<<grid, TPB>>>( output, x, weight, temp );
 }
 
 template<>
@@ -516,7 +586,8 @@ void Operations<glinthawk::float32_t>::rmsnorm( glinthawk::float32_t* output,
 {
   for ( size_t i = 0; i < batch_size; i++ ) {
     CHECK_CUBLAS( cublasSdot( cublas_handle_default, size, x + i * size, 1, x + i * size, 1, temp + i ) );
-    normalize_and_scale_full<size><<<div_ceil( size, TPB ), TPB>>>( output + i * size, x + i * size, weight, temp + i );
+    normalize_and_scale<size, DType>
+      <<<div_ceil( size, TPB ), TPB>>>( output + i * size, x + i * size, weight, temp + i );
   }
 }
 
@@ -532,15 +603,13 @@ template<typename DType>
 template<uint64_t hidden_dim>
 void Operations<DType>::silu( DType* hb, DType* hb2, const uint64_t batch_size ) const
 {
-  silu_direct<<<div_ceil( hidden_dim * batch_size, TPB ), TPB>>>( hb, hb2, hidden_dim * batch_size );
+  silu_direct<<<div_ceil_runtime( hidden_dim * batch_size, TPB ), TPB>>>( hb, hb2, hidden_dim * batch_size );
 }
 
 template<typename DType>
 template<uint64_t s, uint64_t r>
 void Operations<DType>::matmul( DType* xout, const DType* x, const DType* W, const uint64_t b ) const
 {
-  constexpr cudaDataType_t cuda_arg_type = std::is_same_v<DType, glinthawk::float16_t> ? CUDA_R_16F : CUDA_R_32F;
-
   // x(b,s) @ W(s,r) -> xout(b,r)
   // OR
   // W(r,s) @ x(s,b) -> xout(r,b)
@@ -560,17 +629,28 @@ void Operations<DType>::matmul( DType* xout, const DType* x, const DType* W, con
                               k,
                               &alpha,
                               W,
-                              cuda_arg_type,
+                              get_cuda_data_type<DType>(),
                               lda,
                               x,
-                              cuda_arg_type,
+                              get_cuda_data_type<DType>(),
                               ldb,
                               &beta,
                               xout,
-                              cuda_arg_type,
+                              get_cuda_data_type<DType>(),
                               ldc,
-                              computeType,
+                              GH_CUDA_COMPUTE_TYPE,
                               CUBLAS_GEMM_DEFAULT ) );
+}
+
+template<typename DType>
+void Operations<DType>::soft_sample( DType* v, const std::vector<float>& temperatures, const size_t vocab_size ) const
+{
+  for ( uint64_t i = 0; i < temperatures.size(); i++ ) {
+    if ( temperatures[i] > 0 ) {
+      gumbel_fix<DType><<<div_ceil_runtime( vocab_size, TPB ), TPB, 0, this->streams[i]>>>(
+        v + i * vocab_size, temperatures[i], vocab_size, rng_state.get() + i * vocab_size );
+    }
+  }
 }
 
 template<typename DType>
@@ -614,6 +694,18 @@ void Operations<DType>::randomize_device_buffer( DType* buffer,
   std::unique_ptr<DType[]> host_buffer { new DType[len] };
   util::randomize_buffer( host_buffer.get(), len, min, max );
   CHECK_CUDA( cudaMemcpy( buffer, host_buffer.get(), len * sizeof( DType ), cudaMemcpyHostToDevice ) );
+}
+
+template<typename DType>
+void Operations<DType>::setup_rng( unsigned long seed, const uint64_t size, const uint64_t batch_size )
+{
+  curandState* rng_state_ptr = nullptr;
+  common::cuda::CHECK_CUDA( cudaMalloc( &rng_state_ptr, size * batch_size * sizeof( curandState ) ) );
+  rng_state.reset( rng_state_ptr );
+
+  for ( uint64_t i = 0; i < batch_size; i++ ) {
+    setup_rng_kernel<<<div_ceil_runtime( size, TPB ), TPB, 0, this->streams[i]>>>( rng_state.get() + i * size, seed );
+  }
 }
 
 } // namespace glinthawk::models::common::cuda

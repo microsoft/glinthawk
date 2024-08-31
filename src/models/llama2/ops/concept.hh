@@ -31,7 +31,6 @@ concept AdditionalLlamaOperationsConcept = requires( const T t,
   { t.template attention_2_gemm( cptr, lc, ptr, size, int_arr ) } -> std::same_as<void>;
   { t.template attention_softmax( ptr, int_arr, ptr, size ) } -> std::same_as<void>;
   { t.template apply_rope( size, int_arr, cptr, cptr, ptr, tc ) } -> std::same_as<void>;
-  { t.template soft_sample( ptr, vec, size ) } -> std::same_as<void>;
   { t.template copy_kv_cache( tc, cptr, size ) } -> std::same_as<void>;
   { t.template convert_and_copy<void, void>( ptr_void, ptr_void, size, cpt ) } -> std::same_as<void>;
 };

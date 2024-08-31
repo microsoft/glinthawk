@@ -16,6 +16,7 @@
 #include "context.hh"
 #include "models/llama2/ops/concept.hh"
 #include "models/types.hh"
+#include "util/demangle.hh"
 #include "variants.hh"
 
 namespace glinthawk::models::llama2 {
@@ -142,27 +143,31 @@ struct ScratchPad
   ScratchPad& operator=( ScratchPad&& ) = default;
 
   static size_t scratchpad_size( const ConfigRuntime<Config>& settings );
+  static size_t temp_buffer_size( const ConfigRuntime<Config>& settings );
 
-  DType* buffer_ {};      // we use this buffer for everything, including activations
-  DType* x {};            // activation at current time stamp (B, dim)
-  DType* xb {};           // same, but inside a residual branch (B, dim)
-  DType* xb2 {};          // an additional buffer just for convenience (B, dim)
-  DType* q {};            // query (B, dim)
-  DType* kv {};           // key and value (B, kv_dim, 2)
-  DType* hb {};           // buffer for hidden dimension in the ffn (B, hidden_dim)
-  DType* hb2 {};          // buffer for hidden dimension in the ffn (B, hidden_dim)
-  DType* att {};          // buffer for scores/attention values (B, n_heads, seq_len)
-  DType* logits {};       // output logits (B, vocab_size)
-  DType* temp_softmax {}; // temporary buffer for computing softmax (B, n_heads)
+  /* The following reside on the device */
+  DType* buffer_ {}; // we use this buffer for everything, including activations
+  DType* x {};       // activation at current time stamp (B, dim)
+  DType* xb {};      // same, but inside a residual branch (B, dim)
+  DType* xb2 {};     // an additional buffer just for convenience (B, dim)
+  DType* q {};       // query (B, dim)
+  DType* kv {};      // key and value (B, kv_dim, 2)
+  DType* hb {};      // buffer for hidden dimension in the ffn (B, hidden_dim)
+  DType* hb2 {};     // buffer for hidden dimension in the ffn (B, hidden_dim)
+  DType* att {};     // buffer for scores/attention values (B, n_heads, seq_len)
+  DType* logits {};  // output logits (B, vocab_size)
 
-  // This memory is on the host
-  uint32_t argmax_pos[MAX_BATCH_SIZE] {}; // argmax results (B, )
+  // An auxiliary buffer of size (B * max(n_heads, dim) * max(sizeof(DType), sizeof(float32_t))) used for several
+  // operations, including softmax and rmsnorm. Since some operations require space for float32_t, regardless of the
+  // DType, we need to allocate enough space for the largest type. See `temp_buffer_size()` for more details.
+  DType* temp {};
 
-  // information about the current batch
-  uint64_t curr_concurrency_size { 1 };
-  uint32_t batch_token_positions[MAX_BATCH_SIZE] {};
-  typename ContextType::LayerContextType batch_layer_contexts[MAX_BATCH_SIZE] {};
-  typename ContextType::TokenContextType batch_token_contexts[MAX_BATCH_SIZE] {};
+  /* The following reside on the host */
+  uint64_t curr_concurrency_size { 1 };              // current batch size
+  uint32_t argmax_pos[MAX_BATCH_SIZE] {};            // argmax results (B, )
+  uint32_t batch_token_positions[MAX_BATCH_SIZE] {}; // token positions for the current batch
+  typename ContextType::LayerContextType batch_layer_contexts[MAX_BATCH_SIZE] {}; // layer KV-cache addresses
+  typename ContextType::TokenContextType batch_token_contexts[MAX_BATCH_SIZE] {}; // token KV-cache addresses
 };
 
 namespace {
@@ -248,7 +253,7 @@ ConfigRuntime<T>::ConfigRuntime( const std::filesystem::path& config_file,
   CHECK_LT( end_layer_num, T::n_layers ) << "End layer must be less than the number of layers.";
   CHECK_LE( start_layer_num, end_layer_num ) << "Start layer must be less than or equal to end layer.";
 
-  LOG( INFO ) << "Instantiated settings for " << typeid( T ).name() << ": " << to_string();
+  LOG( INFO ) << "Instantiated settings for " << util::demangle( typeid( T ).name() ) << ": " << to_string();
 }
 
 template<typename T>
@@ -287,7 +292,9 @@ BaseWeights<Config, DType>::BaseWeights( const DType* model )
   rms_final_weight = _advance_pointer( ptr, Config::dim );
   freq_cis_real = _advance_pointer( ptr, Config::seq_len * head_size / 2 );
   freq_cis_imag = _advance_pointer( ptr, Config::seq_len * head_size / 2 );
-  wcls = Config::wcls_present ? ptr : token_embedding_table;
+  wcls = Config::wcls_present ? _advance_pointer( ptr, Config::vocab_size * Config::dim ) : token_embedding_table;
+
+  CHECK_EQ( ptr - model, BaseWeights::base_size() / sizeof( DType ) ) << "Base weights size mismatch";
 }
 
 /* LAYER WEIGHTS */
@@ -306,6 +313,8 @@ LayerWeights<Config, DType>::LayerWeights( const DType* model )
   this->w1 = _advance_pointer( ptr, Config::dim * Config::hidden_dim );
   this->w2 = _advance_pointer( ptr, Config::dim * Config::hidden_dim );
   this->w3 = _advance_pointer( ptr, Config::dim * Config::hidden_dim );
+
+  CHECK_EQ( ptr - model, LayerWeights::layer_size() / sizeof( DType ) ) << "Layer weights size mismatch";
 }
 
 /* RUN STATE */
@@ -313,25 +322,39 @@ LayerWeights<Config, DType>::LayerWeights( const DType* model )
 template<typename Config, typename DType, typename ContextType>
 ScratchPad<Config, DType, ContextType>::ScratchPad( const ConfigRuntime<Config>& settings, DType* buffer )
   : buffer_( buffer )
-  , x( buffer_ )
-  , xb( buffer_ + Config::dim * settings.concurrency_limit )
-  , xb2( xb + Config::dim * settings.concurrency_limit )
-  , q( xb2 + Config::dim * settings.concurrency_limit )
-  , kv( q + Config::dim * settings.concurrency_limit )
-  , hb( kv + Config::kv_dim * 2 * settings.concurrency_limit )
-  , hb2( hb + Config::hidden_dim * settings.concurrency_limit )
-  , att( hb2 + Config::hidden_dim * settings.concurrency_limit )
-  , logits( att + Config::n_heads * Config::seq_len * settings.concurrency_limit )
-  , temp_softmax( logits + Config::vocab_size * settings.concurrency_limit )
 {
+  auto ptr = buffer_;
+
+  x = _advance_pointer( ptr, Config::dim * settings.concurrency_limit );
+  xb = _advance_pointer( ptr, Config::dim * settings.concurrency_limit );
+  xb2 = _advance_pointer( ptr, Config::dim * settings.concurrency_limit );
+  q = _advance_pointer( ptr, Config::dim * settings.concurrency_limit );
+  kv = _advance_pointer( ptr, Config::kv_dim * 2 * settings.concurrency_limit );
+  hb = _advance_pointer( ptr, Config::hidden_dim * settings.concurrency_limit );
+  hb2 = _advance_pointer( ptr, Config::hidden_dim * settings.concurrency_limit );
+  att = _advance_pointer( ptr, Config::n_heads * Config::seq_len * settings.concurrency_limit );
+  logits = _advance_pointer( ptr, Config::vocab_size * settings.concurrency_limit );
+  temp = _advance_pointer( ptr, temp_buffer_size( settings ) );
 }
 
 template<typename Config, typename DType, typename ContextType>
 size_t ScratchPad<Config, DType, ContextType>::scratchpad_size( const ConfigRuntime<Config>& settings )
 {
   return sizeof( DType ) * settings.concurrency_limit
-         * ( Config::dim * 4 + Config::kv_dim * 2 + Config::hidden_dim * 2 + Config::n_heads * Config::seq_len
-             + Config::vocab_size + Config::n_heads );
+           * ( Config::dim * 4                     // x, xb, xb2, q
+               + Config::kv_dim * 2                // kv
+               + Config::hidden_dim * 2            // hb, hb2
+               + Config::n_heads * Config::seq_len // att
+               + Config::vocab_size )              // logits
+         + temp_buffer_size( settings )            // temp
+    ;
+}
+
+template<typename Config, typename DType, typename ContextType>
+size_t ScratchPad<Config, DType, ContextType>::temp_buffer_size( const ConfigRuntime<Config>& settings )
+{
+  return settings.concurrency_limit * std::max( sizeof( DType ), sizeof( glinthawk::float32_t ) )
+         * std::max( Config::n_heads, Config::dim );
 }
 
 } // namespace glinthawk::models::llama2

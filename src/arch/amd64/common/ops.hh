@@ -14,8 +14,6 @@ class Operations
 {
 public:
   using DeviceUniquePtr = std::unique_ptr<DType>;
-  using Float16 = glinthawk::float16_t;
-  using Float32 = glinthawk::float32_t;
 
 public:
   Operations() {}
@@ -30,7 +28,8 @@ public:
   void accum( DType* a, const DType* b, const uint64_t batch_size ) const;
 
   template<uint64_t size>
-  void rmsnorm( DType* o, const DType* x, DType* temp, const DType* weight, const uint64_t batch_size ) const;
+  void rmsnorm( DType* o, const DType* x, glinthawk::float32_t* temp, const DType* weight, const uint64_t batch_size )
+    const;
 
   template<uint64_t n>
   void argmax( uint32_t* output, const DType* v, DType* temp, const uint64_t batch_size ) const;
@@ -41,8 +40,7 @@ public:
   template<uint64_t s, uint64_t r>
   void matmul( DType* xo, const DType* x, const DType* w, const uint64_t b ) const;
 
-  template<uint64_t vocab_size>
-  void soft_sample( DType* v, const std::vector<float>& temp_s, const uint64_t batch_size ) const;
+  void soft_sample( DType* v, const std::vector<float>& temperatures, const size_t vocab_size ) const;
 
   DeviceUniquePtr device_allocate( const uint64_t size_bytes ) const;
 
@@ -57,6 +55,7 @@ public:
 
 static_assert( OperationsConcept<Operations<glinthawk::float32_t>, glinthawk::float32_t> );
 static_assert( OperationsConcept<Operations<glinthawk::float16_t>, glinthawk::float16_t> );
+static_assert( OperationsConcept<Operations<glinthawk::bfloat16_t>, glinthawk::bfloat16_t> );
 
 // helper functions are in this anonymous namespace
 namespace {
@@ -86,7 +85,21 @@ void fast_matmul_row_major( uint64_t n, const DType* A, const DType* B, DType* C
 
 }
 
+namespace { // soft_sample
+
+template<typename DType>
+void gumbel_fix( DType* array, glinthawk::float32_t temp, const size_t vocab_size )
+{
+  for ( uint64_t i = 0; i < vocab_size; i++ ) {
+    glinthawk::float32_t myrandf = static_cast<glinthawk::float32_t>( rand() ) / RAND_MAX;
+    myrandf = logf( -logf( myrandf ) );
+    array[i] = static_cast<DType>( static_cast<glinthawk::float32_t>( array[i] ) / temp - myrandf );
+  }
 }
+
+}
+
+} // end of anonymous namespace for helper functions
 
 template<typename DType>
 template<uint64_t size>
@@ -105,8 +118,11 @@ void Operations<DType>::accum( DType* a, const DType* b, const uint64_t batch_si
 
 template<typename DType>
 template<uint64_t size>
-void Operations<DType>::rmsnorm( DType* output, const DType* x, DType*, const DType* weight, const uint64_t batch_size )
-  const
+void Operations<DType>::rmsnorm( DType* output,
+                                 const DType* x,
+                                 glinthawk::float32_t*,
+                                 const DType* weight,
+                                 const uint64_t batch_size ) const
 {
   uint64_t b;
 #pragma omp parallel for private( b )
@@ -190,6 +206,18 @@ void Operations<DType>::matmul( DType* xout, const DType* x, const DType* w, con
   constexpr uint64_t ldc = m;
 
   fast_matmul_row_major<DType, m, k, lda, ldb, ldc>( n, w, x, xout );
+}
+
+template<typename DType>
+void Operations<DType>::soft_sample( DType* v, const std::vector<float>& temperatures, const size_t vocab_size ) const
+{
+  uint64_t i;
+#pragma omp parallel for private( i )
+  for ( i = 0; i < temperatures.size(); i++ ) {
+    if ( temperatures[i] > 0 ) {
+      gumbel_fix<DType>( v + i * vocab_size, temperatures[i], vocab_size );
+    }
+  }
 }
 
 template<typename DType>

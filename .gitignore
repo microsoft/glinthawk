@@ -7,3 +7,4 @@ cmake-build-debug
 .ipynb_checkpoints/
 .jupyter_ystore.db
 __pycache__/
+/.venv
