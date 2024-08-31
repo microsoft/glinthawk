@@ -192,11 +192,12 @@ void BatchedWorker<ModelConfig, ComputeKernel>::setup_stats_handler()
 template<typename ModelConfig, typename ComputeKernel>
 void BatchedWorker<ModelConfig, ComputeKernel>::setup_peer( std::map<net::Address, Peer>::iterator peer_it )
 {
+  const std::string addr = peer_it->first.to_string();
   peer_it->second.message_handler.install_rules(
     this->event_loop_,
     this->rule_categories_,
     std::bind( &BatchedWorker<ModelConfig, ComputeKernel>::handle_peer_message, this, std::placeholders::_1 ),
-    [] { LOG( INFO ) << "Connection to peer closed."; } );
+    [addr] { LOG( INFO ) << "Connection to peer " << addr << " closed."; } );
 
   event_loop_.add_rule(
     "Outgoing message",
@@ -521,7 +522,7 @@ bool BatchedWorker<ModelConfig, ComputeKernel>::handle_coordinator_message( core
       route_set_.emplace( proto.route_id(), new_route );
 
       protobuf::AckRoute ack_proto;
-      ack_proto.set_route_id(proto.route_id());
+      ack_proto.set_route_id( proto.route_id() );
       coordinator_.message_handler.push_message( { Message::OpCode::AckRoute, ack_proto.SerializeAsString() } );
 
       LOG( INFO ) << "Route set: " << route_str.str();
@@ -574,6 +575,7 @@ bool BatchedWorker<ModelConfig, ComputeKernel>::handle_coordinator_message( core
       }
 
       // TODO(pouya): fix the copy paste
+      // TODO: this will break if length of contexts is not a multiple of monolith concurrency size
       size_t added_prompt_count = 0;
       while ( prompt_queue_.size() >= monolith_concurrency_size_ and tier_router_ != nullptr
               and tier_router_->is_context_available() ) {
@@ -673,9 +675,10 @@ void BatchedWorker<ModelConfig, ComputeKernel>::handle_tier_router_event()
 
     // are we connected to this?
     if ( peer_it == peers_.end() ) {
+      LOG( INFO ) << "Connecting to peer at " << next_worker.to_string();
       net::TCPSocket socket;
-      socket.set_blocking( false );
       socket.connect( next_worker );
+      socket.set_blocking( false );
 
       std::tie( peer_it, std::ignore ) = peers_.emplace( std::piecewise_construct,
                                                          std::forward_as_tuple( next_worker ),
