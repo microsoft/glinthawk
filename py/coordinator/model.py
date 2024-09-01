@@ -32,6 +32,7 @@ class Model:
 
         for i_tier in range(self.n_tiers):
             platform_str = self.tier_config[i_tier]['platform']
+            self.tier_config[i_tier]['platform_str'] = platform_str
             if platform_str == 'amd64':
                 self.tier_config[i_tier]['platform'] = Platform.AMD64
             elif platform_str == 'cuda':

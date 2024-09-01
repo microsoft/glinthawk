@@ -1,31 +1,23 @@
 import asyncio
+import datetime
 import enum
 import json
 import logging
 import os
 import socket
 import time
-import datetime
-
-from typing import List, Dict, Tuple
-from dataclasses import dataclass, field
 from signal import SIGINT, SIGTERM
+from typing import List
 
 import rich
-
-from rich.text import Text
-from rich.status import Status
-from rich.panel import Panel
-from rich.align import Align
-from rich.console import Group
-from rich.table import Table
-from rich.live import Live
-
-from google.protobuf.message import Message as ProtoMessage
-from google.protobuf.json_format import MessageToJson, MessageToDict
-
 from common.message import Message
+from google.protobuf.json_format import MessageToDict
+from google.protobuf.message import Message as ProtoMessage
 from protobuf import glinthawk_pb2 as protobuf
+from rich.align import Align
+from rich.live import Live
+from rich.table import Table
+from rich.text import Text
 
 from .model import Model
 from .worker import Worker
@@ -65,6 +57,8 @@ class Coordinator:
         self.prompt_batch_size = 128
         self.assigned_prompts = 0
         self.completed_prompts = 0
+        self.input_token_prompts = 0
+        self.output_token_prompts = 0
 
         # Message queues
         self.incoming_messages = asyncio.Queue()
@@ -74,6 +68,8 @@ class Coordinator:
         self.initial_dummy_count = kwargs.get("dummy_count", 0)
         self.generated_dummies = 0
         self.completed_dummies = 0
+        self.input_token_dummies = 0
+        self.output_token_dummies = 0
 
         # Prompts and completions
         self.prompt_queue = []
@@ -133,7 +129,7 @@ class Coordinator:
                         self.prompt_queue.append(p)
 
         if skipped_count > 0:
-            self.logger.info(
+            self.logger.warning(
                 f"Skipped {skipped_count} prompt{'s' if skipped_count != 1 else ''} that have already been processed."
             )
 
@@ -189,7 +185,7 @@ class Coordinator:
         if self.state not in [Coordinator.State.Stopping, Coordinator.State.Stopped]:
             asyncio.create_task(self.request_shutdown(None))
 
-        self.logger.info(f"Connection from {addr!r} closed.")
+        self.logger.warning(f"Connection from {addr!r} closed.")
 
     async def handle_outgoing_messages(self):
         async def send_message(worker, message):
@@ -198,7 +194,7 @@ class Coordinator:
 
         while self.state != Coordinator.State.Stopped:
             worker, message = await self.outgoing_messages.get()
-            self.logger.info(f'Sending "{message!r}" to {worker.id}.')
+            self.logger.debug(f'Sending "{message!r}" to {worker.id}.')
             await send_message(worker, message)
 
     async def message_processor(self):
@@ -238,7 +234,7 @@ class Coordinator:
                     ),
                 )
 
-                self.logger.info(f"Worker {worker.id} is at {proto.ip}:{worker.port} [{worker}].")
+                self.logger.debug(f"Worker {worker.id} is at {proto.ip}:{worker.port} [{worker}].")
 
             elif message.opcode == Message.OpCode.AckInitialize:
                 worker.handshake_status = worker.Handshake.LayerAssigned
@@ -276,7 +272,7 @@ class Coordinator:
             elif message.opcode == Message.OpCode.PushCompletions:
                 proto = protobuf.PushCompletions()
                 proto.ParseFromString(message.payload)
-                self.logger.info(f"Worker {worker.id} completed {len(proto.completions)} prompts.")
+                self.logger.debug(f"Worker {worker.id} completed {len(proto.completions)} prompts.")
 
                 if self.initial_dummy_count:
                     self.completed_dummies += len(proto.completions)
@@ -288,7 +284,7 @@ class Coordinator:
 
             elif message.opcode == Message.OpCode.Bye:
                 worker.state = Worker.State.Disconnected
-                self.logger.info(f"Worker {worker.id} said goodbye.")
+                self.logger.warning(f"Worker {worker.id} said goodbye.")
 
             else:
                 self.logger.error(f"Unexpected message {message.opcode} from {worker.id}.")
@@ -346,29 +342,37 @@ class Coordinator:
             if not proto.prompts:
                 continue
 
-            self.logger.info(f"Sending {len(proto.prompts)} prompts to the first worker.")
+            self.logger.warning(f"Sending {len(proto.prompts)} prompts to the first worker.")
             self.push_message(self.first_worker, Message.OpCode.PushPrompts, proto)
 
     async def dump_completions(self):
         with open(os.path.join(self.output_dir, f"completions.jsonl"), "a") as f:
             while self.state != Coordinator.State.Stopped:
                 completion = await self.completion_queue.get()
-                f.write(json.dumps(MessageToDict(completion), indent=None, separators=(",", ":")))
+                dict_prompt = MessageToDict(completion)
+                if self.initial_dummy_count:
+                    self.input_token_dummies += len(dict_prompt['prompt'])
+                    self.output_token_dummies += len(dict_prompt['completion'])
+                else:
+                    self.input_token_prompts += len(dict_prompt['prompt'])
+                    self.output_token_prompts += len(dict_prompt['completion'])
+                f.write(json.dumps(dict_prompt, indent=None, separators=(",", ":")))
                 f.write("\n")
                 f.flush()
 
     async def show_status(self):
+        # TODO(pouya): I broke this, fix it
         with Live(transient=True, auto_refresh=False) as live:
             while self.state != Coordinator.State.Stopped:
                 elapsed_time = datetime.datetime.now() - self.start_time
-                elapsed_time = "{:02d}:{:02d}:{:02d}".format(
+                elapsed_time_str = "{:02d}:{:02d}:{:02d}".format(
                     int(elapsed_time.total_seconds()) // 3600,
                     int(elapsed_time.total_seconds()) // 60 % 60,
                     int(elapsed_time.total_seconds()) % 60,
                 )
 
                 grid = Table(
-                    title=f"\n{elapsed_time}",
+                    title=f"\n{elapsed_time_str}",
                     expand=False,
                     show_header=False,
                     show_lines=True,
@@ -380,17 +384,59 @@ class Coordinator:
 
                 grid.add_row(
                     "Model",
-                    Text(f"{self.model.n_layers} layers, {self.model.layers_per_worker} per worker"),
+                    Text(f"{self.model.n_layers} layers, "
+                         f"{self.model.n_slices} slices, "
+                         f"{self.model.layers_per_worker} per worker"),
                 )
 
-                grid.add_row(
-                    "Prompts",
-                    Text(
-                        f"{self.assigned_prompts} assigned, {self.completed_prompts} completed, {len(self.prompt_queue)} queued",
-                    ),
-                )
+                if self.initial_dummy_count:
+                    count = (self.generated_dummies - self.completed_dummies) - (self.initial_dummy_count // 2)
+                    grid.add_row(
+                        "Prompts(D)",
+                        Text(
+                            f"{self.generated_dummies} assigned, {self.completed_dummies} completed, "
+                            f"send more after {count}",
+                        ),
+                    )
+                    grid.add_row(
+                        "Tokens(D)",
+                        Text(
+                            f"in completed prompts: {self.input_token_dummies} inputs, "
+                            f"{self.output_token_dummies} outputs",
+                        ),
+                    )
+                    grid.add_row(
+                        "Throughput(D)",
+                        Text(
+                            f"{self.output_token_dummies/elapsed_time.total_seconds():.0f} tk/s",
+                        ),
+                    )
+                else:
+                    grid.add_row(
+                        "Prompts(R)",
+                        Text(
+                            f"{self.assigned_prompts} assigned, {self.completed_prompts} completed, "
+                            f"{len(self.prompt_queue)} queued",
+                        ),
+                    )
+                    grid.add_row(
+                        "Tokens(R)",
+                        Text(
+                            f"in completed prompts: {self.input_token_prompts} inputs, "
+                            f"{self.output_token_prompts} outputs",
+                        ),
+                    )
+                    grid.add_row(
+                        "Throughput(R)",
+                        Text(
+                            f"{self.output_token_prompts/elapsed_time.total_seconds():.0f} tk/s",
+                        ),
+                    )
 
                 grid.add_row("Workers", Text(f"{len(self.workers)} connected"))
+                for i, tier in enumerate(self.model.tier_config):
+                    grid.add_row(f"-->  Tier {i+1}", Text(f"{tier['ranks']} "
+                                                          f"{tier['platform_str']} workers per slice"))
 
                 live.update(Align.right(grid), refresh=True)
                 await asyncio.sleep(1)
@@ -426,7 +472,7 @@ class Coordinator:
             await worker.writer.wait_closed()
 
         if len(self.workers) > 0:
-            self.logger.info("All workers have disconnected; shutting down...")
+            self.logger.warning("All workers have disconnected; shutting down...")
 
         self.state = Coordinator.State.Stopped
         self.server.close()
