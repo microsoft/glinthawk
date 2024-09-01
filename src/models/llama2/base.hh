@@ -121,6 +121,8 @@ struct LayerWeights
   static size_t in_memory_total_byte_size( const ConfigRuntime<Config>& settings, const size_t layer_num );
   static ParameterArray in_memory_offset( const ConfigRuntime<Config>& settings, const size_t layer_num );
 
+  static size_t in_memory_all_layers_total_byte_size( const ConfigRuntime<Config>& settings );
+
   // PreAttention
   // weights for rmsnorms
   const DType* rms_att_weight { nullptr }; // (dim) rmsnorm weights
@@ -526,6 +528,17 @@ LayerWeights<Config, DType>::ParameterArray LayerWeights<Config, DType>::in_memo
   }
 
   return offsets;
+}
+
+template<typename Config, typename DType>
+requires ModelConfig<Config>
+size_t LayerWeights<Config, DType>::in_memory_all_layers_total_byte_size( const ConfigRuntime<Config>& settings )
+{
+  size_t total_size = 0;
+  for ( size_t i = 0; i < Config::n_layers; ++i ) {
+    total_size += in_memory_total_byte_size( settings, i );
+  }
+  return total_size;
 }
 
 /* RUN STATE */

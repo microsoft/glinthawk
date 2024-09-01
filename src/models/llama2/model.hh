@@ -16,6 +16,7 @@
 #include "util/exception.hh"
 #include "util/file_descriptor.hh"
 #include "util/ring_buffer.hh"
+#include <concepts>
 
 #if defined( TARGET_PLATFORM_AMD64 ) || defined( TARGET_PLATFORM_CUDA )
 #include "arch/amd64/llama2/ops.hh"
@@ -44,8 +45,8 @@ public:
 
 public:
   Llama2( const std::filesystem::path& model_dir,
-          const uint32_t start_layer = 0,
-          const uint32_t end_layer = std::numeric_limits<uint32_t>::max(),
+          std::array<std::array<bool, util::to_underlying( models::InferenceStage::__COUNT__ )>, Config::n_layers>
+            hosting_table,
           const uint64_t concurrency_limit = 1,
           const uint64_t max_context_count = 1,
           const bool randomize_parameters = false );
@@ -146,60 +147,70 @@ void extract_batch_token( LlamaOperations& ops,
 }
 
 template<typename Config, typename DType, typename LlamaOperations, typename Context>
-Llama2<Config, DType, LlamaOperations, Context>::Llama2( const std::filesystem::path& model_dir,
-                                                         const uint32_t start_layer,
-                                                         const uint32_t end_layer,
-                                                         const uint64_t concurrency_limit,
-                                                         const uint64_t max_context_count,
-                                                         const bool randomize_parameters )
-  : instance_config_( model_dir / "CONFIG",
-                      start_layer,
-                      end_layer,
-                      concurrency_limit,
-                      max_context_count,
-                      randomize_parameters )
-  , base_weights_buffer_( ops_.device_allocate( BaseWeights<Config, DType>::base_size() ) )
+requires ModelConfig<Config> && LlamaOperationsConcept<LlamaOperations, DType, ConfigRuntime<Config>>
+           && ContextConcept<Context, DType>
+Llama2<Config, DType, LlamaOperations, Context>::Llama2(
+  const std::filesystem::path& model_dir,
+  std::array<std::array<bool, util::to_underlying( models::InferenceStage::__COUNT__ )>, Config::n_layers>
+    hosting_table,
+  const uint64_t concurrency_limit,
+  const uint64_t max_context_count,
+  const bool randomize_parameters )
+  : instance_config_( model_dir / "CONFIG", hosting_table, concurrency_limit, max_context_count, randomize_parameters )
+  , base_weights_buffer_(
+      ops_.device_allocate( BaseWeights<Config, DType>::in_memory_total_byte_size( instance_config_ ) ) )
   , layers_buffer_(
-      ops_.device_allocate( LayerWeights<Config, DType>::layer_size() * instance_config_.n_layers_loaded() ) )
+      ops_.device_allocate( LayerWeights<Config, DType>::in_memory_all_layers_total_byte_size( instance_config_ ) ) )
   , scratchpad_buffer_(
       ops_.device_allocate( ScratchPad<Config, DType, Context>::scratchpad_size( instance_config_ ) ) )
-  , base_weights_( base_weights_buffer_.get() )
+  , base_weights_( base_weights_buffer_.get(), instance_config_ )
   , layer_weights_( [&] {
     std::array<LayerWeights<Config, DType>, Config::n_layers> layers {};
-    constexpr size_t layer_size = LayerWeights<Config, DType>::layer_size();
     auto ptr = layers_buffer_.get();
-    for ( auto i = instance_config_.start_layer_num; i <= instance_config_.end_layer_num; i++ ) {
-      layers[i] = LayerWeights<Config, DType> { reinterpret_cast<DType*>(
-        reinterpret_cast<uint8_t*>( ptr ) + ( i - instance_config_.start_layer_num ) * layer_size ) };
+    for ( size_t i = 0; i < Config::n_layers; i++ ) {
+      layers[i] = LayerWeights<Config, DType> { reinterpret_cast<DType*>( ptr ) };
+      size_t current_layer_byte_size = LayerWeights<Config, DType>::in_memory_total_byte_size( instance_config_, i );
+      ptr = reinterpret_cast<DType*>( reinterpret_cast<uint8_t*>( ptr ) + current_layer_byte_size );
     }
 
     return layers;
   }() )
   , scratchpad_( instance_config_, scratchpad_buffer_.get() )
 {
-  auto copy_file_to_buffer = [this]( const std::filesystem::path& path, DType* buffer, const size_t size ) {
-    CHECK_EQ( std::filesystem::file_size( path ), size ) << "File " << path << " is not the expected size.";
+  auto copy_file_to_buffer = [this]<typename T>( const std::filesystem::path& path,
+                                                 DType* buffer,
+                                                 const size_t src_total_size,
+                                                 const T src_offset,
+                                                 const T dst_len_bytes,
+                                                 const T dst_offset ) {
+    CHECK_EQ( std::filesystem::file_size( path ), src_total_size ) << "File " << path << " is not the expected size.";
     FileDescriptor fd { CHECK_SYSCALL( "open", open( path.c_str(), O_RDONLY ) ) };
-    MMap_Region mmap { nullptr, size, PROT_READ, MAP_PRIVATE, fd.fd_num(), 0 };
-    this->ops_.copy( buffer, reinterpret_cast<DType*>( mmap.addr() ), size, CopyType::HostToDevice );
+    MMap_Region mmap { nullptr, src_total_size, PROT_READ, MAP_PRIVATE, fd.fd_num(), 0 };
+
+    for ( size_t i = 0; i < dst_offset.size(); i++ ) {
+      if ( dst_len_bytes[i] > 0 )
+        this->ops_.copy( buffer + dst_offset[i],
+                         reinterpret_cast<DType*>( mmap.addr() ) + src_offset[i],
+                         dst_len_bytes[i],
+                         CopyType::HostToDevice );
+    }
   };
 
   // Ugly
   const std::string filename_suffix = "_" + dtype_str<DType>();
 
-  const auto base_size = BaseWeights<Config, DType>::base_size();
-  const auto layer_size = LayerWeights<Config, DType>::layer_size();
-
   if ( randomize_parameters ) {
     LOG( WARNING ) << "Randomizing weights and scratchpad...";
 
     ops_.randomize_device_buffer( base_weights_buffer_.get(),
-                                  base_size / sizeof( DType ),
+                                  BaseWeights<Config, DType>::in_memory_total_byte_size( instance_config_ )
+                                    / sizeof( DType ),
                                   -10.0 / sqrt( Config::dim ),
                                   10.0 / sqrt( Config::dim ) );
 
     ops_.randomize_device_buffer( layers_buffer_.get(),
-                                  layer_size * instance_config_.n_layers_loaded() / sizeof( DType ),
+                                  LayerWeights<Config, DType>::in_memory_all_layers_total_byte_size( instance_config_ )
+                                    / sizeof( DType ),
                                   -10.0 / sqrt( Config::dim ),
                                   10.0 / sqrt( Config::dim ) );
 
@@ -211,22 +222,36 @@ Llama2<Config, DType, LlamaOperations, Context>::Llama2( const std::filesystem::
 
     LOG( WARNING ) << "Randomizing weights and run state... done.";
   } else { // not randomize_parameters
-    copy_file_to_buffer( model_dir / ( "BASEWEIGHTS" + filename_suffix ), base_weights_buffer_.get(), base_size );
 
-    LOG( INFO ) << "Loaded base weights (" << base_size << " bytes).";
+    copy_file_to_buffer( model_dir / ( "BASEWEIGHTS" + filename_suffix ),
+                         base_weights_buffer_.get(),
+                         BaseWeights<Config, DType>::on_disk_total_byte_size(),
+                         BaseWeights<Config, DType>::on_disk_offset(),
+                         BaseWeights<Config, DType>::in_memory_element_size( instance_config_ ),
+                         BaseWeights<Config, DType>::in_memory_offset( instance_config_ ) );
+
+    LOG( INFO ) << "Loaded base weights (" << BaseWeights<Config, DType>::in_memory_total_byte_size() << " bytes).";
+
+    DType* ptr = layers_buffer_.get();
 
     // Load LAYER(i)
-    for ( auto i = instance_config_.start_layer_num; i <= instance_config_.end_layer_num; i++ ) {
+    for ( size_t i = 0; i <= Config::n_layers; i++ ) {
       const auto filename = model_dir / ( "LAYER" + std::to_string( i ) + filename_suffix );
-      DType* ptr = reinterpret_cast<DType*>( reinterpret_cast<uint8_t*>( layers_buffer_.get() )
-                                             + ( i - instance_config_.start_layer_num ) * layer_size );
+      const auto current_layer_byte_size
+        = LayerWeights<Config, DType>::in_memory_total_byte_size( instance_config_, i );
 
-      copy_file_to_buffer( filename, ptr, layer_size );
+      copy_file_to_buffer( filename,
+                           ptr,
+                           LayerWeights<Config, DType>::on_disk_total_byte_size(),
+                           LayerWeights<Config, DType>::on_disk_offset(),
+                           LayerWeights<Config, DType>::in_memory_element_size( instance_config_, i ),
+                           LayerWeights<Config, DType>::in_memory_offset( instance_config_, i ) );
+
+      ptr = reinterpret_cast<DType*>( reinterpret_cast<uint8_t*>( ptr ) + current_layer_byte_size );
     }
 
-    LOG( INFO ) << "Loaded layer weights (" << instance_config_.start_layer_num << " to "
-                << instance_config_.end_layer_num << ", " << ( layer_size * instance_config_.n_layers_loaded() )
-                << " bytes).";
+    LOG( INFO ) << "Loaded layer weights ("
+                << LayerWeights<Config, DType>::in_memory_all_layers_total_byte_size( instance_config_ ) << " bytes).";
   }
 
   LOG( INFO ) << "Model " << util::demangle( typeid( decltype( this ) ).name() ) << " instantiated.";
@@ -247,14 +272,12 @@ void Llama2<Config, DType, LlamaOperations, Context>::check_batch(
 
   const uint32_t next_layer_batch = states.next_layer();
 
-  CHECK_LE( instance_config_.start_layer_num, next_layer_batch );
-  CHECK_LE( next_layer_batch, instance_config_.end_layer_num );
+  CHECK( instance_config_.hosts( next_layer_batch, states.next_stage() ) );
 
   CHECK( states.next_stage() == stage );
 
   if ( stage != InferenceStage::Attention ) {
     CHECK_DTYPE<DType>( states.dtype() );
-    CHECK_EQ( states.next_layer(), next_layer_batch );
   }
 }
 
@@ -455,7 +478,7 @@ void Llama2<Config, DType, LlamaOperations, Context>::forward_postlude( StateTyp
         states.set_token_pos( i, states.token_pos( i ) + 1 );
 
         if ( states.token( i ) == Config::token_eos or states.token( i ) == Config::token_eot
-           or states.token_pos( i ) >= Config::seq_len ) {
+             or states.token_pos( i ) >= Config::seq_len ) {
           // Discarding the prompt entry is left to the caller, we just set the finished flag here
           states.set_finished( i );
         }
@@ -599,14 +622,14 @@ void Llama2<Config, DType, LlamaOperations, Context>::forward_attention( StateTy
             ops_.template convert_and_copy(
               contexts[i]->layer( states.next_layer() ).token( states.token_pos( i ) ).key(),
               reinterpret_cast<glinthawk::float16_t*>( states.kv( i ).data() ),
-            Config::kv_dim * 2,
-            CopyType::HostToDevice );
-          break;
+              Config::kv_dim * 2,
+              CopyType::HostToDevice );
+            break;
 
-        case DataType::BFloat16:
-          ops_.template convert_and_copy(
-            contexts[i]->layer( states.next_layer() ).token( states.token_pos( i ) ).key(),
-            reinterpret_cast<glinthawk::bfloat16_t*>( states.kv( i ).data() ),
+          case DataType::BFloat16:
+            ops_.template convert_and_copy(
+              contexts[i]->layer( states.next_layer() ).token( states.token_pos( i ) ).key(),
+              reinterpret_cast<glinthawk::bfloat16_t*>( states.kv( i ).data() ),
               Config::kv_dim * 2,
               CopyType::HostToDevice );
             break;
