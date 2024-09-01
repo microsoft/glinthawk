@@ -17,6 +17,7 @@
 #include "models/llama2/ops/concept.hh"
 #include "models/types.hh"
 #include "util/demangle.hh"
+#include "util/util.hh"
 #include "variants.hh"
 
 namespace glinthawk::models::llama2 {
@@ -30,20 +31,23 @@ struct ConfigRuntime
   ConfigRuntime() {}
 
   ConfigRuntime( const std::filesystem::path& config_file,
-                 const uint32_t start_layer,
-                 const uint32_t end_layer,
+                 std::array<std::array<bool, util::to_underlying( models::InferenceStage::__COUNT__ )>,
+                            Config::n_layers> hosting_table,
                  const uint64_t concurrency_limit,
                  const uint64_t max_context_count,
                  const bool randomize_parameters );
 
   std::string to_string() const;
 
+  bool hosts( size_t layer, models::InferenceStage stage ) const;
+  bool hosts_in_any_layer( models::InferenceStage stage ) const;
+  bool hosts_in_any_stage( size_t layer ) const;
+
   /// @brief Size of the config stored on disk (in bytes)
   static size_t config_size() { return sizeof( int32_t ) * 7; }
-  uint64_t n_layers_loaded() const { return end_layer_num - start_layer_num + 1; }
 
-  uint64_t start_layer_num {};
-  uint64_t end_layer_num {};
+  std::array<std::array<bool, util::to_underlying( models::InferenceStage::__COUNT__ )>, Config::n_layers>
+    hosting_table_;
   uint64_t concurrency_limit { 1 }; // max concurrent inference size
   uint64_t max_context_count { 1 }; // max number of contexts
   bool randomize_parameters { false };
@@ -67,21 +71,22 @@ template<typename Config, typename DType>
 requires ModelConfig<Config>
 struct BaseWeights
 {
-  // TODO: We should have partial model loading
+  using ParameterArray = typename std::array<uint64_t, 5>;
   BaseWeights() = default;
-  BaseWeights( const DType* base_weights );
+  BaseWeights( const DType* ptr, const ConfigRuntime<Config>& settings );
 
   BaseWeights( const BaseWeights& ) = delete;
   BaseWeights operator=( const BaseWeights& ) = delete;
   BaseWeights( BaseWeights&& ) = default;
   BaseWeights& operator=( BaseWeights&& ) = default;
 
-  static consteval size_t base_size()
-  {
-    return sizeof( DType )
-           * ( Config::vocab_size * Config::dim + Config::dim + Config::seq_len * Config::dim / Config::n_heads
-               + ( Config::wcls_present ? ( Config::vocab_size * Config::dim ) : 0 ) );
-  }
+  static consteval ParameterArray on_disk_element_size();
+  static consteval size_t on_disk_total_byte_size();
+  static consteval ParameterArray on_disk_offset();
+
+  static ParameterArray in_memory_element_size( const ConfigRuntime<Config>& settings );
+  static size_t in_memory_total_byte_size( const ConfigRuntime<Config>& settings );
+  static ParameterArray in_memory_offset( const ConfigRuntime<Config>& settings );
 
   const DType* token_embedding_table {}; // (vocab_size, dim)
   const DType* rms_final_weight {};      // (dim,)
@@ -98,29 +103,38 @@ template<typename Config, typename DType>
 requires ModelConfig<Config>
 struct LayerWeights
 {
+  using ParameterArray = typename std::array<uint64_t, 8>;
+
   LayerWeights() = default;
-  LayerWeights( const DType* model );
+  LayerWeights( const DType* ptr, const ConfigRuntime<Config>& settings );
 
   LayerWeights( const LayerWeights& ) = delete;
   LayerWeights operator=( const LayerWeights& ) = delete;
   LayerWeights( LayerWeights&& ) = default;
   LayerWeights& operator=( LayerWeights&& ) = default;
 
-  static consteval size_t layer_size()
-  {
-    return sizeof( DType )
-           * ( 2 * Config::dim + 2 * Config::dim * Config::dim + 2 * Config::dim * Config::kv_dim
-               + 3 * Config::dim * Config::hidden_dim );
-  }
+  static consteval ParameterArray on_disk_element_size();
+  static consteval size_t on_disk_total_byte_size();
+  static consteval ParameterArray on_disk_offset();
 
+  static ParameterArray in_memory_element_size( const ConfigRuntime<Config>& settings, const size_t layer_num );
+  static size_t in_memory_total_byte_size( const ConfigRuntime<Config>& settings, const size_t layer_num );
+  static ParameterArray in_memory_offset( const ConfigRuntime<Config>& settings, const size_t layer_num );
+
+  // PreAttention
   // weights for rmsnorms
   const DType* rms_att_weight { nullptr }; // (dim) rmsnorm weights
-  const DType* rms_ffn_weight { nullptr }; // (dim)
 
   // weights for matmuls
   const DType* wq { nullptr };  // (dim, dim)
   const DType* wkv { nullptr }; // (dim, 2*kv_dim)
-  const DType* wo { nullptr };  // (dim, dim)
+
+  // PostAttention
+  // weights for rmsnorms
+  const DType* rms_ffn_weight { nullptr }; // (dim)
+
+  // weights for matmuls
+  const DType* wo { nullptr }; // (dim, dim)
 
   // weights for ffn
   const DType* w1 { nullptr }; // (hidden_dim, dim)
@@ -182,13 +196,15 @@ DType* _advance_pointer( DType*& ptr, const size_t size )
 
 }
 
-template<typename T>
-ConfigRuntime<T>::ConfigRuntime( const std::filesystem::path& config_file,
-                                 const uint32_t start_layer,
-                                 const uint32_t end_layer,
-                                 const uint64_t concurrency_limit_,
-                                 const uint64_t max_context_count_,
-                                 const bool randomize_parameters_ )
+template<typename Config>
+requires ModelConfig<Config>
+ConfigRuntime<Config>::ConfigRuntime(
+  const std::filesystem::path& config_file,
+  std::array<std::array<bool, util::to_underlying( models::InferenceStage::__COUNT__ )>, Config::n_layers>
+    hosting_table,
+  const uint64_t concurrency_limit_,
+  const uint64_t max_context_count_,
+  const bool randomize_parameters_ )
   : concurrency_limit( concurrency_limit_ )
   , max_context_count( max_context_count_ )
   , randomize_parameters( randomize_parameters_ )
@@ -222,17 +238,17 @@ ConfigRuntime<T>::ConfigRuntime( const std::filesystem::path& config_file,
   const bool wcls_present = ( original_vocab_size < 0 );
 
   // make sure that the data read from config file matches the ModelConfig (T)
-  CHECK_EQ( dim, T::dim ) << "dim does not match config file";
-  CHECK_EQ( kv_dim, T::kv_dim ) << "kv_dim does not match config file";
-  CHECK_EQ( hidden_dim, T::hidden_dim ) << "hidden_dim does not match config file";
-  CHECK_EQ( n_layers, T::n_layers ) << "n_layers does not match config file";
-  CHECK_EQ( head_size, T::head_size ) << "head_size does not match config file";
-  CHECK_EQ( n_heads, T::n_heads ) << "n_heads does not match config file";
-  CHECK_EQ( n_kv_heads, T::n_kv_heads ) << "n_kv_heads does not match config file";
-  CHECK_EQ( gqa_size, T::gqa_size ) << "gqa_size does not match config file";
-  CHECK_EQ( vocab_size, T::vocab_size ) << "vocab_size does not match config file";
-  CHECK_EQ( seq_len, T::seq_len ) << "seq_len does not match config file";
-  CHECK_EQ( wcls_present, T::wcls_present ) << "wcls_present does not match config file";
+  CHECK_EQ( dim, Config::dim ) << "dim does not match config file";
+  CHECK_EQ( kv_dim, Config::kv_dim ) << "kv_dim does not match config file";
+  CHECK_EQ( hidden_dim, Config::hidden_dim ) << "hidden_dim does not match config file";
+  CHECK_EQ( n_layers, Config::n_layers ) << "n_layers does not match config file";
+  CHECK_EQ( head_size, Config::head_size ) << "head_size does not match config file";
+  CHECK_EQ( n_heads, Config::n_heads ) << "n_heads does not match config file";
+  CHECK_EQ( n_kv_heads, Config::n_kv_heads ) << "n_kv_heads does not match config file";
+  CHECK_EQ( gqa_size, Config::gqa_size ) << "gqa_size does not match config file";
+  CHECK_EQ( vocab_size, Config::vocab_size ) << "vocab_size does not match config file";
+  CHECK_EQ( seq_len, Config::seq_len ) << "seq_len does not match config file";
+  CHECK_EQ( wcls_present, Config::wcls_present ) << "wcls_present does not match config file";
 
   CHECK_GT( dim, 0 ) << "Transformer dimension must be positive.";
   CHECK_GT( kv_dim, 0 ) << "key/value dimension must be positive.";
@@ -246,19 +262,15 @@ ConfigRuntime<T>::ConfigRuntime( const std::filesystem::path& config_file,
   CHECK_GT( seq_len, 0 ) << "Sequence length must be positive.";
   CHECK_GT( concurrency_limit, 0 ) << "Max concurrent inference size must be positive.";
 
-  this->start_layer_num = start_layer;
-  this->end_layer_num = ( end_layer == std::numeric_limits<uint32_t>::max() ) ? ( T::n_layers - 1 ) : end_layer;
+  this->hosting_table_ = hosting_table;
 
-  CHECK_GE( start_layer_num, 0 ) << "Start layer must be non-negative.";
-  CHECK_LT( end_layer_num, T::n_layers ) << "End layer must be less than the number of layers.";
-  CHECK_LE( start_layer_num, end_layer_num ) << "Start layer must be less than or equal to end layer.";
-
-  LOG( INFO ) << "Instantiated settings for " << util::demangle( typeid( T ).name() ) << ": " << to_string();
+  LOG( INFO ) << "Instantiated settings for " << util::demangle( typeid( Config ).name() ) << ": " << to_string();
 }
 
 template<typename T>
 std::string ConfigRuntime<T>::to_string() const
 {
+  // TODO: update to_string with something to represent what the node is hosting
   std::ostringstream oss;
   oss << "{ ";
   oss << "dim: " << T::dim << ", ";
@@ -274,8 +286,6 @@ std::string ConfigRuntime<T>::to_string() const
   oss << "wcls_present: " << T::wcls_present << ", ";
   oss << "concurrency_limit: " << concurrency_limit << ", ";
   oss << "max_context_count: " << max_context_count << ", ";
-  oss << "start_layer_num: " << start_layer_num << ", ";
-  oss << "end_layer_num: " << end_layer_num;
   oss << " }";
   return oss.str();
 }
@@ -283,43 +293,245 @@ std::string ConfigRuntime<T>::to_string() const
 /* BASE WEIGHTS */
 
 template<typename Config, typename DType>
-BaseWeights<Config, DType>::BaseWeights( const DType* model )
+requires ModelConfig<Config>
+BaseWeights<Config, DType>::BaseWeights( const DType* ptr, const ConfigRuntime<Config>& settings )
 {
-  const int head_size = Config::dim / Config::n_heads;
+  ParameterArray offsets = in_memory_offset( settings );
+  this->token_embedding_table = ptr + offsets[0];
+  this->rms_final_weight = ptr + offsets[1];
+  this->freq_cis_real = ptr + offsets[2];
+  this->freq_cis_imag = ptr + offsets[3];
+  this->wcls = ptr + offsets[4];
+}
 
-  auto ptr = model;
-  token_embedding_table = _advance_pointer( ptr, Config::vocab_size * Config::dim );
-  rms_final_weight = _advance_pointer( ptr, Config::dim );
-  freq_cis_real = _advance_pointer( ptr, Config::seq_len * head_size / 2 );
-  freq_cis_imag = _advance_pointer( ptr, Config::seq_len * head_size / 2 );
-  wcls = Config::wcls_present ? _advance_pointer( ptr, Config::vocab_size * Config::dim ) : token_embedding_table;
+template<typename Config, typename DType>
+requires ModelConfig<Config>
+consteval BaseWeights<Config, DType>::ParameterArray BaseWeights<Config, DType>::on_disk_element_size()
+{
+  ParameterArray sizes {};
 
-  CHECK_EQ( ptr - model, BaseWeights::base_size() / sizeof( DType ) ) << "Base weights size mismatch";
+  // Embedding table (token_embedding_table)
+  sizes[0] = Config::vocab_size * Config::dim;
+  // Classification (rms_final_weight)
+  sizes[1] = Config::dim;
+  // RoPE (freq_cis_real)
+  sizes[2] = Config::seq_len * Config::head_size / 2;
+  // RoPE (freq_cis_imag)
+  sizes[3] = Config::seq_len * Config::head_size / 2;
+  // Classification (wcls)
+  sizes[4] = Config::wcls_present ? Config::vocab_size * Config::dim : 0;
+
+  return sizes;
+}
+
+template<typename Config, typename DType>
+requires ModelConfig<Config>
+consteval size_t BaseWeights<Config, DType>::on_disk_total_byte_size()
+{
+  ParameterArray sizes = on_disk_element_size();
+  return sizeof( DType ) * ( std::accumulate( sizes.begin(), sizes.end(), 0 ) );
+}
+
+template<typename Config, typename DType>
+requires ModelConfig<Config>
+consteval BaseWeights<Config, DType>::ParameterArray BaseWeights<Config, DType>::on_disk_offset()
+{
+  ParameterArray sizes;
+  ParameterArray offsets = on_disk_element_size();
+
+  offsets[0] = 0;
+  for ( size_t i = 1; i < sizes.size(); ++i ) {
+    offsets[i] = offsets[i - 1] + sizes[i - 1];
+  }
+
+  // Classification (wcls)
+  offsets[4] = Config::wcls_present ? offsets[4] : 0;
+
+  return offsets;
+}
+
+template<typename Config, typename DType>
+requires ModelConfig<Config>
+BaseWeights<Config, DType>::ParameterArray BaseWeights<Config, DType>::in_memory_element_size(
+  const ConfigRuntime<Config>& settings )
+{
+
+  const bool model_hosts_embedding
+    = settings.hosts( 0, models::InferenceStage::PreAttention )
+      or ( settings.hosts_in_any_layer( models::InferenceStage::Classification ) and not Config::wcls_present );
+  const bool model_hosts_att = settings.hosts_in_any_layer( models::InferenceStage::Attention );
+  const bool model_hosts_cls = settings.hosts_in_any_layer( models::InferenceStage::Classification );
+
+  ParameterArray sizes {};
+
+  // Embedding table (token_embedding_table)
+  sizes[0] = model_hosts_embedding ? Config::vocab_size * Config::dim : 0;
+  // Classification (rms_final_weight)
+  sizes[1] = model_hosts_cls ? Config::dim : 0;
+  // RoPE (freq_cis_real)
+  sizes[2] = model_hosts_att ? Config::seq_len * Config::head_size / 2 : 0;
+  // RoPE (freq_cis_imag)
+  sizes[3] = model_hosts_att ? Config::seq_len * Config::head_size / 2 : 0;
+  // Classification (wcls)
+  sizes[4] = Config::wcls_present and model_hosts_cls ? Config::vocab_size * Config::dim : 0;
+
+  return sizes;
+}
+
+template<typename Config, typename DType>
+requires ModelConfig<Config>
+size_t BaseWeights<Config, DType>::in_memory_total_byte_size( const ConfigRuntime<Config>& settings )
+{
+  ParameterArray sizes = in_memory_element_size( settings );
+  return sizeof( DType ) * ( std::accumulate( sizes.begin(), sizes.end(), 0 ) );
+}
+
+template<typename Config, typename DType>
+requires ModelConfig<Config>
+BaseWeights<Config, DType>::ParameterArray BaseWeights<Config, DType>::in_memory_offset(
+  const ConfigRuntime<Config>& settings )
+{
+  ParameterArray sizes;
+  ParameterArray offsets = in_memory_element_size( settings );
+
+  offsets[0] = 0;
+  for ( size_t i = 1; i < sizes.size(); ++i ) {
+    offsets[i] = offsets[i - 1] + sizes[i - 1];
+  }
+
+  // Classification (wcls)
+  offsets[4] = Config::wcls_present ? offsets[4] : 0;
+
+  return offsets;
 }
 
 /* LAYER WEIGHTS */
 
 template<typename Config, typename DType>
-LayerWeights<Config, DType>::LayerWeights( const DType* model )
+requires ModelConfig<Config>
+LayerWeights<Config, DType>::LayerWeights( const DType* ptr, const ConfigRuntime<Config>& settings )
 {
-  auto ptr = model;
+  ParameterArray offsets = in_memory_offset( settings );
+  this->rms_att_weight = ptr + offsets[0];
+  this->wq = ptr + offsets[1];
+  this->wkv = ptr + offsets[2];
+  this->wo = ptr + offsets[3];
+  this->rms_ffn_weight = ptr + offsets[4];
+  this->w1 = ptr + offsets[5];
+  this->w2 = ptr + offsets[6];
+  this->w3 = ptr + offsets[7];
+}
 
-  // base pointers
-  this->rms_att_weight = _advance_pointer( ptr, Config::dim );
-  this->wq = _advance_pointer( ptr, Config::dim * Config::dim );
-  this->wkv = _advance_pointer( ptr, Config::dim * Config::kv_dim * 2 );
-  this->wo = _advance_pointer( ptr, Config::dim * Config::dim );
-  this->rms_ffn_weight = _advance_pointer( ptr, Config::dim );
-  this->w1 = _advance_pointer( ptr, Config::dim * Config::hidden_dim );
-  this->w2 = _advance_pointer( ptr, Config::dim * Config::hidden_dim );
-  this->w3 = _advance_pointer( ptr, Config::dim * Config::hidden_dim );
+template<typename Config, typename DType>
+requires ModelConfig<Config>
+consteval LayerWeights<Config, DType>::ParameterArray LayerWeights<Config, DType>::on_disk_element_size()
+{
+  ParameterArray sizes {};
 
-  CHECK_EQ( ptr - model, LayerWeights::layer_size() / sizeof( DType ) ) << "Layer weights size mismatch";
+  // PreAttention (rms_att_weight)
+  sizes[0] = Config::vocab_size * Config::dim;
+  // PreAttention (wq)
+  sizes[1] = Config::vocab_size * Config::dim * Config::dim;
+  // PreAttention (wkv)
+  sizes[2] = Config::vocab_size * Config::dim * Config::kv_dim * 2;
+  // PostAttention (wo)
+  sizes[3] = Config::vocab_size * Config::dim * Config::dim;
+  // PostAttention (rms_ffn_weight)
+  sizes[4] = Config::vocab_size * Config::dim;
+  // PostAttention (w1)
+  sizes[5] = Config::vocab_size * Config::dim * Config::hidden_dim;
+  // PostAttention (w2)
+  sizes[6] = Config::vocab_size * Config::dim * Config::hidden_dim;
+  // PostAttention (w3)
+  sizes[7] = Config::vocab_size * Config::dim * Config::hidden_dim;
+
+  return sizes;
+}
+
+template<typename Config, typename DType>
+requires ModelConfig<Config>
+consteval size_t LayerWeights<Config, DType>::on_disk_total_byte_size()
+{
+  ParameterArray sizes = on_disk_element_size();
+  return sizeof( DType ) * ( std::accumulate( sizes.begin(), sizes.end(), 0 ) );
+}
+
+template<typename Config, typename DType>
+requires ModelConfig<Config>
+consteval LayerWeights<Config, DType>::ParameterArray LayerWeights<Config, DType>::on_disk_offset()
+{
+  ParameterArray sizes;
+  ParameterArray offsets = on_disk_element_size();
+
+  offsets[0] = 0;
+  for ( size_t i = 1; i < sizes.size(); ++i ) {
+    offsets[i] = offsets[i - 1] + sizes[i - 1];
+  }
+
+  return offsets;
+}
+
+template<typename Config, typename DType>
+requires ModelConfig<Config>
+LayerWeights<Config, DType>::ParameterArray LayerWeights<Config, DType>::in_memory_element_size(
+  const ConfigRuntime<Config>& settings,
+  const size_t layer_num )
+{
+  const bool model_hosts_pre_att = settings.hosts( layer_num, models::InferenceStage::PreAttention );
+  const bool model_hosts_post_att = settings.hosts( layer_num, models::InferenceStage::PostAttention );
+
+  ParameterArray sizes {};
+
+  // PreAttention (rms_att_weight)
+  sizes[0] = model_hosts_pre_att ? Config::vocab_size * Config::dim : 0;
+  // PreAttention (wq)
+  sizes[1] = model_hosts_pre_att ? Config::vocab_size * Config::dim * Config::dim : 0;
+  // PreAttention (wkv)
+  sizes[2] = model_hosts_pre_att ? Config::vocab_size * Config::dim * Config::kv_dim * 2 : 0;
+  // PostAttention (wo)
+  sizes[3] = model_hosts_post_att ? Config::vocab_size * Config::dim * Config::dim : 0;
+  // PostAttention (rms_ffn_weight)
+  sizes[4] = model_hosts_post_att ? Config::vocab_size * Config::dim : 0;
+  // PostAttention (w1)
+  sizes[5] = model_hosts_post_att ? Config::vocab_size * Config::dim * Config::hidden_dim : 0;
+  // PostAttention (w2)
+  sizes[6] = model_hosts_post_att ? Config::vocab_size * Config::dim * Config::hidden_dim : 0;
+  // PostAttention (w3)
+  sizes[7] = model_hosts_post_att ? Config::vocab_size * Config::dim * Config::hidden_dim : 0;
+
+  return sizes;
+}
+
+template<typename Config, typename DType>
+requires ModelConfig<Config>
+size_t LayerWeights<Config, DType>::in_memory_total_byte_size( const ConfigRuntime<Config>& settings,
+                                                               const size_t layer_num )
+{
+  ParameterArray sizes = in_memory_element_size( settings, layer_num );
+  return sizeof( DType ) * ( std::accumulate( sizes.begin(), sizes.end(), 0 ) );
+}
+
+template<typename Config, typename DType>
+requires ModelConfig<Config>
+LayerWeights<Config, DType>::ParameterArray LayerWeights<Config, DType>::in_memory_offset(
+  const ConfigRuntime<Config>& settings,
+  const size_t layer_num )
+{
+  ParameterArray sizes;
+  ParameterArray offsets = in_memory_element_size( settings, layer_num );
+
+  offsets[0] = 0;
+  for ( size_t i = 1; i < sizes.size(); ++i ) {
+    offsets[i] = offsets[i - 1] + sizes[i - 1];
+  }
+
+  return offsets;
 }
 
 /* RUN STATE */
 
 template<typename Config, typename DType, typename ContextType>
+requires ModelConfig<Config>
 ScratchPad<Config, DType, ContextType>::ScratchPad( const ConfigRuntime<Config>& settings, DType* buffer )
   : buffer_( buffer )
 {
@@ -338,6 +550,7 @@ ScratchPad<Config, DType, ContextType>::ScratchPad( const ConfigRuntime<Config>&
 }
 
 template<typename Config, typename DType, typename ContextType>
+requires ModelConfig<Config>
 size_t ScratchPad<Config, DType, ContextType>::scratchpad_size( const ConfigRuntime<Config>& settings )
 {
   return sizeof( DType ) * settings.concurrency_limit
@@ -351,6 +564,7 @@ size_t ScratchPad<Config, DType, ContextType>::scratchpad_size( const ConfigRunt
 }
 
 template<typename Config, typename DType, typename ContextType>
+requires ModelConfig<Config>
 size_t ScratchPad<Config, DType, ContextType>::temp_buffer_size( const ConfigRuntime<Config>& settings )
 {
   return settings.concurrency_limit * std::max( sizeof( DType ), sizeof( glinthawk::float32_t ) )
