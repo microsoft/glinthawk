@@ -43,7 +43,6 @@ message InitializeWorker
   int32 tier = 6;
   uint32 rank = 7;
   bool randomize = 8;
-  string blobstore_uri = 9;
 }
 
 message ProcessPrompts { repeated string prompt_ids = 1; }
