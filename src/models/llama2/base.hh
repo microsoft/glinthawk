@@ -37,19 +37,27 @@ struct ConfigRuntime
                  const uint64_t max_context_count,
                  const bool randomize_parameters );
 
-  std::string to_string() const;
+  [[nodiscard]] std::string to_string() const;
 
-  bool hosts( size_t layer, models::InferenceStage stage ) const;
-  bool hosts_in_any_layer( models::InferenceStage stage ) const;
-  bool hosts_in_any_stage( size_t layer ) const;
+  [[nodiscard]] bool hosts( size_t layer, models::InferenceStage stage ) const
+  {
+    return hosting_table_[layer][util::to_underlying( stage )];
+  }
+  [[nodiscard]] bool hosts_in_any_layer( models::InferenceStage stage ) const
+  {
+    return hosting_stage_table_[util::to_underlying( stage )];
+  }
+  [[nodiscard]] size_t num_attention_layers_hosted() const { return num_attention_layers_hosted_; };
 
   /// @brief Size of the config stored on disk (in bytes)
   static size_t config_size() { return sizeof( int32_t ) * 7; }
 
   std::array<std::array<bool, util::to_underlying( models::InferenceStage::__COUNT__ )>, Config::n_layers>
     hosting_table_;
-  uint64_t concurrency_limit { 1 }; // max concurrent inference size
-  uint64_t max_context_count { 1 }; // max number of contexts
+  std::array<bool, util::to_underlying( models::InferenceStage::__COUNT__ )> hosting_stage_table_;
+  uint64_t concurrency_limit { 1 };          // max concurrent inference size
+  uint64_t max_context_count { 1 };          // max number of contexts
+  size_t num_attention_layers_hosted_ { 0 }; // how many attention layers are supported
   bool randomize_parameters { false };
 };
 
@@ -265,27 +273,46 @@ ConfigRuntime<Config>::ConfigRuntime(
   CHECK_GT( concurrency_limit, 0 ) << "Max concurrent inference size must be positive.";
 
   this->hosting_table_ = hosting_table;
+  bool hosts_anything = false;
+
+  for ( size_t i = 0; i < hosting_stage_table_.size(); i++ ) {
+    hosting_stage_table_[i] = false;
+    for ( size_t j = 0; j < Config::n_layers; j++ ) {
+      hosting_stage_table_[i] = hosting_stage_table_[i] or hosting_table_[j][i];
+    }
+    hosts_anything = hosts_anything or hosting_stage_table_[i];
+  }
+
+  CHECK( hosts_anything ) << "This hosting table does not host any part of the model";
+
+  num_attention_layers_hosted_ = 0;
+  for ( size_t j = 0; j < Config::n_layers; j++ ) {
+    if ( hosting_table_[j][util::to_underlying( models::InferenceStage::Attention )] ) {
+      num_attention_layers_hosted_++;
+    }
+  }
 
   LOG( INFO ) << "Instantiated settings for " << util::demangle( typeid( Config ).name() ) << ": " << to_string();
 }
 
-template<typename T>
-std::string ConfigRuntime<T>::to_string() const
+template<typename Config>
+requires ModelConfig<Config>
+std::string ConfigRuntime<Config>::to_string() const
 {
   // TODO: update to_string with something to represent what the node is hosting
   std::ostringstream oss;
   oss << "{ ";
-  oss << "dim: " << T::dim << ", ";
-  oss << "kv_dim: " << T::kv_dim << ", ";
-  oss << "hidden_dim: " << T::hidden_dim << ", ";
-  oss << "n_layers: " << T::n_layers << ", ";
-  oss << "head_size: " << T::head_size << ", ";
-  oss << "n_heads: " << T::n_heads << ", ";
-  oss << "n_kv_heads: " << T::n_kv_heads << ", ";
-  oss << "gqa_size: " << T::gqa_size << ", ";
-  oss << "vocab_size: " << T::vocab_size << ", ";
-  oss << "seq_len: " << T::seq_len << ", ";
-  oss << "wcls_present: " << T::wcls_present << ", ";
+  oss << "dim: " << Config::dim << ", ";
+  oss << "kv_dim: " << Config::kv_dim << ", ";
+  oss << "hidden_dim: " << Config::hidden_dim << ", ";
+  oss << "n_layers: " << Config::n_layers << ", ";
+  oss << "head_size: " << Config::head_size << ", ";
+  oss << "n_heads: " << Config::n_heads << ", ";
+  oss << "n_kv_heads: " << Config::n_kv_heads << ", ";
+  oss << "gqa_size: " << Config::gqa_size << ", ";
+  oss << "vocab_size: " << Config::vocab_size << ", ";
+  oss << "seq_len: " << Config::seq_len << ", ";
+  oss << "wcls_present: " << Config::wcls_present << ", ";
   oss << "concurrency_limit: " << concurrency_limit << ", ";
   oss << "max_context_count: " << max_context_count << ", ";
   oss << " }";
