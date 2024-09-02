@@ -124,7 +124,8 @@ Context<Config, DType>::Context( const ConfigRuntime<Config>& settings, const bo
     if ( make_empty ) {
       ptr = nullptr;
     } else {
-      const cudaError_t err = cudaMalloc( &ptr, Context<Config, DType>::max_size( settings.n_layers_loaded() ) );
+      const cudaError_t err
+        = cudaMalloc( &ptr, Context<Config, DType>::max_size( settings.num_attention_layers_hosted() ) );
       CHECK_EQ( err, cudaSuccess ) << "Failed to create context vector on CUDA device";
       return decltype( storage_ ) { ptr };
     }
@@ -142,7 +143,8 @@ DynamicContext<Config, DType>::DynamicContext( const ConfigRuntime<Config>& sett
       return std::nullopt;
     }
 
-    return common::cuda::VirtualMemoryRegion( Context<Config, DType>::max_size( settings.n_layers_loaded() ) );
+    return common::cuda::VirtualMemoryRegion(
+      Context<Config, DType>::max_size( settings.num_attention_layers_hosted() ) );
   }() )
   , layer_allocated_offsets_( Config::n_layers, 0 )
 {

@@ -29,6 +29,8 @@ concept LayerContextConcept = TokenContextConcept<typename T::TokenContextType, 
   { T() };
   { t.token( 0ull ) } -> std::same_as<typename T::TokenContextType>;
   { T::max_size() } -> std::same_as<size_t>;
+  { t.empty() } -> std::same_as<bool>;
+  { t.is_contiguous() } -> std::same_as<bool>;
 };
 
 template<typename T, typename DType>
@@ -133,36 +135,42 @@ requires ModelConfig<Config>
 class Context
 {
 protected:
-  size_t nlayers_loaded_;
-  size_t start_layer_num_;
   DType* buffer_;
+  DType* layer_buffer_[Config::n_layers];
   // TODO: Is there a benefit to maintaining context state (such as token count)?
-  // TODO: The CPU attention machines do not need to know about layers for reserving context. Should we redesign them
-  //  that way?
 
 public:
   using LayerContextType = LayerContext<Config, DType>;
   using TokenContextType = TokenContext<Config, DType>;
 
   Context( const ConfigRuntime<Config>& settings, DType* buffer )
-    : nlayers_loaded_( settings.n_layers_loaded() )
-    , start_layer_num_( settings.start_layer_num )
-    , buffer_( buffer )
+    : buffer_( buffer )
   {
+    auto ptr = buffer;
+    for ( size_t i = 0; i < Config::n_layers; i++ ) {
+      if ( settings.hosts( i, models::InferenceStage::Attention ) and buffer_ != nullptr ) {
+        layer_buffer_[i] = ptr;
+        ptr += LayerContextType::max_size() / sizeof( DType );
+      } else {
+        layer_buffer_[i] = nullptr;
+      }
+    }
   }
 
   Context( const ConfigRuntime<Config>& settings )
-    : nlayers_loaded_( settings.n_layers_loaded() )
-    , start_layer_num_( settings.start_layer_num )
-    , buffer_( nullptr )
+    : buffer_( nullptr )
   {
+    for ( size_t i = 0; i < Config::n_layers; i++ ) {
+      layer_buffer_[i] = nullptr;
+    }
   }
 
   Context()
-    : nlayers_loaded_( 0 )
-    , start_layer_num_( 0 )
-    , buffer_( nullptr )
+    : buffer_( nullptr )
   {
+    for ( size_t i = 0; i < Config::n_layers; i++ ) {
+      layer_buffer_[i] = nullptr;
+    }
   }
 
   // This function is always called before processing a state, with the current layer number
@@ -172,9 +180,7 @@ public:
 
   LayerContextType layer( const int layer_num ) const
   {
-    if ( buffer_ == nullptr )
-      return { nullptr };
-    return { buffer_ + ( layer_num - start_layer_num_ ) * LayerContextType::max_size() / sizeof( DType ) };
+    return layer_buffer_[layer_num];
   }
 
   static size_t max_size( const size_t n_layers ) { return n_layers * LayerContextType::max_size(); }
