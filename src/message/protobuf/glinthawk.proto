@@ -39,10 +39,13 @@ message InitializeWorker
       uint32 max_context_count = 6;
     }
   repeated TierConcurrency tier_concurrency_s = 4;
-  int32 tier = 5;
-  uint32 rank = 6;
-  bool randomize = 7;
-  string blobstore_uri = 8;
+  repeated bool slice_hosting_table = 5;
+  repeated bool node_hosting_table = 6;
+  uint32 slice_index = 7;
+  int32 tier = 8;
+  uint32 rank = 9;
+  bool randomize = 10;
+  string blobstore_uri = 11;
 }
 
 message ProcessPrompts { repeated string prompt_ids = 1; }

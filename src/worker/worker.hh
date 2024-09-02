@@ -59,6 +59,8 @@ private:
 private:
   using BatchedState = glinthawk::models::BatchedInferenceState<ModelConfig>;
   using RouteMap = std::map<std::tuple<uint32_t, typename models::InferenceStage, uint8_t, uint8_t>, net::Address>;
+  using HostingTable = typename std::array<std::array<bool, util::to_underlying( models::InferenceStage::__COUNT__ )>,
+                                           ModelConfig::n_layers>;
 
   bool running_ { true };
   EventLoop event_loop_ {};
@@ -104,8 +106,8 @@ private:
 
   void setup_peer( std::map<net::Address, Peer>::iterator peer_it );
   void setup_tier_router_and_compute_kernel( const std::filesystem::path& model_root,
-                                             const uint32_t start_layer,
-                                             const uint32_t end_layer,
+                                             const HostingTable slice_hosting_table,
+                                             const HostingTable node_hosting_table,
                                              compute::SliceConcurrency concurrency_,
                                              std::vector<size_t> max_context_counts_,
                                              const int8_t tier,
@@ -145,6 +147,8 @@ public:
 };
 
 template<typename ModelConfig, typename ComputeKernel>
+requires models::llama2::ModelConfig<ModelConfig>
+         && compute::KernelConcept<ComputeKernel, models::BatchedInferenceState<ModelConfig>>
 void BatchedWorker<ModelConfig, ComputeKernel>::setup_stats_handler()
 {
   /* let's see if telegraph is listening */
@@ -168,6 +172,8 @@ void BatchedWorker<ModelConfig, ComputeKernel>::setup_stats_handler()
 }
 
 template<typename ModelConfig, typename ComputeKernel>
+requires models::llama2::ModelConfig<ModelConfig>
+         && compute::KernelConcept<ComputeKernel, models::BatchedInferenceState<ModelConfig>>
 void BatchedWorker<ModelConfig, ComputeKernel>::setup_peer( std::map<net::Address, Peer>::iterator peer_it )
 {
   const std::string addr = peer_it->first.to_string();
@@ -192,20 +198,21 @@ void BatchedWorker<ModelConfig, ComputeKernel>::setup_peer( std::map<net::Addres
 }
 
 template<typename ModelConfig, typename ComputeKernel>
+requires models::llama2::ModelConfig<ModelConfig>
+         && compute::KernelConcept<ComputeKernel, models::BatchedInferenceState<ModelConfig>>
 void BatchedWorker<ModelConfig, ComputeKernel>::setup_tier_router_and_compute_kernel(
   const std::filesystem::path& model_root,
-  const uint32_t start_layer,
-  const uint32_t end_layer,
+  const HostingTable slice_hosting_table,
+  const HostingTable node_hosting_table,
   compute::SliceConcurrency concurrency,
   std::vector<size_t> max_context_counts,
   const int8_t tier,
   const uint8_t rank,
   const bool randomize )
 {
-  CHECK_LE( start_layer, end_layer ) << "start_layer must be less than or equal to end_layer";
-
   monolith_concurrency_size_ = concurrency.full_batch();
-  first_parent_ = start_layer == 0 and tier == 0 and rank == 0;
+  first_parent_
+    = slice_hosting_table[0][util::to_underlying( models::InferenceStage::PreAttention )] and tier == 0 and rank == 0;
   compute::NodeConcurrency kernel_concurrency = concurrency.node_concurrency( tier );
   const size_t kernel_max_context_count = max_context_counts[tier];
   const size_t kernel_max_concurrency_size = kernel_concurrency.max();
@@ -214,12 +221,11 @@ void BatchedWorker<ModelConfig, ComputeKernel>::setup_tier_router_and_compute_ke
 
   if constexpr ( ComputeKernel::Type == compute::KernelType::Batched ) {
     kernel_ = std::make_unique<ComputeKernel>(
-      model_root, start_layer, end_layer, kernel_max_concurrency_size, kernel_max_context_count, randomize );
+      model_root, node_hosting_table, kernel_max_concurrency_size, kernel_max_context_count, randomize );
   } else if constexpr ( ComputeKernel::Type == compute::KernelType::SimplePiped ) {
     kernel_ = std::make_unique<ComputeKernel>( kernel_concurrency,
                                                model_root,
-                                               start_layer,
-                                               end_layer,
+                                               node_hosting_table,
                                                kernel_max_concurrency_size,
                                                kernel_max_context_count,
                                                randomize );
@@ -231,8 +237,7 @@ void BatchedWorker<ModelConfig, ComputeKernel>::setup_tier_router_and_compute_ke
                                  kernel_concurrency.get( models::InferenceStage::Classification ) },
       compute::NodeConcurrency { 0, kernel_concurrency.get( models::InferenceStage::Attention ), 0, 0 },
       model_root,
-      start_layer,
-      end_layer,
+      node_hosting_table,
       kernel_max_concurrency_size,
       kernel_max_context_count,
       randomize );
@@ -240,8 +245,7 @@ void BatchedWorker<ModelConfig, ComputeKernel>::setup_tier_router_and_compute_ke
     // TODO(pouya): shouldn't the kernel_max_concurrency_size passed to the model also be halved?
     kernel_ = std::make_unique<ComputeKernel>( kernel_max_concurrency_size,
                                                model_root,
-                                               start_layer,
-                                               end_layer,
+                                               node_hosting_table,
                                                kernel_max_concurrency_size,
                                                kernel_max_context_count,
                                                randomize );
@@ -252,7 +256,7 @@ void BatchedWorker<ModelConfig, ComputeKernel>::setup_tier_router_and_compute_ke
 
   if ( tier == 0 and rank == 0 ) {
     tier_router_ = std::make_unique<compute::ParentTierRouter<ComputeKernel, ModelConfig>>(
-      std::move( kernel_ ), concurrency, max_context_counts, start_layer, end_layer );
+      std::move( kernel_ ), concurrency, max_context_counts, slice_hosting_table );
   } else {
     tier_router_ = std::make_unique<compute::ChildTierRouter<ComputeKernel, ModelConfig>>( std::move( kernel_ ) );
   }
@@ -273,6 +277,8 @@ void BatchedWorker<ModelConfig, ComputeKernel>::setup_tier_router_and_compute_ke
 }
 
 template<typename ModelConfig, typename ComputeKernel>
+requires models::llama2::ModelConfig<ModelConfig>
+         && compute::KernelConcept<ComputeKernel, models::BatchedInferenceState<ModelConfig>>
 void BatchedWorker<ModelConfig, ComputeKernel>::handle_completions( const bool reset_timer )
 {
   // commit all completions
@@ -290,6 +296,8 @@ void BatchedWorker<ModelConfig, ComputeKernel>::handle_completions( const bool r
 }
 
 template<typename ModelConfig, typename ComputeKernel>
+requires models::llama2::ModelConfig<ModelConfig>
+           && compute::KernelConcept<ComputeKernel, models::BatchedInferenceState<ModelConfig>>
 BatchedWorker<ModelConfig, ComputeKernel>::BatchedWorker( const net::Address& worker_address,
                                                           const net::Address& coordinator_address,
                                                           const std::filesystem::path& model_root )
@@ -361,6 +369,8 @@ BatchedWorker<ModelConfig, ComputeKernel>::BatchedWorker( const net::Address& wo
 }
 
 template<typename ModelConfig, typename ComputeKernel>
+requires models::llama2::ModelConfig<ModelConfig>
+         && compute::KernelConcept<ComputeKernel, models::BatchedInferenceState<ModelConfig>>
 void BatchedWorker<ModelConfig, ComputeKernel>::listen_callback()
 {
   net::TCPSocket socket = listen_socket_.accept();
@@ -375,6 +385,8 @@ void BatchedWorker<ModelConfig, ComputeKernel>::listen_callback()
 }
 
 template<typename ModelConfig, typename ComputeKernel>
+requires models::llama2::ModelConfig<ModelConfig>
+         && compute::KernelConcept<ComputeKernel, models::BatchedInferenceState<ModelConfig>>
 bool BatchedWorker<ModelConfig, ComputeKernel>::handle_coordinator_message( core::Message&& msg )
 {
   LOG( INFO ) << "(Coordinator) Incoming message: " << msg.info();
@@ -388,8 +400,9 @@ bool BatchedWorker<ModelConfig, ComputeKernel>::handle_coordinator_message( core
       // TODO(sadjad): eventually allow for loading different models
       // const auto& model_name = proto.model_name();
 
-      __stats__.tag( "start_layer", std::to_string( proto.start_layer() ) );
-      __stats__.tag( "end_layer", std::to_string( proto.end_layer() ) );
+      __stats__.tag( "slice", std::to_string( proto.slice_index() ) );
+      __stats__.tag( "tier", std::to_string( proto.tier() ) );
+      __stats__.tag( "rank", std::to_string( proto.rank() ) );
 #if defined( TARGET_PLATFORM_AMD64 )
       __stats__.tag( "platform", "amd64" );
 #elif defined( TARGET_PLATFORM_CUDA )
@@ -410,9 +423,28 @@ bool BatchedWorker<ModelConfig, ComputeKernel>::handle_coordinator_message( core
         max_contexts.push_back( tier_concurrency.max_context_count() );
       }
 
+      CHECK_EQ( proto.slice_hosting_table().size(),
+                ModelConfig::n_layers * util::to_underlying( models::InferenceStage::__COUNT__ ) )
+        << "Slice hosting table is not the correct size";
+      CHECK_EQ( proto.node_hosting_table().size(),
+                ModelConfig::n_layers * util::to_underlying( models::InferenceStage::__COUNT__ ) )
+        << "Node hosting table is not the correct size";
+
+      HostingTable slice_hosting_table, node_hosting_table;
+
+      for ( int i = 0; i < ModelConfig::n_layers; i++ ) {
+        for ( int j = 0; j < util::to_underlying( models::InferenceStage::__COUNT__ ); j++ ) {
+          slice_hosting_table[i][j]
+            = proto.slice_hosting_table( i * util::to_underlying( models::InferenceStage::__COUNT__ ) + j );
+          node_hosting_table[i][j]
+            = proto.node_hosting_table( i * util::to_underlying( models::InferenceStage::__COUNT__ ) + j );
+          const auto tier_concurrency = proto.tier_concurrency_s( i );
+        }
+      }
+
       setup_tier_router_and_compute_kernel( model_root_,
-                                            proto.start_layer(),
-                                            proto.end_layer(),
+                                            slice_hosting_table,
+                                            node_hosting_table,
                                             { n_tiers, stage_concurrencies },
                                             max_contexts,
                                             static_cast<int8_t>( proto.tier() ),
@@ -639,6 +671,8 @@ bool BatchedWorker<ModelConfig, ComputeKernel>::handle_coordinator_message( core
 }
 
 template<typename ModelConfig, typename ComputeKernel>
+requires models::llama2::ModelConfig<ModelConfig>
+         && compute::KernelConcept<ComputeKernel, models::BatchedInferenceState<ModelConfig>>
 void BatchedWorker<ModelConfig, ComputeKernel>::handle_tier_router_event()
 {
   this->tier_router_->event_fd().read_event();
@@ -670,6 +704,8 @@ void BatchedWorker<ModelConfig, ComputeKernel>::handle_tier_router_event()
 }
 
 template<typename ModelConfig, typename ComputeKernel>
+requires models::llama2::ModelConfig<ModelConfig>
+         && compute::KernelConcept<ComputeKernel, models::BatchedInferenceState<ModelConfig>>
 bool BatchedWorker<ModelConfig, ComputeKernel>::handle_peer_message( core::Message&& msg )
 {
   DLOG( INFO ) << "(Peer) Incoming message: " << msg.info();
@@ -747,6 +783,8 @@ bool BatchedWorker<ModelConfig, ComputeKernel>::handle_peer_message( core::Messa
 }
 
 template<typename ModelConfig, typename ComputeKernel>
+requires models::llama2::ModelConfig<ModelConfig>
+         && compute::KernelConcept<ComputeKernel, models::BatchedInferenceState<ModelConfig>>
 void BatchedWorker<ModelConfig, ComputeKernel>::handle_stats()
 {
   stats_timer_.read_event();
@@ -760,6 +798,8 @@ void BatchedWorker<ModelConfig, ComputeKernel>::handle_stats()
 }
 
 template<typename ModelConfig, typename ComputeKernel>
+requires models::llama2::ModelConfig<ModelConfig>
+         && compute::KernelConcept<ComputeKernel, models::BatchedInferenceState<ModelConfig>>
 void BatchedWorker<ModelConfig, ComputeKernel>::run()
 {
   while ( event_loop_.wait_next_event( 1'000 ) != EventLoop::Result::Exit ) {
@@ -772,6 +812,8 @@ void BatchedWorker<ModelConfig, ComputeKernel>::run()
 }
 
 template<typename ModelConfig, typename ComputeKernel>
+requires models::llama2::ModelConfig<ModelConfig>
+         && compute::KernelConcept<ComputeKernel, models::BatchedInferenceState<ModelConfig>>
 BatchedWorker<ModelConfig, ComputeKernel>::~BatchedWorker()
 {
   LOG( INFO ) << "BatchedWorker shutting down...";
