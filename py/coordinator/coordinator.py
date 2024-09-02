@@ -225,9 +225,10 @@ class Coordinator:
                     Message.OpCode.InitializeWorker,
                     protobuf.InitializeWorker(
                         model_name=self.model.model_name,
-                        start_layer=worker.model_slice_start[0],
-                        end_layer=worker.model_slice_end[0],
+                        slice_hosting_table=worker.create_slice_hosting_table(),
+                        node_hosting_table=worker.create_node_hosting_table(),
                         tier_concurrency_s=self.model.get_tier_concurrencies_message(),
+                        slice_index=worker.slice_index,
                         tier=worker.tier,
                         rank=worker.rank,
                         randomize=False,

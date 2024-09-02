@@ -1,12 +1,11 @@
-import enum
-import socket
-import itertools
 import asyncio
-
-from typing import Tuple, Any
+import enum
+import itertools
+import socket
 from dataclasses import dataclass, field
+from typing import Tuple, List
 
-from .base import Stage, Platform, Kernel, Stage_Type, Platform_Type, Kernel_Type
+from .base import Stage, Platform, Kernel, Stage_Type, Platform_Type, Kernel_Type, vector_index, stages_in_order
 
 
 @dataclass
@@ -26,6 +25,7 @@ class Worker:
     platform: Platform_Type = None
     kernel: Kernel_Type = None
 
+    slice_index: int = -1
     tier: int = -1
     rank: int = -1
 
@@ -45,7 +45,42 @@ class Worker:
     max_context_count: int = 0
 
     def is_first_parent(self) -> bool:
-        return self.tier == 0 and self.rank == 0 and self.model_slice_start[0] == 0 and self.model_slice_start[1] == Stage.PreAttention
+        return self.tier == 0 and self.rank == 0 and self.model_slice_start[0] == 0 and self.model_slice_start[
+            1] == Stage.PreAttention
+
+    def create_slice_hosting_table(self, n_layers: int) -> List[bool]:
+        vi_start = vector_index(*self.model_slice_start)
+        vi_end = vector_index(*self.model_slice_end)
+
+        slice_hosting_table = []
+        for layer in range(n_layers):
+            for stage in stages_in_order:
+                vi = vector_index(layer, stage)
+                if stage == Stage.Classification and layer != n_layers - 1:
+                    slice_hosting_table.append(False)
+                elif vi_start <= vi <= vi_end:
+                    slice_hosting_table.append(True)
+                else:
+                    slice_hosting_table.append(False)
+        return slice_hosting_table
+
+    def create_node_hosting_table(self, n_layers: int) -> List[bool]:
+        vi_start = vector_index(*self.model_slice_start)
+        vi_end = vector_index(*self.model_slice_end)
+
+        node_hosting_table = []
+        for layer in range(n_layers):
+            for stage, concur in zip(stages_in_order,
+                                     [self.concurrency_size_pre, self.concurrency_size_att,
+                                      self.concurrency_size_post, self.concurrency_size_cls]):
+                vi = vector_index(layer, stage)
+                if stage == Stage.Classification and layer != n_layers - 1:
+                    node_hosting_table.append(False)
+                elif vi_start <= vi <= vi_end and concur > 0:
+                    node_hosting_table.append(True)
+                else:
+                    node_hosting_table.append(False)
+        return node_hosting_table
 
     def __repr__(self):
         return (f"Worker(id={self.id}, state={self.state}, platform={Platform.Name(self.platform)}, "

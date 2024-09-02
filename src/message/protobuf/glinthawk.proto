@@ -27,8 +27,6 @@ message Hey
 message InitializeWorker
 {
   string model_name = 1;
-  uint32 start_layer = 2;
-  uint32 end_layer = 3;
   message TierConcurrency
     {
       uint32 ranks = 1;
@@ -38,14 +36,14 @@ message InitializeWorker
       uint32 concurrency_cls_size = 5;
       uint32 max_context_count = 6;
     }
-  repeated TierConcurrency tier_concurrency_s = 4;
-  repeated bool slice_hosting_table = 5;
-  repeated bool node_hosting_table = 6;
-  uint32 slice_index = 7;
-  int32 tier = 8;
-  uint32 rank = 9;
-  bool randomize = 10;
-  string blobstore_uri = 11;
+  repeated TierConcurrency tier_concurrency_s = 2;
+  repeated bool slice_hosting_table = 3;
+  repeated bool node_hosting_table = 4;
+  uint32 slice_index = 5;
+  int32 tier = 6;
+  uint32 rank = 7;
+  bool randomize = 8;
+  string blobstore_uri = 9;
 }
 
 message ProcessPrompts { repeated string prompt_ids = 1; }

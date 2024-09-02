@@ -101,6 +101,7 @@ class Model:
         if last_layer == self.n_layers - 1:
             # We're responsible for classification
             worker.model_slice_end = (last_layer, Stage.Classification)
+        worker.slice_index = self._next_worker_loc[i_tier]['slice']
         worker.tier = i_tier
         worker.rank = self._next_worker_loc[i_tier]['rank']
 
