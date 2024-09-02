@@ -227,8 +227,6 @@ void PipedComputeKernel<Model>::bookkeeping_thread_func()
       DLOG( INFO ) << "Popped state from incoming queue: " << state.debug_string( false );
     }
 
-    CHECK_GE( model_.model->settings().end_layer_num, state.next_layer() );
-    CHECK_LE( model_.model->settings().start_layer_num, state.next_layer() );
     CHECK_EQ( model_.concurrency.get( state.next_stage() ), state.batch_size() );
 
     if ( state.next_stage() == Stage::Attention ) {

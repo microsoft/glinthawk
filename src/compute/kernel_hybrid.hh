@@ -122,9 +122,6 @@ HybridComputeKernel<ModelA, ModelB>::HybridComputeKernel( const NodeConcurrency&
   : a_( std::make_unique<ModelA>( std::forward<Args>( args )... ), concurrency_a )
   , b_( std::make_unique<ModelB>( std::forward<Args>( args )... ), concurrency_b )
 {
-  CHECK_GE( a_.model->settings().end_layer_num, b_.model->settings().end_layer_num );
-  CHECK_LE( a_.model->settings().start_layer_num, b_.model->settings().start_layer_num );
-
   threads_.emplace_back( &HybridComputeKernel::bookkeeping_thread_func, this );
   threads_.emplace_back( &HybridComputeKernel::execution_thread_func<ModelA>, this, std::ref( a_ ) );
   threads_.emplace_back( &HybridComputeKernel::execution_thread_func<ModelB>, this, std::ref( b_ ) );
@@ -280,8 +277,6 @@ void HybridComputeKernel<ModelA, ModelB>::bookkeeping_thread_func()
       DLOG( INFO ) << "Popped state from incoming queue: " << state.debug_string( false );
     }
 
-    CHECK_GE( a_.model->settings().end_layer_num, state.next_layer() );
-    CHECK_LE( a_.model->settings().start_layer_num, state.next_layer() );
     CHECK_EQ( a_.concurrency.get( state.next_stage() ) + b_.concurrency.get( state.next_stage() ), state.batch_size() );
 
     // can we, or have we already, allocated the contexts for this state?
