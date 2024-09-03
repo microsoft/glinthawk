@@ -134,7 +134,8 @@ async def run_command(command) -> int:
         output = -2
     finally:
         if process and process.returncode is None:
-            os.killpg(os.getpgid(process.pid), signal.SIGHUP)
+            # Use SIGINT here so the scripts running underneath finish gracefully (e.g., remove docker containers)
+            os.killpg(os.getpgid(process.pid), signal.SIGINT)
             await process.wait()
 
     return output
