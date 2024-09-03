@@ -179,13 +179,18 @@ Llama2<Config, DType, LlamaOperations, Context>::Llama2(
 {
   auto copy_file_to_buffer = [this]<typename T>( const std::filesystem::path& path,
                                                  DType* buffer,
-                                                 const size_t src_total_size,
+                                                 const size_t src_total_byte_size,
                                                  const T src_offset,
+                                                 const size_t dst_total_byte_size,
                                                  const T dst_len,
                                                  const T dst_offset ) {
-    CHECK_EQ( std::filesystem::file_size( path ), src_total_size ) << "File " << path << " is not the expected size.";
+    if ( dst_total_byte_size == 0 ) {
+      return;
+    }
+    CHECK_EQ( std::filesystem::file_size( path ), src_total_byte_size )
+      << "File " << path << " is not the expected size.";
     FileDescriptor fd { CHECK_SYSCALL( "open", open( path.c_str(), O_RDONLY ) ) };
-    MMap_Region mmap { nullptr, src_total_size, PROT_READ, MAP_PRIVATE, fd.fd_num(), 0 };
+    MMap_Region mmap { nullptr, src_total_byte_size, PROT_READ, MAP_PRIVATE, fd.fd_num(), 0 };
 
     for ( size_t i = 0; i < dst_offset.size(); i++ ) {
       if ( dst_len[i] > 0 ) {
@@ -228,6 +233,7 @@ Llama2<Config, DType, LlamaOperations, Context>::Llama2(
                          base_weights_buffer_.get(),
                          BaseWeights<Config, DType>::on_disk_total_byte_size(),
                          BaseWeights<Config, DType>::on_disk_offset(),
+                         BaseWeights<Config, DType>::in_memory_total_byte_size( instance_config_ ),
                          BaseWeights<Config, DType>::in_memory_element_size( instance_config_ ),
                          BaseWeights<Config, DType>::in_memory_offset( instance_config_ ) );
 
@@ -246,6 +252,7 @@ Llama2<Config, DType, LlamaOperations, Context>::Llama2(
                            ptr,
                            LayerWeights<Config, DType>::on_disk_total_byte_size(),
                            LayerWeights<Config, DType>::on_disk_offset(),
+                           LayerWeights<Config, DType>::in_memory_all_layers_total_byte_size( instance_config_ ),
                            LayerWeights<Config, DType>::in_memory_element_size( instance_config_, i ),
                            LayerWeights<Config, DType>::in_memory_offset( instance_config_, i ) );
 
