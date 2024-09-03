@@ -168,7 +168,7 @@ Llama2<Config, DType, LlamaOperations, Context>::Llama2(
     std::array<LayerWeights<Config, DType>, Config::n_layers> layers {};
     auto ptr = layers_buffer_.get();
     for ( size_t i = 0; i < Config::n_layers; i++ ) {
-      layers[i] = LayerWeights<Config, DType> { reinterpret_cast<DType*>( ptr ) };
+      layers[i] = LayerWeights<Config, DType> { reinterpret_cast<DType*>( ptr ), instance_config_, i };
       size_t current_layer_byte_size = LayerWeights<Config, DType>::in_memory_total_byte_size( instance_config_, i );
       ptr = reinterpret_cast<DType*>( reinterpret_cast<uint8_t*>( ptr ) + current_layer_byte_size );
     }
@@ -181,18 +181,19 @@ Llama2<Config, DType, LlamaOperations, Context>::Llama2(
                                                  DType* buffer,
                                                  const size_t src_total_size,
                                                  const T src_offset,
-                                                 const T dst_len_bytes,
+                                                 const T dst_len,
                                                  const T dst_offset ) {
     CHECK_EQ( std::filesystem::file_size( path ), src_total_size ) << "File " << path << " is not the expected size.";
     FileDescriptor fd { CHECK_SYSCALL( "open", open( path.c_str(), O_RDONLY ) ) };
     MMap_Region mmap { nullptr, src_total_size, PROT_READ, MAP_PRIVATE, fd.fd_num(), 0 };
 
     for ( size_t i = 0; i < dst_offset.size(); i++ ) {
-      if ( dst_len_bytes[i] > 0 )
+      if ( dst_len[i] > 0 ) {
         this->ops_.copy( buffer + dst_offset[i],
                          reinterpret_cast<DType*>( mmap.addr() ) + src_offset[i],
-                         dst_len_bytes[i],
+                         dst_len[i] * sizeof( DType ),
                          CopyType::HostToDevice );
+      }
     }
   };
 
@@ -230,12 +231,13 @@ Llama2<Config, DType, LlamaOperations, Context>::Llama2(
                          BaseWeights<Config, DType>::in_memory_element_size( instance_config_ ),
                          BaseWeights<Config, DType>::in_memory_offset( instance_config_ ) );
 
-    LOG( INFO ) << "Loaded base weights (" << BaseWeights<Config, DType>::in_memory_total_byte_size() << " bytes).";
+    LOG( INFO ) << "Loaded base weights (" << BaseWeights<Config, DType>::in_memory_total_byte_size( instance_config_ )
+                << " bytes).";
 
     DType* ptr = layers_buffer_.get();
 
     // Load LAYER(i)
-    for ( size_t i = 0; i <= Config::n_layers; i++ ) {
+    for ( size_t i = 0; i < Config::n_layers; i++ ) {
       const auto filename = model_dir / ( "LAYER" + std::to_string( i ) + filename_suffix );
       const auto current_layer_byte_size
         = LayerWeights<Config, DType>::in_memory_total_byte_size( instance_config_, i );
@@ -510,7 +512,10 @@ void Llama2<Config, DType, LlamaOperations, Context>::forward( StateType& states
 {
   forward_prelude( states, contexts );
 
-  for ( size_t layer_num = states.next_layer(); layer_num <= this->instance_config_.end_layer_num; layer_num++ ) {
+  // Forward assumes we host everything in the layer.
+  size_t last_layer_num = Config::n_layers;
+  for ( size_t layer_num = states.next_layer(); this->instance_config_.hosts( layer_num, InferenceStage::PreAttention );
+        layer_num++ ) {
     for ( size_t i = 0; i < contexts.size(); i++ ) {
       // make sure the context is allocated
       // TODO: Make sure empty contexts do not clash with DynamicContext
@@ -521,15 +526,20 @@ void Llama2<Config, DType, LlamaOperations, Context>::forward( StateType& states
     }
 
     pre_attention_ops( layer_num, true );
+    CHECK( this->instance_config_.hosts( layer_num, InferenceStage::Attention ) );
     attention_ops();
+    CHECK( this->instance_config_.hosts( layer_num, InferenceStage::PostAttention ) );
     post_attention_ops( layer_num );
+    last_layer_num = layer_num;
   }
 
-  if ( this->instance_config_.end_layer_num == Config::n_layers - 1 ) {
+  CHECK_LT( last_layer_num, Config::n_layers ) << "forward did nothing to the batched inference state";
+
+  if ( last_layer_num == Config::n_layers - 1 ) {
     classify_ops();
-    return forward_postlude( states, this->instance_config_.end_layer_num, true );
+    return forward_postlude( states, last_layer_num, true );
   } else {
-    return forward_postlude( states, this->instance_config_.end_layer_num, false );
+    return forward_postlude( states, last_layer_num, false );
   }
 }
 

@@ -62,6 +62,7 @@ class Worker:
                     slice_hosting_table.append(True)
                 else:
                     slice_hosting_table.append(False)
+        assert any(slice_hosting_table), f"None of the stages were hosted for slice in {self}"
         return slice_hosting_table
 
     def create_node_hosting_table(self, n_layers: int) -> List[bool]:
@@ -80,6 +81,7 @@ class Worker:
                     node_hosting_table.append(True)
                 else:
                     node_hosting_table.append(False)
+        assert any(node_hosting_table), f"None of the stages were hosted for node in {self}"
         return node_hosting_table
 
     def __repr__(self):
@@ -88,6 +90,6 @@ class Worker:
                 f"ip={socket.inet_ntoa(self.ip)}, port={self.port}, start_layer={self.model_slice_start[0]}, "
                 f"start_stage={Stage.Name(self.model_slice_start[1])}, end_layer={self.model_slice_end[0]}, "
                 f"end_stage={Stage.Name(self.model_slice_end[1])}, "
-                f"tier={self.tier}, rank={self.rank}, "
+                f"slice={self.slice_index}, tier={self.tier}, rank={self.rank}, "
                 f"C1={self.concurrency_size_pre}, "
                 f"C2={self.concurrency_size_att}, C3={self.concurrency_size_post}, C4={self.concurrency_size_cls})")

@@ -432,13 +432,12 @@ bool BatchedWorker<ModelConfig, ComputeKernel>::handle_coordinator_message( core
 
       HostingTable slice_hosting_table, node_hosting_table;
 
-      for ( int i = 0; i < ModelConfig::n_layers; i++ ) {
+      for ( size_t i = 0; i < ModelConfig::n_layers; i++ ) {
         for ( int j = 0; j < util::to_underlying( models::InferenceStage::__COUNT__ ); j++ ) {
           slice_hosting_table[i][j]
             = proto.slice_hosting_table( i * util::to_underlying( models::InferenceStage::__COUNT__ ) + j );
           node_hosting_table[i][j]
             = proto.node_hosting_table( i * util::to_underlying( models::InferenceStage::__COUNT__ ) + j );
-          const auto tier_concurrency = proto.tier_concurrency_s( i );
         }
       }
 

@@ -84,7 +84,7 @@ static_assert( LlamaOperationsConcept<LlamaOperations<configs::Stories_110M, gli
 
 template<typename Config, typename DType>
 Context<Config, DType>::Context( const ConfigRuntime<Config>& settings, const bool make_empty )
-  : llama2::Context<Config, DType>( settings )
+  : llama2::Context<Config, DType>()
   , storage_( [&]() -> decltype( storage_ ) {
     DType* ptr;
     if ( make_empty ) {
@@ -97,7 +97,7 @@ Context<Config, DType>::Context( const ConfigRuntime<Config>& settings, const bo
     return decltype( storage_ ) { ptr };
   }() )
 {
-  this->buffer_ = storage_.get();
+  llama2::Context<Config, DType>::set_buffer( settings, storage_.get() );
 }
 
 // helper functions are in this anonymous namespace`

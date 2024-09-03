@@ -192,12 +192,14 @@ void SimpleHybridComputeKernel<ModelA, ModelB>::model_step_forward( StateType& s
       timeit<IntDistributions::KernelPostAttentionForwardTime>( __stats__,
                                                                 [&] { model.forward_post_attention( state ); } );
 
-      if ( state.next_stage() == Stage::PreAttention and state.next_layer() <= model.settings().end_layer_num ) {
+      if ( state.next_stage() == Stage::PreAttention
+           and model.settings().hosts( state.next_layer(), state.next_stage() ) ) {
         // since we serve the next layer, let's do pre-attention right here
         timeit<IntDistributions::KernelPreAttentionForwardTime>( __stats__,
                                                                  [&] { model.forward_pre_attention( state ); } );
       } else if ( state.next_stage() == Stage::Classification and state.next_layer() == ConfigType::n_layers - 1
-                  and state.next_layer() == model.settings().end_layer_num ) {
+                  and model.settings().hosts( ConfigType::n_layers - 1,
+                                              state.next_stage() == Stage::Classification ) ) {
         timeit<IntDistributions::KernelClassificationForwardTime>( __stats__,
                                                                    [&] { model.forward_classify( state ); } );
       }
@@ -241,7 +243,11 @@ void SimpleHybridComputeKernel<ModelA, ModelB>::execution_thread_func(
 {
   constexpr size_t model_idx = std::is_same<M, ModelA>() ? 0 : 1;
   auto& model = *model_data.model;
-  const auto N = model.settings().n_layers_loaded();
+  // Even though settings does not have a "n_layers_loaded()" function anymore, for the purposes of this kernel
+  // "num_attention_layers_hosted" does something similar. The only downside is that "num_attention_layers_hosted"
+  // does not report contiguous attention layers, which can be an issue if this kernel is used for two different slices
+  // of the model.
+  const auto N = model.settings().num_attention_layers_hosted();
 
   while ( running_ ) {
     is_processing_states_.wait( false );

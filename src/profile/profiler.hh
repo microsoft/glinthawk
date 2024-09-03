@@ -10,6 +10,7 @@
 #include <vector>
 
 #include "models/common/state.hh"
+#include "util/util.hh"
 
 namespace glinthawk {
 
@@ -51,7 +52,12 @@ public:
             const uint64_t token_pos,
             const size_t duration_s,
             const bool run_serialization )
-    : model_( model_root, ConfigType::n_layers - 1, ConfigType::n_layers - 1, batch_size, batch_size, true )
+    : model_( [&]() -> Model {
+      std::array<std::array<bool, util::to_underlying( models::InferenceStage::__COUNT__ )>, ConfigType::n_layers>
+        hosting_table;
+      hosting_table[ConfigType::n_layers - 1][util::to_underlying( stage )] = true;
+      return { model_root, hosting_table, batch_size, batch_size, true };
+    }() )
     , stage_( stage )
     , batch_size_( batch_size )
     , token_pos_( token_pos )
@@ -63,7 +69,7 @@ public:
       contexts_[i] = std::make_shared<ContextType>( model_.settings() );
 
       model_.ops().randomize_device_buffer( contexts_[i]->layer( ConfigType::n_layers - 1 ).token( 0 ).key(),
-                                            contexts_[i]->max_size( model_.settings().n_layers_loaded() )
+                                            contexts_[i]->max_size( model_.settings().num_attention_layers_hosted() )
                                               / sizeof( ModelDataType ),
                                             -10.0 / sqrtf( ConfigType::dim ),
                                             10.0 / sqrtf( ConfigType::dim ) );

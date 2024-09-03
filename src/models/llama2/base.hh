@@ -6,6 +6,7 @@
 #include <glog/logging.h>
 #include <limits>
 #include <memory>
+#include <numeric>
 #include <optional>
 #include <sstream>
 #include <string>
@@ -52,11 +53,11 @@ struct ConfigRuntime
   /// @brief Size of the config stored on disk (in bytes)
   static size_t config_size() { return sizeof( int32_t ) * 7; }
 
-  std::array<std::array<bool, util::to_underlying( models::InferenceStage::__COUNT__ )>, Config::n_layers>
+  const std::array<std::array<bool, util::to_underlying( models::InferenceStage::__COUNT__ )>, Config::n_layers>
     hosting_table_;
-  std::array<bool, util::to_underlying( models::InferenceStage::__COUNT__ )> hosting_stage_table_;
-  uint64_t concurrency_limit { 1 };          // max concurrent inference size
-  uint64_t max_context_count { 1 };          // max number of contexts
+  std::array<bool, util::to_underlying( models::InferenceStage::__COUNT__ )> hosting_stage_table_ {};
+  const uint64_t concurrency_limit { 1 };          // max concurrent inference size
+  const uint64_t max_context_count { 1 };          // max number of contexts
   size_t num_attention_layers_hosted_ { 0 }; // how many attention layers are supported
   bool randomize_parameters { false };
 };
@@ -114,7 +115,7 @@ struct LayerWeights
   using ParameterArray = typename std::array<uint64_t, 8>;
 
   LayerWeights() = default;
-  LayerWeights( const DType* ptr, const ConfigRuntime<Config>& settings );
+  LayerWeights( const DType* ptr, const ConfigRuntime<Config>& settings, const size_t layer_num );
 
   LayerWeights( const LayerWeights& ) = delete;
   LayerWeights operator=( const LayerWeights& ) = delete;
@@ -215,7 +216,8 @@ ConfigRuntime<Config>::ConfigRuntime(
   const uint64_t concurrency_limit_,
   const uint64_t max_context_count_,
   const bool randomize_parameters_ )
-  : concurrency_limit( concurrency_limit_ )
+  : hosting_table_( hosting_table )
+  , concurrency_limit( concurrency_limit_ )
   , max_context_count( max_context_count_ )
   , randomize_parameters( randomize_parameters_ )
 {
@@ -272,7 +274,6 @@ ConfigRuntime<Config>::ConfigRuntime(
   CHECK_GT( seq_len, 0 ) << "Sequence length must be positive.";
   CHECK_GT( concurrency_limit, 0 ) << "Max concurrent inference size must be positive.";
 
-  this->hosting_table_ = hosting_table;
   bool hosts_anything = false;
 
   for ( size_t i = 0; i < hosting_stage_table_.size(); i++ ) {
@@ -365,8 +366,8 @@ template<typename Config, typename DType>
 requires ModelConfig<Config>
 consteval BaseWeights<Config, DType>::ParameterArray BaseWeights<Config, DType>::on_disk_offset()
 {
-  ParameterArray sizes;
-  ParameterArray offsets = on_disk_element_size();
+  ParameterArray sizes = on_disk_element_size();
+  ParameterArray offsets;
 
   offsets[0] = 0;
   for ( size_t i = 1; i < sizes.size(); ++i ) {
@@ -420,8 +421,8 @@ requires ModelConfig<Config>
 BaseWeights<Config, DType>::ParameterArray BaseWeights<Config, DType>::in_memory_offset(
   const ConfigRuntime<Config>& settings )
 {
-  ParameterArray sizes;
-  ParameterArray offsets = in_memory_element_size( settings );
+  ParameterArray sizes = in_memory_element_size( settings );
+  ParameterArray offsets;
 
   offsets[0] = 0;
   for ( size_t i = 1; i < sizes.size(); ++i ) {
@@ -438,9 +439,11 @@ BaseWeights<Config, DType>::ParameterArray BaseWeights<Config, DType>::in_memory
 
 template<typename Config, typename DType>
 requires ModelConfig<Config>
-LayerWeights<Config, DType>::LayerWeights( const DType* ptr, const ConfigRuntime<Config>& settings )
+LayerWeights<Config, DType>::LayerWeights( const DType* ptr,
+                                           const ConfigRuntime<Config>& settings,
+                                           const size_t layer_num )
 {
-  ParameterArray offsets = in_memory_offset( settings );
+  ParameterArray offsets = in_memory_offset( settings, layer_num );
   this->rms_att_weight = ptr + offsets[0];
   this->wq = ptr + offsets[1];
   this->wkv = ptr + offsets[2];
@@ -458,21 +461,21 @@ consteval LayerWeights<Config, DType>::ParameterArray LayerWeights<Config, DType
   ParameterArray sizes {};
 
   // PreAttention (rms_att_weight)
-  sizes[0] = Config::vocab_size * Config::dim;
+  sizes[0] = Config::dim;
   // PreAttention (wq)
-  sizes[1] = Config::vocab_size * Config::dim * Config::dim;
+  sizes[1] = Config::dim * Config::dim;
   // PreAttention (wkv)
-  sizes[2] = Config::vocab_size * Config::dim * Config::kv_dim * 2;
+  sizes[2] = Config::dim * Config::kv_dim * 2;
   // PostAttention (wo)
-  sizes[3] = Config::vocab_size * Config::dim * Config::dim;
+  sizes[3] = Config::dim * Config::dim;
   // PostAttention (rms_ffn_weight)
-  sizes[4] = Config::vocab_size * Config::dim;
+  sizes[4] = Config::dim;
   // PostAttention (w1)
-  sizes[5] = Config::vocab_size * Config::dim * Config::hidden_dim;
+  sizes[5] = Config::dim * Config::hidden_dim;
   // PostAttention (w2)
-  sizes[6] = Config::vocab_size * Config::dim * Config::hidden_dim;
+  sizes[6] = Config::dim * Config::hidden_dim;
   // PostAttention (w3)
-  sizes[7] = Config::vocab_size * Config::dim * Config::hidden_dim;
+  sizes[7] = Config::dim * Config::hidden_dim;
 
   return sizes;
 }
@@ -489,8 +492,8 @@ template<typename Config, typename DType>
 requires ModelConfig<Config>
 consteval LayerWeights<Config, DType>::ParameterArray LayerWeights<Config, DType>::on_disk_offset()
 {
-  ParameterArray sizes;
-  ParameterArray offsets = on_disk_element_size();
+  ParameterArray sizes = on_disk_element_size();
+  ParameterArray offsets;
 
   offsets[0] = 0;
   for ( size_t i = 1; i < sizes.size(); ++i ) {
@@ -512,21 +515,21 @@ LayerWeights<Config, DType>::ParameterArray LayerWeights<Config, DType>::in_memo
   ParameterArray sizes {};
 
   // PreAttention (rms_att_weight)
-  sizes[0] = model_hosts_pre_att ? Config::vocab_size * Config::dim : 0;
+  sizes[0] = model_hosts_pre_att ? Config::dim : 0;
   // PreAttention (wq)
-  sizes[1] = model_hosts_pre_att ? Config::vocab_size * Config::dim * Config::dim : 0;
+  sizes[1] = model_hosts_pre_att ? Config::dim * Config::dim : 0;
   // PreAttention (wkv)
-  sizes[2] = model_hosts_pre_att ? Config::vocab_size * Config::dim * Config::kv_dim * 2 : 0;
+  sizes[2] = model_hosts_pre_att ? Config::dim * Config::kv_dim * 2 : 0;
   // PostAttention (wo)
-  sizes[3] = model_hosts_post_att ? Config::vocab_size * Config::dim * Config::dim : 0;
+  sizes[3] = model_hosts_post_att ? Config::dim * Config::dim : 0;
   // PostAttention (rms_ffn_weight)
-  sizes[4] = model_hosts_post_att ? Config::vocab_size * Config::dim : 0;
+  sizes[4] = model_hosts_post_att ? Config::dim : 0;
   // PostAttention (w1)
-  sizes[5] = model_hosts_post_att ? Config::vocab_size * Config::dim * Config::hidden_dim : 0;
+  sizes[5] = model_hosts_post_att ? Config::dim * Config::hidden_dim : 0;
   // PostAttention (w2)
-  sizes[6] = model_hosts_post_att ? Config::vocab_size * Config::dim * Config::hidden_dim : 0;
+  sizes[6] = model_hosts_post_att ? Config::dim * Config::hidden_dim : 0;
   // PostAttention (w3)
-  sizes[7] = model_hosts_post_att ? Config::vocab_size * Config::dim * Config::hidden_dim : 0;
+  sizes[7] = model_hosts_post_att ? Config::dim * Config::hidden_dim : 0;
 
   return sizes;
 }
@@ -546,8 +549,8 @@ LayerWeights<Config, DType>::ParameterArray LayerWeights<Config, DType>::in_memo
   const ConfigRuntime<Config>& settings,
   const size_t layer_num )
 {
-  ParameterArray sizes;
-  ParameterArray offsets = in_memory_element_size( settings, layer_num );
+  ParameterArray sizes = in_memory_element_size( settings, layer_num );
+  ParameterArray offsets;
 
   offsets[0] = 0;
   for ( size_t i = 1; i < sizes.size(); ++i ) {

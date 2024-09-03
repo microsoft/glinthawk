@@ -225,8 +225,8 @@ class Coordinator:
                     Message.OpCode.InitializeWorker,
                     protobuf.InitializeWorker(
                         model_name=self.model.model_name,
-                        slice_hosting_table=worker.create_slice_hosting_table(),
-                        node_hosting_table=worker.create_node_hosting_table(),
+                        slice_hosting_table=worker.create_slice_hosting_table(self.model.n_layers),
+                        node_hosting_table=worker.create_node_hosting_table(self.model.n_layers),
                         tier_concurrency_s=self.model.get_tier_concurrencies_message(),
                         slice_index=worker.slice_index,
                         tier=worker.tier,
@@ -409,7 +409,7 @@ class Coordinator:
                     grid.add_row(
                         "Throughput(D)",
                         Text(
-                            f"{self.output_token_dummies/elapsed_time.total_seconds():.0f} tk/s",
+                            f"{self.output_token_dummies / elapsed_time.total_seconds():.0f} tk/s",
                         ),
                     )
                 else:
@@ -430,14 +430,14 @@ class Coordinator:
                     grid.add_row(
                         "Throughput(R)",
                         Text(
-                            f"{self.output_token_prompts/elapsed_time.total_seconds():.0f} tk/s",
+                            f"{self.output_token_prompts / elapsed_time.total_seconds():.0f} tk/s",
                         ),
                     )
 
                 grid.add_row("Workers", Text(f"{len(self.workers)} connected"))
                 for i, tier in enumerate(self.model.tier_config):
-                    grid.add_row(f"-->  Tier {i+1}", Text(f"{tier['ranks']} "
-                                                          f"{tier['platform_str']} workers per slice"))
+                    grid.add_row(f"-->  Tier {i + 1}", Text(f"{tier['ranks']} "
+                                                            f"{tier['platform_str']} workers per slice"))
 
                 live.update(Align.right(grid), refresh=True)
                 await asyncio.sleep(1)

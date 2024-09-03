@@ -81,18 +81,14 @@ class ParentTierRouter : public TierRouter<ComputeKernel, ModelConfig>
 protected:
   using StateType = typename glinthawk::models::BatchedInferenceState<ModelConfig>;
   using Shards = typename glinthawk::compute::ShardContainer<ModelConfig>;
-  template<typename T>
-  struct Table
-  {
-    using type
-      = std::array<std::array<T, util::to_underlying( models::InferenceStage::__COUNT__ )>, ModelConfig::n_layers>;
-  };
+  using HostingTable = typename std::array<std::array<bool, util::to_underlying( models::InferenceStage::__COUNT__ )>, ModelConfig::n_layers>;
+  using ShardsTable = typename std::array<std::array<Shards, util::to_underlying( models::InferenceStage::__COUNT__ )>, ModelConfig::n_layers>;
 
 public:
   ParentTierRouter( std::unique_ptr<ComputeKernel> compute_kernel,
                     const SliceConcurrency& concurrency_s,
                     std::vector<size_t>& kv_slots_tier_s,
-                    Table<bool> slice_hosting_table );
+                    const HostingTable& slice_hosting_table );
 
   ~ParentTierRouter() override { LOG( INFO ) << "ParentTierRouter shutting down..."; };
 
@@ -130,18 +126,18 @@ protected:
   const SliceConcurrency concurrency_;
   std::vector<size_t> free_contexts_ {};
 
-  const Table<bool> slice_hosting_table_;
+  const HostingTable slice_hosting_table_;
 
   // Node, Rank -> Shards
-  const std::vector<std::vector<Shards>> attention_idle_shards_ {};
+  std::vector<std::vector<Shards>> attention_idle_shards_ {};
   // Layer, Stage -> Shards
-  const Table<Shards> non_attention_idle_shards_ {};
+  ShardsTable non_attention_idle_shards_ {};
 
-  const std::mutex ctx_mutex_ {};
-  const std::mutex shards_mutex_ {};
+  std::mutex ctx_mutex_ {};
+  std::mutex shards_mutex_ {};
 
-  const GlobalQueue<ModelConfig> outgoing_ {};
-  const EventLoop event_loop_ {};
+  GlobalQueue<ModelConfig> outgoing_ {};
+  EventLoop event_loop_ {};
   const std::jthread event_loop_thread_;
 
   bool inline is_served_in_this_slice( const StateType& state ) const
@@ -191,7 +187,7 @@ requires models::llama2::ModelConfig<ModelConfig>
 ParentTierRouter<ComputeKernel, ModelConfig>::ParentTierRouter( std::unique_ptr<ComputeKernel> compute_kernel,
                                                                 const SliceConcurrency& concurrency,
                                                                 std::vector<size_t>& kv_slots_tier_s,
-                                                                const Table<bool> slice_hosting_table )
+                                                                const HostingTable& slice_hosting_table )
   : TierRouter<ComputeKernel, ModelConfig>( std::move( compute_kernel ) )
   , concurrency_( concurrency )
   , free_contexts_( slice_hosting_table[0][util::to_underlying( models::InferenceStage::PreAttention )]
@@ -483,7 +479,7 @@ public:
 
 protected:
   EventLoop event_loop_ {};
-  std::jthread event_loop_thread_;
+  const std::jthread event_loop_thread_;
 
   void run_event_loop( std::stop_token stoken );
 };

@@ -118,7 +118,7 @@ constexpr size_t AMRBS = 128; /* argmax reduce block size */
 
 template<typename Config, typename DType>
 Context<Config, DType>::Context( const ConfigRuntime<Config>& settings, const bool make_empty )
-  : llama2::Context<Config, DType>( settings )
+  : llama2::Context<Config, DType>()
   , storage_( [&]() -> decltype( storage_ ) {
     DType* ptr;
     if ( make_empty ) {
@@ -132,12 +132,12 @@ Context<Config, DType>::Context( const ConfigRuntime<Config>& settings, const bo
     return decltype( storage_ ) { ptr };
   }() )
 {
-  this->buffer_ = storage_.get();
+  llama2::Context<Config, DType>::set_buffer( settings, storage_.get() );
 }
 
 template<typename Config, typename DType>
 DynamicContext<Config, DType>::DynamicContext( const ConfigRuntime<Config>& settings, const bool make_empty )
-  : llama2::Context<Config, DType>( settings )
+  : llama2::Context<Config, DType>()
   , storage_( [&]() -> decltype( storage_ ) {
     if ( make_empty ) {
       return std::nullopt;
@@ -148,7 +148,8 @@ DynamicContext<Config, DType>::DynamicContext( const ConfigRuntime<Config>& sett
   }() )
   , layer_allocated_offsets_( Config::n_layers, 0 )
 {
-  this->buffer_ = storage_.has_value() ? reinterpret_cast<DType*>( storage_->ptr() ) : nullptr;
+  llama2::Context<Config, DType>::set_buffer(
+    settings, storage_.has_value() ? reinterpret_cast<DType*>( storage_->ptr() ) : nullptr );
 }
 
 template<typename Config, typename DType>
