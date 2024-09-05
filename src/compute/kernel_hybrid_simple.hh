@@ -317,10 +317,10 @@ void SimpleHybridComputeKernel<ModelA, ModelB>::bookkeeping_thread_func()
       incoming_.queue.pop();
     }
 
-    CHECK_EQ( incoming_state.batch_size(), concurrency_ * 2 ) << "Batch size mismatch.";
+    DCHECK_EQ( incoming_state.batch_size(), concurrency_ * 2 ) << "Batch size mismatch.";
 
     auto incoming_contexts_opt = b_.context_manager.get_contexts( incoming_state );
-    CHECK( incoming_contexts_opt.has_value() )
+    DCHECK( incoming_contexts_opt.has_value() )
       << "TierRouter has guaranteed context space, but compute kernel doesn't have enough";
     auto incoming_contexts = incoming_contexts_opt.value();
 

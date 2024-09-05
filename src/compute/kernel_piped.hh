@@ -227,12 +227,12 @@ void PipedComputeKernel<Model>::bookkeeping_thread_func()
       DLOG( INFO ) << "Popped state from incoming queue: " << state.debug_string( false );
     }
 
-    CHECK_EQ( model_.concurrency.get( state.next_stage() ), state.batch_size() );
+    DCHECK_EQ( model_.concurrency.get( state.next_stage() ), state.batch_size() );
 
     if ( state.next_stage() == Stage::Attention ) {
-      CHECK( context_map_.find( state.id() ) == context_map_.end() );
+      DCHECK( context_map_.find( state.id() ) == context_map_.end() );
       auto contexts_opt = model_.context_manager.get_contexts( state );
-      CHECK( contexts_opt.has_value() )
+      DCHECK( contexts_opt.has_value() )
         << "TierRouter has guaranteed context space, but compute kernel doesn't have enough";
 
       {

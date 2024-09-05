@@ -88,8 +88,8 @@ public:
   [[nodiscard]] std::pair<int8_t, uint8_t> tier_rank( const models::InferenceStage stage,
                                                       const size_t batch_index ) const
   {
-    CHECK_GE( batch_index, 0 );
-    CHECK_LT( batch_index, monolith_batch_size_ );
+    DCHECK_GE( batch_index, 0 );
+    DCHECK_LT( batch_index, monolith_batch_size_ );
     return std::make_pair( tier_index_cache_[util::to_underlying( stage )][batch_index],
                            rank_index_cache_[util::to_underlying( stage )][batch_index] );
   }
@@ -162,7 +162,7 @@ private:
   bool _pop_to_state( StateType& state )
   {
     if ( shards_.size() == 0 ) {
-      CHECK_EQ( total_states_, 0 );
+      DCHECK_EQ( total_states_, 0 );
       return false;
     }
     state = std::move( shards_.front() );

@@ -356,7 +356,7 @@ public:
     , off_( off )
     , n_( n )
   {
-    CHECK_LE( off + n, state_.batch_size() ) << "Span out of bounds";
+    DCHECK_LE( off + n, state_.batch_size() ) << "Span out of bounds";
   }
 
   // A span can only be created from an existing state object, and cannot be serialized either.
@@ -503,7 +503,7 @@ BatchedInferenceState<Config>::BatchedInferenceState( const std::string_view ser
 
   // we need to make sure that the serialized state is at least as big as the metadata
   size_t expected_size = sizeof( StateMetadata );
-  CHECK_GE( serialized_state.size(), expected_size ) << "Serialized state is too small to contain metadata";
+  DCHECK_GE( serialized_state.size(), expected_size ) << "Serialized state is too small to contain metadata";
 
   metadata_ = *reinterpret_cast<const StateMetadata*>( ptr );
   ptr += sizeof( StateMetadata );
@@ -516,7 +516,7 @@ BatchedInferenceState<Config>::BatchedInferenceState( const std::string_view ser
 
   if ( has_activations() ) {
     expected_size += metadata_.batch_size * activation_len();
-    CHECK_GE( serialized_state.size(), expected_size ) << "Serialized state is too small to contain activations";
+    DCHECK_GE( serialized_state.size(), expected_size ) << "Serialized state is too small to contain activations";
 
     activations_ = DataBuffer( metadata_.batch_size * activation_len() );
     std::memcpy( activations_.data(), ptr, metadata_.batch_size * activation_len() );
@@ -525,7 +525,7 @@ BatchedInferenceState<Config>::BatchedInferenceState( const std::string_view ser
 
   if ( has_queries() ) {
     expected_size += metadata_.batch_size * q_len();
-    CHECK_GE( serialized_state.size(), expected_size ) << "Serialized state is too small to contain queries";
+    DCHECK_GE( serialized_state.size(), expected_size ) << "Serialized state is too small to contain queries";
 
     queries_ = DataBuffer( metadata_.batch_size * q_len() );
     std::memcpy( queries_.data(), ptr, metadata_.batch_size * q_len() );
@@ -534,14 +534,14 @@ BatchedInferenceState<Config>::BatchedInferenceState( const std::string_view ser
 
   if ( has_kvs() ) {
     expected_size += metadata_.batch_size * kv_len();
-    CHECK_GE( serialized_state.size(), expected_size ) << "Serialized state is too small to contain key-values";
+    DCHECK_GE( serialized_state.size(), expected_size ) << "Serialized state is too small to contain key-values";
 
     kvs_ = DataBuffer( metadata_.batch_size * kv_len() );
     std::memcpy( kvs_.data(), ptr, metadata_.batch_size * kv_len() );
     ptr += metadata_.batch_size * kv_len();
   }
 
-  CHECK_EQ( ptr, serialized_state.data() + serialized_state.size() )
+  DCHECK_EQ( ptr, serialized_state.data() + serialized_state.size() )
     << "Serialized state contains more data than expected";
 }
 
@@ -576,7 +576,7 @@ std::string BatchedInferenceState<Config>::serialize() const
     serialized_state.append( reinterpret_cast<const char*>( kvs_.data() ), metadata_.batch_size * kv_len() );
   }
 
-  CHECK_EQ( serialized_state.size(), expected_size ) << "Serialized state size mismatch";
+  DCHECK_EQ( serialized_state.size(), expected_size ) << "Serialized state size mismatch";
   return serialized_state;
 }
 
@@ -607,8 +607,8 @@ template<typename Config>
 void BatchedInferenceState<Config>::discard( const size_t i )
 {
   // XXX this function should only be called by the first worker in a chain
-  CHECK( metadata_.next_stage == InferenceStage::PreAttention ) << "Discarding prompts in a non-PreAttention stage";
-  CHECK_EQ( metadata_.next_layer, 0 ) << "Discarding prompts in a non-0 layer";
+  DCHECK( metadata_.next_stage == InferenceStage::PreAttention ) << "Discarding prompts in a non-PreAttention stage";
+  DCHECK_EQ( metadata_.next_layer, 0 ) << "Discarding prompts in a non-0 layer";
 
   auto context_id = prompts_[i].context_id;
   auto kv_tier = prompts_[i].kv_tier;
@@ -665,15 +665,15 @@ void BatchedInferenceState<Config>::deallocate_kvs()
 template<typename Config>
 bool BatchedInferenceState<Config>::replenish_from( BatchedInferenceState& other )
 {
-  CHECK_EQ( metadata_.batch_size, other.metadata_.batch_size ) << "States with different batch sizes";
-  CHECK( metadata_.dtype == other.metadata_.dtype ) << "States with different data types";
-  CHECK_EQ( metadata_.route_id, other.metadata_.route_id ) << "States with different route IDs";
-  CHECK_EQ( metadata_.model_id, other.metadata_.model_id ) << "States with different model IDs";
-  CHECK_EQ( metadata_.next_layer, other.metadata_.next_layer ) << "States with different next layers";
-  CHECK( metadata_.next_stage == other.metadata_.next_stage ) << "States with different next stages";
-  CHECK_EQ( metadata_.has_activations, other.metadata_.has_activations ) << "States with different activation states";
-  CHECK_EQ( metadata_.has_queries, other.metadata_.has_queries ) << "States with different query states";
-  CHECK_EQ( metadata_.has_kvs, other.metadata_.has_kvs ) << "States with different key-value states";
+  DCHECK_EQ( metadata_.batch_size, other.metadata_.batch_size ) << "States with different batch sizes";
+  DCHECK( metadata_.dtype == other.metadata_.dtype ) << "States with different data types";
+  DCHECK_EQ( metadata_.route_id, other.metadata_.route_id ) << "States with different route IDs";
+  DCHECK_EQ( metadata_.model_id, other.metadata_.model_id ) << "States with different model IDs";
+  DCHECK_EQ( metadata_.next_layer, other.metadata_.next_layer ) << "States with different next layers";
+  DCHECK( metadata_.next_stage == other.metadata_.next_stage ) << "States with different next stages";
+  DCHECK_EQ( metadata_.has_activations, other.metadata_.has_activations ) << "States with different activation states";
+  DCHECK_EQ( metadata_.has_queries, other.metadata_.has_queries ) << "States with different query states";
+  DCHECK_EQ( metadata_.has_kvs, other.metadata_.has_kvs ) << "States with different key-value states";
 
   size_t other_idx = 0;
   for ( size_t my_idx = 0; my_idx < prompts_.size(); my_idx++ ) {
@@ -693,9 +693,9 @@ bool BatchedInferenceState<Config>::replenish_from( BatchedInferenceState& other
       }
     }
 
-    CHECK_EQ( other.prompts_[other_idx].context_id, NULL_CONTEXT )
+    DCHECK_EQ( other.prompts_[other_idx].context_id, NULL_CONTEXT )
       << "Replenish can only happen if the state which we are replenishing from does not have a context id";
-    CHECK_NE( prompt.context_id, NULL_CONTEXT )
+    DCHECK_NE( prompt.context_id, NULL_CONTEXT )
       << "Replenish can only happen if the state which we are replenishing does have a context id";
 
     other.prompts_[other_idx].context_id = prompt.context_id;
@@ -732,14 +732,14 @@ std::deque<BatchedInferenceState<Config>> BatchedInferenceState<Config>::split_s
   std::vector<size_t> vec_n,
   bool ignore_empty )
 {
-  CHECK_GT( vec_n.size(), 0 ) << "Splitting to empty  list";
+  DCHECK_GT( vec_n.size(), 0 ) << "Splitting to empty list";
 
   size_t sum_n = 0;
   for ( size_t n : vec_n ) {
-    CHECK_LE( n, state.metadata_.batch_size ) << "Requested batch sizes should not exceed this state's size";
+    DCHECK_LE( n, state.metadata_.batch_size ) << "Requested batch sizes should not exceed this state's size";
     sum_n += n;
   }
-  CHECK_EQ( state.metadata_.batch_size, sum_n ) << "Requested batch sizes should sum up to this state's size";
+  DCHECK_EQ( state.metadata_.batch_size, sum_n ) << "Requested batch sizes should sum up to this state's size";
 
   std::deque<BatchedInferenceState<Config>> pieces {};
   if ( vec_n.size() == 1 ) {
@@ -812,8 +812,8 @@ template<typename Config>
 std::pair<BatchedInferenceState<Config>, BatchedInferenceState<Config>> BatchedInferenceState<Config>::split(
   const size_t n )
 {
-  CHECK_LT( n, metadata_.batch_size ) << "n must be less than the batch size";
-  CHECK_GT( n, 0 ) << "n must be greater than 0";
+  DCHECK_LT( n, metadata_.batch_size ) << "n must be less than the batch size";
+  DCHECK_GT( n, 0 ) << "n must be greater than 0";
 
   DLOG( INFO ) << "Splitting state of size " << metadata_.batch_size << " into states of sizes " << n << " and "
                << ( metadata_.batch_size - n ) << ".";
@@ -877,8 +877,8 @@ template<typename Config>
 std::pair<BatchedInferenceStateSpan<Config>, BatchedInferenceStateSpan<Config>>
 BatchedInferenceState<Config>::soft_split( const size_t n )
 {
-  CHECK_LT( n, metadata_.batch_size ) << "n must be less than the batch size";
-  CHECK_GT( n, 0 ) << "n must be greater than 0";
+  DCHECK_LT( n, metadata_.batch_size ) << "n must be less than the batch size";
+  DCHECK_GT( n, 0 ) << "n must be greater than 0";
 
   DLOG( INFO ) << "Splitting state of size " << metadata_.batch_size << " into states of sizes " << n << " and "
                << ( metadata_.batch_size - n ) << ".";
@@ -892,7 +892,7 @@ BatchedInferenceState<Config>::soft_split( const size_t n )
 template<typename Config>
 void BatchedInferenceState<Config>::merge( BatchedInferenceState&& other )
 {
-  CHECK_GT( metadata_.batch_size + other.metadata_.batch_size, 0 ) << "Merging two empty states";
+  DCHECK_GT( metadata_.batch_size + other.metadata_.batch_size, 0 ) << "Merging two empty states";
 
   // merging into an empty state
   if ( metadata_.batch_size == 0 ) {
@@ -905,17 +905,17 @@ void BatchedInferenceState<Config>::merge( BatchedInferenceState&& other )
     return;
   }
 
-  CHECK( metadata_.dtype == other.metadata_.dtype ) << "States with different data types";
-  CHECK_EQ( metadata_.route_id, other.metadata_.route_id ) << "States with different route IDs";
-  CHECK_EQ( metadata_.model_id, other.metadata_.model_id ) << "States with different model IDs";
-  CHECK_EQ( metadata_.next_layer, other.metadata_.next_layer ) << "States with different next layers";
-  CHECK( metadata_.next_stage == other.metadata_.next_stage ) << "States with different next stages";
-  CHECK_EQ( metadata_.next_tier, other.metadata_.next_tier ) << "States with different next tiers";
-  CHECK_EQ( metadata_.next_rank, other.metadata_.next_rank ) << "States with different next ranks";
-  CHECK_EQ( metadata_.has_activations, other.metadata_.has_activations ) << "States with different activation states";
-  CHECK_EQ( metadata_.has_queries, other.metadata_.has_queries ) << "States with different query states";
-  CHECK_EQ( metadata_.has_kvs, other.metadata_.has_kvs ) << "States with different key-value states";
-  CHECK_EQ( metadata_.is_sharded, other.metadata_.is_sharded ) << "Sharded and Monolithic states";
+  DCHECK( metadata_.dtype == other.metadata_.dtype ) << "States with different data types";
+  DCHECK_EQ( metadata_.route_id, other.metadata_.route_id ) << "States with different route IDs";
+  DCHECK_EQ( metadata_.model_id, other.metadata_.model_id ) << "States with different model IDs";
+  DCHECK_EQ( metadata_.next_layer, other.metadata_.next_layer ) << "States with different next layers";
+  DCHECK( metadata_.next_stage == other.metadata_.next_stage ) << "States with different next stages";
+  DCHECK_EQ( metadata_.next_tier, other.metadata_.next_tier ) << "States with different next tiers";
+  DCHECK_EQ( metadata_.next_rank, other.metadata_.next_rank ) << "States with different next ranks";
+  DCHECK_EQ( metadata_.has_activations, other.metadata_.has_activations ) << "States with different activation states";
+  DCHECK_EQ( metadata_.has_queries, other.metadata_.has_queries ) << "States with different query states";
+  DCHECK_EQ( metadata_.has_kvs, other.metadata_.has_kvs ) << "States with different key-value states";
+  DCHECK_EQ( metadata_.is_sharded, other.metadata_.is_sharded ) << "Sharded and Monolithic states";
 
   BatchedInferenceState new_state;
   new_state.metadata_ = metadata_;
@@ -964,7 +964,7 @@ template<typename Config>
 BatchedInferenceState<Config> BatchedInferenceState<Config>::merge_states(
   std::deque<BatchedInferenceState>&& vec_state )
 {
-  CHECK_GT( vec_state.size(), 0 ) << "Merging empty list";
+  DCHECK_GT( vec_state.size(), 0 ) << "Merging empty list";
 
   if ( vec_state.size() == 1 ) {
     return std::move( vec_state.front() );
@@ -975,9 +975,9 @@ BatchedInferenceState<Config> BatchedInferenceState<Config>::merge_states(
   new_state.metadata_.batch_size = 0;
   for ( const BatchedInferenceState<Config>& state : vec_state ) {
     new_state.metadata_.batch_size += state.metadata_.batch_size;
-    CHECK_GT( vec_state.size(), 0 ) << "Merging empty list";
+    DCHECK_GT( vec_state.size(), 0 ) << "Merging empty list";
   }
-  CHECK_GT( new_state.metadata_.batch_size, 0 ) << "Merging empty states";
+  DCHECK_GT( new_state.metadata_.batch_size, 0 ) << "Merging empty states";
   new_state.prompts_.resize( new_state.metadata_.batch_size );
 
   if ( new_state.metadata_.has_activations ) {
@@ -1000,18 +1000,18 @@ BatchedInferenceState<Config> BatchedInferenceState<Config>::merge_states(
       continue;
     }
 
-    CHECK( new_state.metadata_.dtype == other.metadata_.dtype ) << "States with different data types";
-    CHECK_EQ( new_state.metadata_.route_id, other.metadata_.route_id ) << "States with different route IDs";
-    CHECK_EQ( new_state.metadata_.model_id, other.metadata_.model_id ) << "States with different model IDs";
-    CHECK_EQ( new_state.metadata_.next_layer, other.metadata_.next_layer ) << "States with different next layers";
-    CHECK( new_state.metadata_.next_stage == other.metadata_.next_stage ) << "States with different next stages";
-    CHECK( new_state.metadata_.next_tier == other.metadata_.next_tier ) << "States with different next tiers";
-    CHECK( new_state.metadata_.next_rank == other.metadata_.next_rank ) << "States with different next ranks";
-    CHECK_EQ( new_state.metadata_.has_activations, other.metadata_.has_activations )
+    DCHECK( new_state.metadata_.dtype == other.metadata_.dtype ) << "States with different data types";
+    DCHECK_EQ( new_state.metadata_.route_id, other.metadata_.route_id ) << "States with different route IDs";
+    DCHECK_EQ( new_state.metadata_.model_id, other.metadata_.model_id ) << "States with different model IDs";
+    DCHECK_EQ( new_state.metadata_.next_layer, other.metadata_.next_layer ) << "States with different next layers";
+    DCHECK( new_state.metadata_.next_stage == other.metadata_.next_stage ) << "States with different next stages";
+    DCHECK( new_state.metadata_.next_tier == other.metadata_.next_tier ) << "States with different next tiers";
+    DCHECK( new_state.metadata_.next_rank == other.metadata_.next_rank ) << "States with different next ranks";
+    DCHECK_EQ( new_state.metadata_.has_activations, other.metadata_.has_activations )
       << "States with different activation states";
-    CHECK_EQ( new_state.metadata_.has_queries, other.metadata_.has_queries ) << "States with different query states";
-    CHECK_EQ( new_state.metadata_.has_kvs, other.metadata_.has_kvs ) << "States with different key-value states";
-    CHECK_EQ( new_state.metadata_.is_sharded, other.metadata_.is_sharded ) << "Sharded and Monolithic states";
+    DCHECK_EQ( new_state.metadata_.has_queries, other.metadata_.has_queries ) << "States with different query states";
+    DCHECK_EQ( new_state.metadata_.has_kvs, other.metadata_.has_kvs ) << "States with different key-value states";
+    DCHECK_EQ( new_state.metadata_.is_sharded, other.metadata_.is_sharded ) << "Sharded and Monolithic states";
 
     // copying prompt data
     for ( size_t j = 0; j < other.metadata_.batch_size; j++ ) {

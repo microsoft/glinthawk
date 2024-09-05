@@ -67,7 +67,7 @@ private:
   std::vector<ContextPtr> assemble_contexts( const BatchedState& state )
   {
     auto contexts_opt = context_manager_->get_contexts( state );
-    CHECK( contexts_opt.has_value() )
+    DCHECK( contexts_opt.has_value() )
       << "TierRouter has guaranteed context space, but compute kernel doesn't have enough";
     return contexts_opt.value();
   }

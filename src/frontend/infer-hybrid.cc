@@ -109,7 +109,7 @@ public:
       kernel_.event_fd().read_event(); // blocks until results are ready
       kernel_.pop( state_ );
 
-      CHECK( kernel_.pop( state_ ) == false );
+      DCHECK( kernel_.pop( state_ ) == false );
 
       if ( temp_ == 0 ) {
         // random chance to terminate a prompt early (otherwise they will all have the same length)
@@ -132,7 +132,7 @@ public:
         if ( any_finished ) {
           auto new_state = make_state();
           state_.replenish_from( new_state );
-          CHECK_EQ( state_.free_slots(), 0 );
+          DCHECK_EQ( state_.free_slots(), 0 );
         }
       }
 

@@ -124,10 +124,11 @@ private:
 
   net::Address find_next_worker( const RouteMap& route, const BatchedState& state )
   {
-    CHECK( state.is_sharded() ) << "Monoliths should never be sent across nodes";
+    DCHECK( state.is_sharded() ) << "Monoliths should never be sent across nodes";
     auto it = route.find( { state.next_layer(), state.next_stage(), state.next_tier(), state.next_rank() } );
-    CHECK( it != route.end() ) << "No worker found for layer " << state.next_layer() << ", stage " << state.next_stage()
-                               << ", tier " << state.next_tier() << ", rank " << state.next_rank();
+    DCHECK( it != route.end() ) << "No worker found for layer " << state.next_layer() << ", stage "
+                                << state.next_stage() << ", tier " << state.next_tier() << ", rank "
+                                << state.next_rank();
     return it->second;
   }
 

@@ -265,8 +265,8 @@ requires models::llama2::ModelConfig<ModelConfig>
 void ParentTierRouter<ComputeKernel, ModelConfig>::push( models::BatchedInferenceState<ModelConfig>&& state )
 {
   if ( state.is_sharded() ) {
-    CHECK_EQ( state.next_tier(), 0 );
-    CHECK_EQ( state.next_rank(), 0 );
+    DCHECK_EQ( state.next_tier(), 0 );
+    DCHECK_EQ( state.next_rank(), 0 );
     process_shard( std::move( state ) );
   } else {
     process_monolith( std::move( state ) );
@@ -310,12 +310,12 @@ requires models::llama2::ModelConfig<ModelConfig>
          && compute::KernelConcept<ComputeKernel, models::BatchedInferenceState<ModelConfig>>
 void ParentTierRouter<ComputeKernel, ModelConfig>::assign_ranks( StateType& state )
 {
-  CHECK( not state.is_sharded() ) << "Cannot assign ranks to shards since sharding is done after assigning ranks!";
-  CHECK_EQ( state.batch_size(), concurrency_.full_batch() );
+  DCHECK( not state.is_sharded() ) << "Cannot assign ranks to shards since sharding is done after assigning ranks!";
+  DCHECK_EQ( state.batch_size(), concurrency_.full_batch() );
 
   bool already_assigned = state.assigned_to_node( 0 );
   for ( size_t i = 0; i < state.batch_size(); i++ ) {
-    CHECK_EQ( already_assigned, state.assigned_to_node( i ) )
+    DCHECK_EQ( already_assigned, state.assigned_to_node( i ) )
       << "Either all prompts are already tier-routed or none of them are.";
     if ( not state.assigned_to_node( i ) ) {
       const auto [tier_i, rank_i] = concurrency_.tier_rank( glinthawk::models::InferenceStage::Attention, i );
@@ -323,7 +323,7 @@ void ParentTierRouter<ComputeKernel, ModelConfig>::assign_ranks( StateType& stat
       state.set_kv_rank( i, rank_i );
       {
         std::lock_guard lock { ctx_mutex_ };
-        CHECK( free_contexts_[tier_i] > 0 );
+        DCHECK( free_contexts_[tier_i] > 0 );
         free_contexts_[tier_i] -= 1;
       }
     }
@@ -335,7 +335,7 @@ requires models::llama2::ModelConfig<ModelConfig>
          && compute::KernelConcept<ComputeKernel, models::BatchedInferenceState<ModelConfig>>
 void ParentTierRouter<ComputeKernel, ModelConfig>::route_shard( StateType&& state )
 {
-  CHECK( is_served_in_this_slice( state ) );
+  DCHECK( is_served_in_this_slice( state ) );
   if ( state.next_tier() == 0 and state.next_rank() == 0 ) {
     TierRouter<ComputeKernel, ModelConfig>::compute_kernel_->push( std::move( state ) );
   } else {
@@ -386,7 +386,7 @@ void ParentTierRouter<ComputeKernel, ModelConfig>::process_monolith( StateType&&
 {
   // This function will only be called a finite number of times, and afterwards monoliths will no longer exist
   assign_ranks( state );
-  CHECK( is_served_in_this_slice( state ) );
+  DCHECK( is_served_in_this_slice( state ) );
 
   std::deque<StateType> shards
     = std::move( StateType::split_states( std::move( state ), concurrency_.cutting_plan( state.next_stage() ), true ) );
@@ -409,7 +409,8 @@ requires models::llama2::ModelConfig<ModelConfig>
          && compute::KernelConcept<ComputeKernel, models::BatchedInferenceState<ModelConfig>>
 void ParentTierRouter<ComputeKernel, ModelConfig>::process_shard( StateType&& state )
 {
-  CHECK( state.all_assigned_to_nodes() ) << "Sharded states must always be already routed.";
+  DCHECK( state.all_assigned_to_nodes() ) << "Sharded states must always be already routed.";
+  DCHECK( is_served_in_this_slice( state ) );
   if ( state.next_stage() == glinthawk::models::InferenceStage::Attention ) {
     {
       std::lock_guard lock { shards_mutex_ };

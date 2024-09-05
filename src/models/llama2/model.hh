@@ -125,11 +125,11 @@ template<typename DType>
 void CHECK_DTYPE( const DataType dtype )
 {
   if constexpr ( std::is_same_v<DType, glinthawk::float32_t> ) {
-    CHECK( dtype == DataType::Float32 );
+    DCHECK( dtype == DataType::Float32 );
   } else if constexpr ( std::is_same_v<DType, glinthawk::float16_t> ) {
-    CHECK( dtype == DataType::Float16 );
+    DCHECK( dtype == DataType::Float16 );
   } else if constexpr ( std::is_same_v<DType, glinthawk::bfloat16_t> ) {
-    CHECK( dtype == DataType::BFloat16 );
+    DCHECK( dtype == DataType::BFloat16 );
   } else {
     []<bool flag = false>() { static_assert( flag, "invalid dtype" ); }();
   }
@@ -272,18 +272,18 @@ void Llama2<Config, DType, LlamaOperations, Context>::check_batch(
   const std::vector<std::shared_ptr<Context>>& contexts,
   const InferenceStage stage ) const
 {
-  CHECK_GT( states.batch_size(), 0 );
-  CHECK_LE( states.batch_size(), instance_config_.concurrency_limit );
+  DCHECK_GT( states.batch_size(), 0 );
+  DCHECK_LE( states.batch_size(), instance_config_.concurrency_limit );
 
   if ( stage == InferenceStage::Attention ) {
-    CHECK_EQ( states.batch_size(), contexts.size() );
+    DCHECK_EQ( states.batch_size(), contexts.size() );
   }
 
   const uint32_t next_layer_batch = states.next_layer();
 
-  CHECK( instance_config_.hosts( next_layer_batch, states.next_stage() ) );
+  DCHECK( instance_config_.hosts( next_layer_batch, states.next_stage() ) );
 
-  CHECK( states.next_stage() == stage );
+  DCHECK( states.next_stage() == stage );
 
   if ( stage != InferenceStage::Attention ) {
     CHECK_DTYPE<DType>( states.dtype() );
@@ -297,7 +297,7 @@ void Llama2<Config, DType, LlamaOperations, Context>::load_embedding( const Stat
   for ( size_t i = 0; i < states.batch_size(); i++ ) {
     if ( states.active( i ) ) {
       const auto token = states.token( i );
-      CHECK_LT( token, Config::vocab_size );
+      DCHECK_LT( token, Config::vocab_size );
 
       const DType* content_row = this->base_weights_.token_embedding_table + token * Config::dim;
       ops_.copy(
@@ -464,7 +464,7 @@ void Llama2<Config, DType, LlamaOperations, Context>::forward_postlude( StateTyp
                                                                         const bool classification_done )
 {
   if ( classification_done ) {
-    CHECK_EQ( most_recent_layer_num, Config::n_layers - 1 );
+    DCHECK_EQ( most_recent_layer_num, Config::n_layers - 1 );
 
     std::vector<float> batch_temps;
     for ( size_t i = 0; i < states.batch_size(); i++ ) {
@@ -533,14 +533,14 @@ void Llama2<Config, DType, LlamaOperations, Context>::forward( StateType& states
     }
 
     pre_attention_ops( layer_num, true );
-    CHECK( this->instance_config_.hosts( layer_num, InferenceStage::Attention ) );
+    DCHECK( this->instance_config_.hosts( layer_num, InferenceStage::Attention ) );
     attention_ops();
-    CHECK( this->instance_config_.hosts( layer_num, InferenceStage::PostAttention ) );
+    DCHECK( this->instance_config_.hosts( layer_num, InferenceStage::PostAttention ) );
     post_attention_ops( layer_num );
     last_layer_num = layer_num;
   }
 
-  CHECK_LT( last_layer_num, Config::n_layers ) << "forward did nothing to the batched inference state";
+  DCHECK_LT( last_layer_num, Config::n_layers ) << "forward did nothing to the batched inference state";
 
   if ( last_layer_num == Config::n_layers - 1 ) {
     classify_ops();

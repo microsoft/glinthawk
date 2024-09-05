@@ -277,20 +277,21 @@ void HybridComputeKernel<ModelA, ModelB>::bookkeeping_thread_func()
       DLOG( INFO ) << "Popped state from incoming queue: " << state.debug_string( false );
     }
 
-    CHECK_EQ( a_.concurrency.get( state.next_stage() ) + b_.concurrency.get( state.next_stage() ), state.batch_size() );
+    DCHECK_EQ( a_.concurrency.get( state.next_stage() ) + b_.concurrency.get( state.next_stage() ),
+               state.batch_size() );
 
     // can we, or have we already, allocated the contexts for this state?
 
     if ( state.next_stage() == Stage::Attention ) {
-      CHECK( context_map_.find( state.id() ) == context_map_.end() );
+      DCHECK( context_map_.find( state.id() ) == context_map_.end() );
 
       auto contexts_a_opt = a_.context_manager.get_contexts( state, 0, a_.concurrency.get( Stage::Attention ) );
       auto contexts_b_opt
         = b_.context_manager.get_contexts( state, a_.concurrency.get( Stage::Attention ), state.batch_size() );
 
-      CHECK( contexts_a_opt.has_value() )
+      DCHECK( contexts_a_opt.has_value() )
         << "TierRouter has guaranteed context space, but compute kernel doesn't have enough in A";
-      CHECK( contexts_b_opt.has_value() )
+      DCHECK( contexts_b_opt.has_value() )
         << "TierRouter has guaranteed context space, but compute kernel doesn't have enough in B";
 
       {
@@ -307,8 +308,8 @@ void HybridComputeKernel<ModelA, ModelB>::bookkeeping_thread_func()
       // split the state
       auto [state_a, state_b] = state.split( a_.concurrency.get( next_stage ) );
 
-      CHECK_EQ( state_a.batch_size(), a_.concurrency.get( next_stage ) );
-      CHECK_EQ( state_b.batch_size(), b_.concurrency.get( next_stage ) );
+      DCHECK_EQ( state_a.batch_size(), a_.concurrency.get( next_stage ) );
+      DCHECK_EQ( state_b.batch_size(), b_.concurrency.get( next_stage ) );
 
       {
         std::lock_guard lock { a_.mutex };
