@@ -137,7 +137,7 @@ struct StateCompOp
 {
   bool operator()( const StateQueueItem<ConfigType>& lhs, const StateQueueItem<ConfigType>& rhs ) const
   {
-    return lhs._comp_key > rhs._comp_key;
+    return lhs._comp_key < rhs._comp_key;
   }
 };
 
