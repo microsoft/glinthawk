@@ -114,7 +114,6 @@ void MessageHandler<SessionType>::load()
 template<class SessionType>
 void MessageHandler<SessionType>::push_message( Message&& message )
 {
-  DLOG (INFO) << "1";
   outgoing_.push( std::move( message ) );
 
   if ( current_outgoing_unsent_header_.empty() and current_outgoing_unsent_payload_.empty() ) {
@@ -140,26 +139,17 @@ void MessageHandler<SessionType>::write( RingBuffer& out )
   if ( outgoing_empty() ) {
     throw std::runtime_error( "MessageHandler::write(): Client has no more outgoing messages" );
   }
-  DLOG (INFO) << "2";
 
   if ( not current_outgoing_unsent_header_.empty() ) {
-    DLOG (INFO) << "3.1";
     current_outgoing_unsent_header_.remove_prefix( out.write( current_outgoing_unsent_header_ ) );
-    DLOG (INFO) << "3.2";
   } else if ( not current_outgoing_unsent_payload_.empty() ) {
-    DLOG (INFO) << "3.3";
     current_outgoing_unsent_payload_.remove_prefix( out.write( current_outgoing_unsent_payload_ ) );
-    DLOG (INFO) << "3.4";
   } else {
-    DLOG (INFO) << "3.5";
     outgoing_.pop();
-    DLOG (INFO) << "3.6";
 
     if ( not outgoing_.empty() ) {
-      DLOG (INFO) << "3.7.1";
       load();
     }
-    DLOG (INFO) << "3.8";
   }
 }
 

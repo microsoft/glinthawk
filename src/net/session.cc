@@ -49,17 +49,12 @@ void Session<T>::do_read()
 template<typename T>
 void Session<T>::do_write()
 {
-  DLOG (INFO) << "4";
   const string_view source = outbound_plaintext_.readable_region();
-  DLOG (INFO) << "5";
   const auto bytes_written = this->socket_.write( source );
-  DLOG (INFO) << "6";
 
   if ( bytes_written > 0 ) {
-    DLOG (INFO) << "7.1";
     outbound_plaintext_.pop( bytes_written );
   }
-  DLOG (INFO) << "8";
 }
 
 template<>
