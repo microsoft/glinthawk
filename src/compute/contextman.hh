@@ -94,7 +94,10 @@ PreallocatingContextManager<Model>::PreallocatingContextManager( const typename 
     free_contexts_.emplace_back( std::make_shared<typename Model::ContextType>( settings ) );
   }
 
-  LOG( INFO ) << "Preallocated " << settings.max_context_count << " contexts (" << typeid( *this ).name() << ")";
+  const size_t ctx_size = free_contexts_.front()->max_size( settings.num_attention_layers_hosted() );
+  LOG( INFO ) << "Preallocated " << settings.max_context_count << " contexts (" << settings.max_context_count << "x"
+              << ( ctx_size >> 20 ) << "MiB=" << ( settings.max_context_count * ctx_size >> 20 ) << " MiB,"
+              << typeid( *this ).name() << ")";
 }
 
 template<typename Model>

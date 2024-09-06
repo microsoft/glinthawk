@@ -700,6 +700,8 @@ template<typename DType>
 void Operations<DType>::setup_rng( unsigned long seed, const uint64_t size, const uint64_t batch_size )
 {
   curandState* rng_state_ptr = nullptr;
+  LOG( WARNING ) << "Allocating memory for RNG state (" << ( size * batch_size * sizeof( curandState ) >> 20 )
+                 << " MiB)";
   common::cuda::CHECK_CUDA( cudaMalloc( &rng_state_ptr, size * batch_size * sizeof( curandState ) ) );
   rng_state.reset( rng_state_ptr );
 

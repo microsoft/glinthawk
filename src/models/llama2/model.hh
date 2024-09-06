@@ -208,18 +208,25 @@ Llama2<Config, DType, LlamaOperations, Context>::Llama2(
   if ( randomize_parameters ) {
     LOG( WARNING ) << "Randomizing weights and scratchpad...";
 
+    LOG( WARNING ) << "Randomizing base weights ("
+                   << ( BaseWeights<Config, DType>::in_memory_total_byte_size( instance_config_ ) >> 20 ) << " MiB)...";
     ops_.randomize_device_buffer( base_weights_buffer_.get(),
                                   BaseWeights<Config, DType>::in_memory_total_byte_size( instance_config_ )
                                     / sizeof( DType ),
                                   -10.0 / sqrt( Config::dim ),
                                   10.0 / sqrt( Config::dim ) );
 
+    LOG( WARNING ) << "Randomizing layer weights ("
+                   << ( LayerWeights<Config, DType>::in_memory_all_layers_total_byte_size( instance_config_ ) >> 20 )
+                   << " MiB)...";
     ops_.randomize_device_buffer( layers_buffer_.get(),
                                   LayerWeights<Config, DType>::in_memory_all_layers_total_byte_size( instance_config_ )
                                     / sizeof( DType ),
                                   -10.0 / sqrt( Config::dim ),
                                   10.0 / sqrt( Config::dim ) );
 
+    LOG( WARNING ) << "Randomizing run state ("
+                   << ( ScratchPad<Config, DType, Context>::scratchpad_size( instance_config_ ) >> 20 ) << " MiB)...";
     ops_.randomize_device_buffer( scratchpad_buffer_.get(),
                                   ScratchPad<Config, DType, Context>::scratchpad_size( instance_config_ )
                                     / sizeof( DType ),
@@ -229,6 +236,9 @@ Llama2<Config, DType, LlamaOperations, Context>::Llama2(
     LOG( WARNING ) << "Randomizing weights and run state... done.";
   } else { // not randomize_parameters
 
+    LOG( INFO ) << "Allocated run state ("
+                << ( ScratchPad<Config, DType, Context>::scratchpad_size( instance_config_ ) >> 20 ) << " MiB).";
+
     copy_file_to_buffer( model_dir / ( "BASEWEIGHTS" + filename_suffix ),
                          base_weights_buffer_.get(),
                          BaseWeights<Config, DType>::on_disk_total_byte_size(),
@@ -237,8 +247,8 @@ Llama2<Config, DType, LlamaOperations, Context>::Llama2(
                          BaseWeights<Config, DType>::in_memory_element_size( instance_config_ ),
                          BaseWeights<Config, DType>::in_memory_offset( instance_config_ ) );
 
-    LOG( INFO ) << "Loaded base weights (" << BaseWeights<Config, DType>::in_memory_total_byte_size( instance_config_ )
-                << " bytes).";
+    LOG( INFO ) << "Loaded base weights ("
+                << ( BaseWeights<Config, DType>::in_memory_total_byte_size( instance_config_ ) >> 20 ) << " MiB).";
 
     DType* ptr = layers_buffer_.get();
 
@@ -260,7 +270,8 @@ Llama2<Config, DType, LlamaOperations, Context>::Llama2(
     }
 
     LOG( INFO ) << "Loaded layer weights ("
-                << LayerWeights<Config, DType>::in_memory_all_layers_total_byte_size( instance_config_ ) << " bytes).";
+                << ( LayerWeights<Config, DType>::in_memory_all_layers_total_byte_size( instance_config_ ) >> 20 )
+                << " MiB).";
   }
 
   LOG( INFO ) << "Model " << util::demangle( typeid( decltype( this ) ).name() ) << " instantiated.";
@@ -543,7 +554,8 @@ void Llama2<Config, DType, LlamaOperations, Context>::forward( StateType& states
 
   DCHECK_LT( last_layer_num, Config::n_layers ) << "forward did nothing to the batched inference state";
 
-  if ( last_layer_num == Config::n_layers - 1 ) {
+  if ( last_layer_num == Config::n_layers - 1
+       and this->instance_config_.hosts( last_layer_num, InferenceStage::Classification ) ) {
     classify_ops();
     return forward_postlude( states, last_layer_num, true );
   } else {
