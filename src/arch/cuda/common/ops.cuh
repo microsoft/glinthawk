@@ -18,6 +18,7 @@ namespace glinthawk::models::common::cuda {
 constexpr size_t TPB = 64;    /* threads per block */
 constexpr size_t NRBS = 32;   /* norm reduce block size */
 constexpr size_t AMRBS = 128; /* argmax reduce block size */
+constexpr size_t LPK = 64;     /* gumbel_fix loop iterations per kernel */
 
 void CHECK_CUBLAS( const cublasStatus_t err, const std::source_location l = std::source_location::current() );
 void CHECK_CUDA( const cudaError_t err, const std::source_location l = std::source_location::current() );
@@ -77,6 +78,7 @@ protected:
   mutable cublasHandle_t cublas_handle_default {};
   mutable cublasHandle_t* cublas_handle_array { nullptr };
   int cublas_handle_count {};
+  bool rng_initialized { false };
 
   mutable std::unique_ptr<curandState, models::common::cuda::CUDADeleter<curandState>> rng_state { nullptr };
   void setup_rng( unsigned long seed, const uint64_t size, const uint64_t batch_size );
@@ -87,7 +89,10 @@ protected:
   constexpr static cublasComputeType_t GH_CUDA_COMPUTE_TYPE = CUBLAS_COMPUTE_32F;
 
 public:
-  Operations( const size_t num_streams, const size_t rng_states, const size_t batch_size = 1 );
+  Operations( const size_t num_streams,
+              const size_t rng_states,
+              const bool needs_rng = true,
+              const size_t batch_size = 1 );
   ~Operations();
 
   Operations( const Operations& ) = delete;
@@ -475,32 +480,34 @@ __global__ void silu_direct( glinthawk::float32_t* _hb, const glinthawk::float32
 
 namespace { // soft_sample
 
-template<typename DType>
+template<typename DType, size_t LPK>
 __global__ void gumbel_fix( DType* array,
                             const glinthawk::float32_t temp,
                             const size_t vocab_size,
                             curandState* rng_state )
 {
   const uint64_t i = threadIdx.x + blockIdx.x * TPB;
+  curandState local_state = rng_state[i];
 
-  if ( i < vocab_size ) {
-    curandState local_state = rng_state[i];
+  const size_t j_start = i * LPK;
+  const size_t j_end = ( i + 1 ) * LPK > vocab_size ? vocab_size : ( i + 1 ) * LPK;
 
+  for ( size_t j = j_start; j < j_end; j++ ) {
     glinthawk::float32_t myrandf = curand_uniform( &local_state );
     myrandf = logf( -logf( myrandf ) );
 
     if constexpr ( std::is_same_v<DType, glinthawk::float16_t> ) {
-      array[i] = __float2half( __half2float( array[i] ) / temp - myrandf );
+      array[j] = __float2half( __half2float( array[j] ) / temp - myrandf );
     } else if constexpr ( std::is_same_v<DType, glinthawk::bfloat16_t> ) {
-      array[i] = __float2bfloat16( __bfloat162float( array[i] ) / temp - myrandf );
+      array[j] = __float2bfloat16( __bfloat162float( array[j] ) / temp - myrandf );
     } else if constexpr ( std::is_same_v<DType, glinthawk::float32_t> ) {
-      array[i] = array[i] / temp - myrandf;
+      array[j] = array[j] / temp - myrandf;
     } else {
       STATIC_ASSERT_NO_MATCH();
     }
-
-    rng_state[i] = local_state;
   }
+
+  rng_state[i] = local_state;
 }
 
 }
@@ -518,7 +525,10 @@ __global__ void setup_rng_kernel( curandState* state, unsigned long seed )
 } // end of anonymous namespace for helper functions
 
 template<typename DType>
-Operations<DType>::Operations( const size_t num_streams, const size_t rng_states, const size_t batch_size )
+Operations<DType>::Operations( const size_t num_streams,
+                               const size_t rng_states,
+                               const bool needs_rng,
+                               const size_t batch_size )
 {
   // setup cuBLAS
   CHECK_CUBLAS( cublasCreate( &cublas_handle_default ) );
@@ -531,8 +541,10 @@ Operations<DType>::Operations( const size_t num_streams, const size_t rng_states
     CHECK_CUBLAS( cublasSetStream( cublas_handle_array[i], streams[i] ) );
   }
 
-  // setup cuRAND; must be done after setting up the streams
-  setup_rng( 1234u, rng_states, batch_size );
+  if ( needs_rng ) {
+    // setup cuRAND; must be done after setting up the streams
+    setup_rng( 1234u, rng_states, batch_size );
+  }
 }
 
 template<typename DType>
@@ -645,10 +657,11 @@ void Operations<DType>::matmul( DType* xout, const DType* x, const DType* W, con
 template<typename DType>
 void Operations<DType>::soft_sample( DType* v, const std::vector<float>& temperatures, const size_t vocab_size ) const
 {
+  const size_t rng_size = div_ceil_runtime( vocab_size, LPK );
   for ( uint64_t i = 0; i < temperatures.size(); i++ ) {
     if ( temperatures[i] > 0 ) {
-      gumbel_fix<DType><<<div_ceil_runtime( vocab_size, TPB ), TPB, 0, this->streams[i]>>>(
-        v + i * vocab_size, temperatures[i], vocab_size, rng_state.get() + i * vocab_size );
+      gumbel_fix<DType, LPK><<<div_ceil_runtime( rng_size, TPB ), TPB, 0, this->streams[i]>>>(
+        v + i * vocab_size, temperatures[i], vocab_size, rng_state.get() + i * rng_size );
     }
   }
 }
@@ -700,14 +713,17 @@ template<typename DType>
 void Operations<DType>::setup_rng( unsigned long seed, const uint64_t size, const uint64_t batch_size )
 {
   curandState* rng_state_ptr = nullptr;
-  LOG( WARNING ) << "Allocating memory for RNG state (" << ( size * batch_size * sizeof( curandState ) >> 20 )
+  const size_t rng_size = div_ceil_runtime( size, LPK );
+  LOG( WARNING ) << "Allocating memory for RNG state (" << ( rng_size * batch_size * sizeof( curandState ) >> 20 )
                  << " MiB)";
-  common::cuda::CHECK_CUDA( cudaMalloc( &rng_state_ptr, size * batch_size * sizeof( curandState ) ) );
+  common::cuda::CHECK_CUDA( cudaMalloc( &rng_state_ptr, rng_size * batch_size * sizeof( curandState ) ) );
   rng_state.reset( rng_state_ptr );
 
   for ( uint64_t i = 0; i < batch_size; i++ ) {
-    setup_rng_kernel<<<div_ceil_runtime( size, TPB ), TPB, 0, this->streams[i]>>>( rng_state.get() + i * size, seed );
+    setup_rng_kernel<<<div_ceil_runtime( rng_size, TPB ), TPB, 0, this->streams[i]>>>( rng_state.get() + i * rng_size,
+                                                                                       seed );
   }
+  rng_initialized = true;
 }
 
 } // namespace glinthawk::models::common::cuda

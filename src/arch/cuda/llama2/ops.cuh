@@ -278,7 +278,10 @@ __global__ void do_rope( const DType* freq_cis_real_row,
 
 template<typename Config, typename DType, typename ContextType>
 LlamaOperations<Config, DType, ContextType>::LlamaOperations( const ConfigRuntime<Config>& settings )
-  : common::cuda::Operations<DType>( settings.concurrency_limit, Config::vocab_size, settings.concurrency_limit )
+  : common::cuda::Operations<DType>( settings.concurrency_limit,
+                                     Config::vocab_size,
+                                     settings.hosts( Config::n_layers - 1, InferenceStage::Classification ),
+                                     settings.concurrency_limit )
 {
   // Summary of Checks:
   // (a) TPB must not exceed 1024. Threads per block cannot surpass 1024.
