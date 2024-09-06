@@ -30,6 +30,7 @@ private:
   Model model_; /* we just load one layer of the model */
 
   const Stage stage_;
+  const Stage starting_stage_;
   const uint32_t batch_size_;
   const uint64_t token_pos_;
   const std::chrono::seconds duration_;
@@ -53,12 +54,22 @@ public:
             const size_t duration_s,
             const bool run_serialization )
     : model_( [&]() -> Model {
-      std::array<std::array<bool, util::to_underlying( models::InferenceStage::__COUNT__ )>, ConfigType::n_layers>
-        hosting_table;
-      hosting_table[ConfigType::n_layers - 1][util::to_underlying( stage )] = true;
+      std::array<std::array<bool, util::to_underlying( Stage::__COUNT__ )>, ConfigType::n_layers> hosting_table;
+      if ( stage == Stage::__ALL_NO_CLS__ ) {
+        for ( size_t i = 0; i < util::to_underlying( Stage::Classification ); i++ ) {
+          hosting_table[ConfigType::n_layers - 1][i] = true;
+        }
+      } else if ( stage == Stage::__ALL__ ) {
+        for ( size_t i = 0; i < util::to_underlying( Stage::__COUNT__ ); i++ ) {
+          hosting_table[ConfigType::n_layers - 1][i] = true;
+        }
+      } else {
+        hosting_table[ConfigType::n_layers - 1][util::to_underlying( stage )] = true;
+      }
       return { model_root, hosting_table, batch_size, batch_size, true };
     }() )
     , stage_( stage )
+    , starting_stage_( stage_ == Stage::__ALL__ or stage_ == Stage::__ALL_NO_CLS__ ? Stage::PreAttention : stage_ )
     , batch_size_( batch_size )
     , token_pos_( token_pos )
     , duration_( duration_s )
@@ -67,6 +78,12 @@ public:
   {
     for ( size_t i = 0; i < batch_size; i++ ) {
       contexts_[i] = std::make_shared<ContextType>( model_.settings() );
+      if ( i == 0 ) {
+        LOG( WARNING ) << "Randomizing context ("
+                       << ( batch_size * contexts_[i]->max_size( model_.settings().num_attention_layers_hosted() )
+                            >> 20 )
+                       << " MiB)...";
+      }
 
       model_.ops().randomize_device_buffer( contexts_[i]->layer( ConfigType::n_layers - 1 ).token( 0 ).key(),
                                             contexts_[i]->max_size( model_.settings().num_attention_layers_hosted() )
@@ -92,7 +109,7 @@ public:
       };
 
       state.set_next_layer( ConfigType::n_layers - 1 );
-      state.set_next_stage( stage_ );
+      state.set_next_stage( starting_stage_ );
 
       if ( first_time ) {
         util::randomize_buffer( reinterpret_cast<ModelDataType*>( state.activations().data() ),
@@ -155,6 +172,10 @@ public:
         model_.forward_post_attention( states );
       } else if ( stage_ == Stage::Classification ) {
         model_.forward_classify( states );
+      } else if ( stage_ == Stage::__ALL__ ) {
+        model_.forward( states, contexts_ );
+      } else if ( stage_ == Stage::__ALL_NO_CLS__ ) {
+        model_.forward( states, contexts_ );
       } else {
         LOG( FATAL ) << "Unknown stage";
       }

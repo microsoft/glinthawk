@@ -33,6 +33,8 @@ enum class InferenceStage : uint8_t
   PostAttention,
   Classification,
   __COUNT__,
+  __ALL_NO_CLS__,
+  __ALL__,
 };
 
 } // namespace glinthawk::models

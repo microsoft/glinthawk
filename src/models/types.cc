@@ -127,6 +127,9 @@ std::ostream& operator<<( std::ostream& os, const glinthawk::models::InferenceSt
     case glinthawk::models::InferenceStage::Attention: os << "Att"; break;
     case glinthawk::models::InferenceStage::PostAttention: os << "Post"; break;
     case glinthawk::models::InferenceStage::Classification: os << "Cls"; break;
+    case glinthawk::models::InferenceStage::__COUNT__: os << "__COUNT__"; break;
+    case glinthawk::models::InferenceStage::__ALL_NO_CLS__: os << "Pre+Att+Post"; break;
+    case glinthawk::models::InferenceStage::__ALL__: os << "Pre+Att+Post+Cls"; break;
     default: os << "Unknown"; break;
   }
 
