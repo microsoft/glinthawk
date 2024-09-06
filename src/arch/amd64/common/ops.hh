@@ -2,6 +2,7 @@
 
 #include <memory>
 #include <random>
+#include "iostream"
 
 #include "arch/float.hh"
 #include "models/common/ops/concept.hh"
@@ -51,6 +52,8 @@ public:
              const uint64_t len_bytes,
              const CopyType type,
              const bool async = false ) const;
+
+  void print( const DType* x, const uint64_t b, const std::string base ) const;
 };
 
 static_assert( OperationsConcept<Operations<glinthawk::float32_t>, glinthawk::float32_t> );
@@ -100,6 +103,17 @@ void gumbel_fix( DType* array, glinthawk::float32_t temp, const size_t vocab_siz
 }
 
 } // end of anonymous namespace for helper functions
+
+template<typename DType>
+void Operations<DType>::print( const DType* x, const uint64_t b, const std::string base ) const
+{
+  std::cout << base;
+  for ( uint64_t i = 0; i < b; i++ ) {
+    glinthawk::float32_t c = static_cast<glinthawk::float32_t>( x[i] );
+    std::cout << "\t" << c;
+  }
+  std::cout << std::endl;
+}
 
 template<typename DType>
 template<uint64_t size>
@@ -182,9 +196,9 @@ void Operations<DType>::silu( DType* hb, DType* hb2, const uint64_t batch_size )
     DType* current_hb2 = hb2 + b * hidden_dim;
 
     for ( size_t i = 0; i < hidden_dim; i++ ) {
-      const glinthawk::float32_t x = current_hb[i];
-      current_hb[i] = static_cast<DType>( x * ( 1.0f / ( 1.0f + expf( -x ) ) )
-                                          * static_cast<glinthawk::float32_t>( current_hb2[i] ) );
+      const glinthawk::float32_t x = static_cast<glinthawk::float32_t>( current_hb[i] );
+      const glinthawk::float32_t y = static_cast<glinthawk::float32_t>( current_hb2[i] );
+      current_hb[i] = static_cast<DType>( x / ( 1.0f + expf( -x ) ) * y );
     }
   }
 }

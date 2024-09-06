@@ -127,6 +127,8 @@ public:
              const uint64_t batch_size,
              const CopyType type,
              const bool async = false ) const;
+
+  void print( const DType* x, const uint64_t b, const std::string base ) const;
 };
 
 static_assert( OperationsConcept<Operations<glinthawk::float32_t>, glinthawk::float32_t> );
@@ -522,6 +524,20 @@ __global__ void setup_rng_kernel( curandState* state, unsigned long seed )
 
 }
 
+namespace{ // print
+
+template<typename DType>
+__global__ void print_cuda( const DType* x, const uint64_t b )
+{
+  for ( uint64_t i = 0; i < b; i++ ) {
+    glinthawk::float32_t c = static_cast<glinthawk::float32_t>( x[i] );
+    printf("\t%f", c);
+  }
+  printf("\n");
+}
+
+}
+
 } // end of anonymous namespace for helper functions
 
 template<typename DType>
@@ -557,6 +573,15 @@ Operations<DType>::~Operations()
   }
   free( streams );
   free( cublas_handle_array );
+}
+
+template<typename DType>
+void Operations<DType>::print( const DType* x, const uint64_t b, const std::string base ) const
+{
+  printf("%s", base.c_str());
+  cudaDeviceSynchronize();
+  print_cuda<<<1, 1>>>(x, b);
+  cudaDeviceSynchronize();
 }
 
 template<typename DType>

@@ -23,7 +23,8 @@ concept OperationsConcept = requires( const T t,
                                       const glinthawk::float32_t val_f32,
                                       const bool flag,
                                       const std::vector<float>& vec_f,
-                                      const CopyType cpt ) {
+                                      const CopyType cpt,
+                                      const std::string base) {
   typename T::DeviceUniquePtr;
   { t.template accum<UI64>( ptr1, ptr2, size ) } -> std::same_as<void>;
   { t.template rmsnorm<UI64>( ptr1, ptr2, ptr_f32, ptr2, size ) } -> std::same_as<void>;
@@ -32,6 +33,7 @@ concept OperationsConcept = requires( const T t,
   { t.template matmul<UI64, UI64>( ptr1, ptr2, ptr2, size ) } -> std::same_as<void>;
   { t.template soft_sample( ptr1, vec_f, size ) } -> std::same_as<void>;
   { t.copy( ptr1, ptr2, size, cpt, flag ) } -> std::same_as<void>;
+  { t.print( ptr2, size, base ) } -> std::same_as<void>;
   { t.device_allocate( size ) } -> std::same_as<typename T::DeviceUniquePtr>;
   { t.randomize_device_buffer( ptr1, size, val_f32, val_f32 ) } -> std::same_as<void>;
 };
