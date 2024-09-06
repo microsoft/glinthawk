@@ -515,7 +515,7 @@ void LlamaOperations<Config, DType, ContextType>::convert_and_copy( DTypeDst* ds
       if constexpr ( std::is_same_v<DTypeSrc, DTypeDst> ) {
         common::cuda::CHECK_CUDA( cudaMemcpy( dst, src, size * sizeof( DTypeSrc ), cudaMemcpyDeviceToHost ) );
       } else {
-        std::unique_ptr<DTypeSrc> src_host { reinterpret_cast<DTypeSrc*>( new uint8_t[sizeof( DTypeSrc ) * size] ) };
+        std::unique_ptr<DTypeSrc[]> src_host { new DTypeSrc[size] };
         common::cuda::CHECK_CUDA(
           cudaMemcpy( src_host.get(), src, size * sizeof( DTypeSrc ), cudaMemcpyDeviceToHost ) );
         for ( uint64_t i = 0; i < size; i++ ) {
@@ -529,7 +529,7 @@ void LlamaOperations<Config, DType, ContextType>::convert_and_copy( DTypeDst* ds
       if constexpr ( std::is_same_v<DTypeSrc, DTypeDst> ) {
         common::cuda::CHECK_CUDA( cudaMemcpy( dst, src, size * sizeof( DTypeSrc ), cudaMemcpyHostToDevice ) );
       } else {
-        std::unique_ptr<DTypeDst> dst_host { reinterpret_cast<DTypeDst*>( new uint8_t[sizeof( DTypeDst ) * size] ) };
+        std::unique_ptr<DTypeDst[]> dst_host { new DTypeDst[size] };
         for ( uint64_t i = 0; i < size; i++ ) {
           dst_host.get()[i] = static_cast<DTypeDst>( src[i] );
         }
