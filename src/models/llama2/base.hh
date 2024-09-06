@@ -42,6 +42,10 @@ struct ConfigRuntime
 
   [[nodiscard]] bool hosts( size_t layer, models::InferenceStage stage ) const
   {
+    DCHECK_GE( layer, 0 );
+    DCHECK_LT( layer, Config::n_layers );
+    DCHECK_GE( util::to_underlying( stage ), 0 );
+    DCHECK_LT( util::to_underlying( stage ), util::to_underlying( models::InferenceStage::__COUNT__ ) );
     return hosting_table_[layer][util::to_underlying( stage )];
   }
   [[nodiscard]] bool hosts_in_any_layer( models::InferenceStage stage ) const
@@ -56,8 +60,8 @@ struct ConfigRuntime
   const std::array<std::array<bool, util::to_underlying( models::InferenceStage::__COUNT__ )>, Config::n_layers>
     hosting_table_;
   std::array<bool, util::to_underlying( models::InferenceStage::__COUNT__ )> hosting_stage_table_ {};
-  const uint64_t concurrency_limit { 1 };          // max concurrent inference size
-  const uint64_t max_context_count { 1 };          // max number of contexts
+  const uint64_t concurrency_limit { 1 };    // max concurrent inference size
+  const uint64_t max_context_count { 1 };    // max number of contexts
   size_t num_attention_layers_hosted_ { 0 }; // how many attention layers are supported
   bool randomize_parameters { false };
 };

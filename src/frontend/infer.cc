@@ -49,7 +49,22 @@ public:
                   const float temp )
     : batch_size_( batch_size )
     , temp_( temp )
-    , model_( model_path, 0, std::numeric_limits<uint32_t>::max(), batch_size, batch_size )
+    , model_( [&]() -> Model {
+      std::array<std::array<bool, util::to_underlying( models::InferenceStage::__COUNT__ )>,
+                 Model::ConfigType::n_layers>
+        hosting_table;
+      for ( size_t i = 0; i < Model::ConfigType::n_layers; i++ ) {
+        for ( size_t j = 0; j < util::to_underlying( models::InferenceStage::__COUNT__ ); j++ ) {
+          if ( i < Model::ConfigType::n_layers - 1
+               and j == util::to_underlying( models::InferenceStage::Classification ) ) {
+            hosting_table[i][j] = false;
+          } else {
+            hosting_table[i][j] = true;
+          }
+        }
+      }
+      return { model_path, hosting_table, batch_size, batch_size };
+    }() )
     , vocabulary_( tokenizer_path )
     , state_( batch_size, DataType::_GLINTHAWK_DTYPE_NAME_, {}, {} )
     , completions_file_( completions_path, ios::out | ios::trunc )

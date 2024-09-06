@@ -521,7 +521,8 @@ void Llama2<Config, DType, LlamaOperations, Context>::forward( StateType& states
 
   // Forward assumes we host everything in the layer.
   size_t last_layer_num = Config::n_layers;
-  for ( size_t layer_num = states.next_layer(); this->instance_config_.hosts( layer_num, InferenceStage::PreAttention );
+  for ( size_t layer_num = states.next_layer();
+        layer_num < Config::n_layers and this->instance_config_.hosts( layer_num, InferenceStage::PreAttention );
         layer_num++ ) {
     for ( size_t i = 0; i < contexts.size(); i++ ) {
       // make sure the context is allocated

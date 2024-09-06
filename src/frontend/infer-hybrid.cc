@@ -27,6 +27,7 @@ private:
   const uint32_t batch_size_;
   const float temp_;
 
+  // TODO: fix this
   compute::SimpleHybridComputeKernel<ModelA, ModelB> kernel_;
   llama2::Vocabulary vocabulary_;
   StateType state_;
@@ -72,17 +73,27 @@ public:
                   const float temp )
     : batch_size_( batch_size )
     , temp_( temp )
-    , kernel_( batch_size,
-               model_path,
-               0,                                    /* start layer */
-               std::numeric_limits<uint32_t>::max(), /* end layer */
-               batch_size,
-               64 /* max context count */ )
+    , kernel_( [&]() -> decltype( kernel_ ) {
+      std::array<std::array<bool, util::to_underlying( models::InferenceStage::__COUNT__ )>,
+                 ModelA::ConfigType::n_layers>
+        hosting_table;
+      for ( size_t i = 0; i < ModelA::ConfigType::n_layers; i++ ) {
+        for ( size_t j = 0; j < util::to_underlying( models::InferenceStage::__COUNT__ ); j++ ) {
+          if ( i < ModelA::ConfigType::n_layers - 1
+               and j == util::to_underlying( models::InferenceStage::Classification ) ) {
+            hosting_table[i][j] = false;
+          } else {
+            hosting_table[i][j] = true;
+          }
+        }
+      }
+      return { batch_size, model_path, hosting_table, batch_size, batch_size };
+    }() )
     , vocabulary_( tokenizer_path )
     , state_( make_state() )
   {
     for ( size_t i = 0; i < batch_size_; ++i ) {
-      state_.set_context_id( i, NULL_CONTEXT+i );
+      state_.set_context_id( i, NULL_CONTEXT + i );
     }
   }
 

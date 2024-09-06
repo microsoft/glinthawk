@@ -47,7 +47,7 @@ public:
 
 public:
   template<typename... Args>
-  SimpleHybridComputeKernel( const uint32_t concurrency, Args&&... args );
+  SimpleHybridComputeKernel( const size_t concurrency, Args&&... args );
 
   ~SimpleHybridComputeKernel();
 
@@ -131,7 +131,7 @@ SimpleHybridComputeKernel<ModelA, ModelB>::ModelData<M>::ModelData( std::unique_
 
 template<typename ModelA, typename ModelB>
 template<typename... Args>
-SimpleHybridComputeKernel<ModelA, ModelB>::SimpleHybridComputeKernel( const uint32_t concurrency, Args&&... args )
+SimpleHybridComputeKernel<ModelA, ModelB>::SimpleHybridComputeKernel( const size_t concurrency, Args&&... args )
   : concurrency_( concurrency / 2 )
   , a_( std::make_unique<ModelA>( std::forward<Args>( args )... ) )
   , b_( std::make_unique<ModelB>( std::forward<Args>( args )... ) )
@@ -198,8 +198,7 @@ void SimpleHybridComputeKernel<ModelA, ModelB>::model_step_forward( StateType& s
         timeit<IntDistributions::KernelPreAttentionForwardTime>( __stats__,
                                                                  [&] { model.forward_pre_attention( state ); } );
       } else if ( state.next_stage() == Stage::Classification and state.next_layer() == ConfigType::n_layers - 1
-                  and model.settings().hosts( ConfigType::n_layers - 1,
-                                              state.next_stage() == Stage::Classification ) ) {
+                  and model.settings().hosts( ConfigType::n_layers - 1, state.next_stage() ) ) {
         timeit<IntDistributions::KernelClassificationForwardTime>( __stats__,
                                                                    [&] { model.forward_classify( state ); } );
       }

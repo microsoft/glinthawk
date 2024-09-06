@@ -44,12 +44,12 @@ private:
 
   void create_initial_state()
   {
-    state_ = { batch_size_, DataType::_GLINTHAWK_DTYPE_NAME_, {}, {}, false, false, false };
+    state_ = { batch_size_, DataType::_GLINTHAWK_DTYPE_NAME_, {}, {} };
     state_.set_next_layer( 0 );
     state_.set_next_stage( InferenceStage::PreAttention );
 
     for ( size_t i = 0; i < batch_size_; ++i ) {
-      state_.set_prompt( i, {}, Model::ConfigType::token_bos, 0, 1.0, 1 );
+      state_.set_prompt( i, {}, i, Model::ConfigType::token_bos, 0, 1.0, 1, 0, 0 );
     }
   }
 
@@ -68,7 +68,22 @@ private:
 public:
   Rambler( const filesystem::path& model_path, const filesystem::path& tokenizer_path, const uint32_t batch_size )
     : batch_size_( batch_size )
-    , model_( model_path, 0, std::numeric_limits<uint32_t>::max(), batch_size, batch_size )
+    , model_( [&]() -> Model {
+      std::array<std::array<bool, util::to_underlying( models::InferenceStage::__COUNT__ )>,
+                 Model::ConfigType::n_layers>
+        hosting_table;
+      for ( size_t i = 0; i < Model::ConfigType::n_layers; i++ ) {
+        for ( size_t j = 0; j < util::to_underlying( models::InferenceStage::__COUNT__ ); j++ ) {
+          if ( i < Model::ConfigType::n_layers - 1
+               and j == util::to_underlying( models::InferenceStage::Classification ) ) {
+            hosting_table[i][j] = false;
+          } else {
+            hosting_table[i][j] = true;
+          }
+        }
+      }
+      return { model_path, hosting_table, batch_size, batch_size };
+    }() )
     , vocabulary_( tokenizer_path )
   {
     create_initial_state();
@@ -98,7 +113,7 @@ public:
         // check for completed dummy prompts, and restart them
         for ( size_t i = 1; i < batch_size_; ++i ) {
           if ( state_.finished( i ) ) {
-            state_.set_prompt( i, {}, Model::ConfigType::token_bos, 0, 1.0, 1 );
+            state_.set_prompt( i, {}, i, Model::ConfigType::token_bos, 0, 1.0, 1, 0, 0 );
           }
         }
 
