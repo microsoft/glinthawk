@@ -531,7 +531,7 @@ __global__ void print_cuda( const DType* x, const uint64_t b )
 {
   for ( uint64_t i = 0; i < b; i++ ) {
     glinthawk::float32_t c = static_cast<glinthawk::float32_t>( x[i] );
-    printf("\t%f", c);
+    printf("\t%.10f", c);
   }
   printf("\n");
 }

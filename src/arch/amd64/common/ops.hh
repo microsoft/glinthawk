@@ -2,7 +2,6 @@
 
 #include <memory>
 #include <random>
-#include "iostream"
 
 #include "arch/float.hh"
 #include "models/common/ops/concept.hh"
@@ -107,12 +106,12 @@ void gumbel_fix( DType* array, glinthawk::float32_t temp, const size_t vocab_siz
 template<typename DType>
 void Operations<DType>::print( const DType* x, const uint64_t b, const std::string base ) const
 {
-  std::cout << base;
+  printf( "%s", base.c_str() );
   for ( uint64_t i = 0; i < b; i++ ) {
     glinthawk::float32_t c = static_cast<glinthawk::float32_t>( x[i] );
-    std::cout << "\t" << c;
+    printf( "\t%.10f", c );
   }
-  std::cout << std::endl;
+  printf( "\n" );
 }
 
 template<typename DType>
@@ -172,7 +171,7 @@ void Operations<DType>::argmax( uint32_t* output, const DType* v, DType*, const 
     const DType* this_v = v + b * n;
 
     uint64_t max_i = 0;
-    glinthawk::float32_t max_p = this_v[0];
+    DType max_p = this_v[0];
 
     for ( uint64_t i = 1; i < n; i++ ) {
       if ( this_v[i] > max_p ) {
