@@ -137,15 +137,8 @@ public:
             prompt_queue_.pop();
 
             auto& entry = active_prompts_[i];
-            state_.set_prompt( i,
-                               entry.id(),
-                               state_.context_id( i ),
-                               entry.prompt().at( 0 ),
-                               0,
-                               temp_,
-                               entry.prompt().count(),
-                               0,
-                               0 );
+            state_.set_prompt(
+              i, entry.id(), state_.context_id( i ), entry.prompt().at( 0 ), 0, temp_, entry.prompt().count(), 0, 0 );
           } else {
             state_.discard( i );
           }
@@ -163,7 +156,7 @@ public:
 void usage( const char* argv0 )
 {
   cout << "Usage: " << argv0
-       << " <model_dir> <model_name> <tokenizer_path> <batch_size> <temperature> <in:prompts.jsonl> "
+       << " <model_dir> <model_name> (paged|static)  <tokenizer_path> <batch_size> <temperature> <in:prompts.jsonl> "
           "<out:completions.jsonl>"
        << endl;
 }
@@ -174,7 +167,7 @@ int main( int argc, char* argv[] )
     abort();
   }
 
-  if ( argc != 8 ) {
+  if ( argc != 9 ) {
     usage( argv[0] );
     return EXIT_FAILURE;
   }
@@ -186,14 +179,15 @@ int main( int argc, char* argv[] )
   try {
     const filesystem::path model_dir_path { argv[1] };
     const string model_name { argv[2] };
-    const filesystem::path tokenizer_path { argv[3] };
-    const size_t batch_size = atoi( argv[4] );
-    const float temp = atof( argv[5] );
-    const filesystem::path prompts_path { argv[6] };
-    const filesystem::path completions_path { argv[7] };
+    const string context_name { argv[3] };
+    const filesystem::path tokenizer_path { argv[4] };
+    const size_t batch_size = atoi( argv[5] );
+    const float temp = atof( argv[6] );
+    const filesystem::path prompts_path { argv[7] };
+    const filesystem::path completions_path { argv[8] };
 
-#define CREATE_AND_RUN( MODEL_NAME, CLASS_NAME )                                                                       \
-  if ( model_name == MODEL_NAME ) {                                                                                    \
+#define CREATE_AND_RUN( MODEL_NAME, CONTEXT_NAME, CLASS_NAME )                                                         \
+  if ( model_name == MODEL_NAME and context_name == CONTEXT_NAME ) {                                                   \
     using ModelType = llama2::_GLINTHAWK_ARCH_NS_::CLASS_NAME<_GLINTHAWK_DTYPE_>;                                      \
     BatchInference<ModelType> inference(                                                                               \
       model_dir_path, tokenizer_path, prompts_path, completions_path, batch_size, temp );                              \
@@ -202,11 +196,15 @@ int main( int argc, char* argv[] )
 
     // XXX(sadjad): ugly af
     // clang-format off
-    CREATE_AND_RUN( "stories-110m", Stories_110M )
-    else CREATE_AND_RUN( "llama2-7b-chat", Llama2_7B_Chat )
-    else CREATE_AND_RUN( "llama2-13b-chat", Llama2_13B_Chat )
-    else CREATE_AND_RUN( "llama2-70b-chat", Llama2_70B_Chat )
-    else LOG( FATAL ) << "Unknown model name: " << model_name;
+    CREATE_AND_RUN( "llama2-7b-chat", "static", Llama2_7B_Chat_Static )
+    else CREATE_AND_RUN( "llama2-13b-chat", "static", Llama2_13B_Chat_Static )
+    else CREATE_AND_RUN( "llama2-70b-chat", "static", Llama2_70B_Chat_Static )
+    else CREATE_AND_RUN( "stories-110m", "static", Stories_110M_Static )
+    else CREATE_AND_RUN( "llama2-7b-chat", "paged", Llama2_7B_Chat_Paged )
+    else CREATE_AND_RUN( "llama2-13b-chat", "paged", Llama2_13B_Chat_Paged )
+    else CREATE_AND_RUN( "llama2-70b-chat", "paged", Llama2_70B_Chat_Paged )
+    else CREATE_AND_RUN( "stories-110m", "paged", Stories_110M_Paged )
+    else LOG( FATAL ) << "Unknown model name: " << model_name << ", or context name: " << context_name;
     // clang-format on
 
     cerr << endl << global_timer().summary() << endl;

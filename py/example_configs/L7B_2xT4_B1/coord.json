@@ -9,6 +9,7 @@
     {
       "kernel": "simple_piped",
       "platform": "cuda",
+      "context": "paged",
       "ranks": 1,
       "concurrency_size_pre": 1,
       "concurrency_size_att": 1,

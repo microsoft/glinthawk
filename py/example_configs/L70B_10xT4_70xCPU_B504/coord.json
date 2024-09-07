@@ -1,30 +1,32 @@
 {
-  "config_name": "L7B_2xT4_2xCPU_B1",
-  "model_name": "llama2-7b-chat",
+  "config_name": "L70B_10xT4_70xCPU_B504",
+  "model_name": "llama2-70b-chat",
   "listen_address": "0.0.0.0",
   "listen_port": "3020",
-  "n_layers": 32,
-  "n_slices": 2,
+  "n_layers": 80,
+  "n_slices": 10,
   "tiers": [
     {
       "kernel": "simple_piped",
       "platform": "cuda",
+      "context": "static",
       "ranks": 1,
-      "concurrency_size_pre": 1,
+      "concurrency_size_pre": 504,
       "concurrency_size_att": 0,
-      "concurrency_size_post": 1,
-      "concurrency_size_cls": 1,
+      "concurrency_size_post": 504,
+      "concurrency_size_cls": 504,
       "max_context_count": 0
     },
     {
       "kernel": "simple_piped",
       "platform": "amd64",
-      "ranks": 1,
+      "context": "paged",
+      "ranks": 7,
       "concurrency_size_pre": 0,
-      "concurrency_size_att": 1,
+      "concurrency_size_att": 72,
       "concurrency_size_post": 0,
       "concurrency_size_cls": 0,
-      "max_context_count": 6
+      "max_context_count": 2880
     }
   ],
   "separate_cls_tiers": []

@@ -187,8 +187,8 @@ int main( int argc, char* argv[] )
     const size_t batch_size = atoi( argv[4] );
     const float temp = atof( argv[5] );
 
-    using ModelTypeA = llama2::cuda::Stories_110M<glinthawk::float16_t>;
-    using ModelTypeB = llama2::amd64::Stories_110M<glinthawk::float32_t>;
+    using ModelTypeA = llama2::cuda::Stories_110M_Static<glinthawk::float16_t>;
+    using ModelTypeB = llama2::amd64::Stories_110M_Static<glinthawk::float32_t>;
 
     BatchInference<ModelTypeA, ModelTypeB> inference { model_dir_path, tokenizer_path, batch_size, temp };
     inference.run();

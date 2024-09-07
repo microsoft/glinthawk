@@ -752,29 +752,37 @@ void Llama2<Config, DType, LlamaOperations, Context>::forward_classify( StateTyp
   forward_postlude( states, states.next_layer(), /* classification done? */ true );
 }
 
-#define DECLARE_MODEL( PLATFORM, MODEL_NAME )                                                                          \
+#define DECLARE_MODEL( PLATFORM, CONTEXT_NAME, MODEL_NAME, MODEL_SHORTHAND )                                           \
   template<typename DType>                                                                                             \
-  using MODEL_NAME                                                                                                     \
-    = Llama2<configs::MODEL_NAME,                                                                                      \
-             DType,                                                                                                    \
-             PLATFORM::LlamaOperations<configs::MODEL_NAME, DType, PLATFORM::Context<configs::MODEL_NAME, DType>>,     \
-             PLATFORM::Context<configs::MODEL_NAME, DType>>
+  using MODEL_SHORTHAND = Llama2<                                                                                      \
+    configs::MODEL_NAME,                                                                                               \
+    DType,                                                                                                             \
+    PLATFORM::LlamaOperations<configs::MODEL_NAME, DType, PLATFORM::CONTEXT_NAME<configs::MODEL_NAME, DType>>,         \
+    PLATFORM::CONTEXT_NAME<configs::MODEL_NAME, DType>>
 
 #if defined( TARGET_PLATFORM_AMD64 ) || defined( TARGET_PLATFORM_CUDA )
 namespace amd64 {
-DECLARE_MODEL( amd64, Llama2_7B_Chat );
-DECLARE_MODEL( amd64, Llama2_13B_Chat );
-DECLARE_MODEL( amd64, Llama2_70B_Chat );
-DECLARE_MODEL( amd64, Stories_110M );
+DECLARE_MODEL( amd64, Context, Llama2_7B_Chat, Llama2_7B_Chat_Static );
+DECLARE_MODEL( amd64, Context, Llama2_13B_Chat, Llama2_13B_Chat_Static );
+DECLARE_MODEL( amd64, Context, Llama2_70B_Chat, Llama2_70B_Chat_Static );
+DECLARE_MODEL( amd64, Context, Stories_110M, Stories_110M_Static );
+DECLARE_MODEL( amd64, DynamicContext, Llama2_7B_Chat, Llama2_7B_Chat_Paged );
+DECLARE_MODEL( amd64, DynamicContext, Llama2_13B_Chat, Llama2_13B_Chat_Paged );
+DECLARE_MODEL( amd64, DynamicContext, Llama2_70B_Chat, Llama2_70B_Chat_Paged );
+DECLARE_MODEL( amd64, DynamicContext, Stories_110M, Stories_110M_Paged );
 }
 #endif
 
 #if defined( TARGET_PLATFORM_CUDA )
 namespace cuda {
-DECLARE_MODEL( cuda, Llama2_7B_Chat );
-DECLARE_MODEL( cuda, Llama2_13B_Chat );
-DECLARE_MODEL( cuda, Llama2_70B_Chat );
-DECLARE_MODEL( cuda, Stories_110M );
+DECLARE_MODEL( cuda, Context, Llama2_7B_Chat, Llama2_7B_Chat_Static );
+DECLARE_MODEL( cuda, Context, Llama2_13B_Chat, Llama2_13B_Chat_Static );
+DECLARE_MODEL( cuda, Context, Llama2_70B_Chat, Llama2_70B_Chat_Static );
+DECLARE_MODEL( cuda, Context, Stories_110M, Stories_110M_Static );
+DECLARE_MODEL( cuda, DynamicContext, Llama2_7B_Chat, Llama2_7B_Chat_Paged );
+DECLARE_MODEL( cuda, DynamicContext, Llama2_13B_Chat, Llama2_13B_Chat_Paged );
+DECLARE_MODEL( cuda, DynamicContext, Llama2_70B_Chat, Llama2_70B_Chat_Paged );
+DECLARE_MODEL( cuda, DynamicContext, Stories_110M, Stories_110M_Paged );
 }
 #endif
 

@@ -128,7 +128,7 @@ public:
 
 void usage( const char* argv0 )
 {
-  cerr << "Usage: " << argv0 << " <model_dir> <model_name> <tokenizer_path> [<batch_size=1>]" << endl;
+  cerr << "Usage: " << argv0 << " <model_dir> <model_name> (paged|static) <tokenizer_path> [<batch_size=1>]" << endl;
 }
 
 int main( int argc, char* argv[] )
@@ -137,7 +137,7 @@ int main( int argc, char* argv[] )
     abort();
   }
 
-  if ( argc != 4 && argc != 5 ) {
+  if ( argc != 5 && argc != 6 ) {
     usage( argv[0] );
     return EXIT_FAILURE;
   }
@@ -151,16 +151,28 @@ int main( int argc, char* argv[] )
   try {
     const filesystem::path model_dir_path { argv[1] };
     const string model_name { argv[2] };
-    const filesystem::path tokenizer_path { argv[3] };
-    const size_t batch_size = ( argc == 5 ) ? stoul( argv[4] ) : 1u;
+    const string context_name { argv[3] };
+    const filesystem::path tokenizer_path { argv[4] };
+    const size_t batch_size = ( argc == 6 ) ? stoul( argv[5] ) : 1u;
 
 #define CREATE_AND_RUN( MODEL_NAME, CLASS_NAME )                                                                       \
-  if ( model_name == MODEL_NAME ) {                                                                                    \
+  if ( model_name == MODEL_NAME and context_name == "paged" ) {                                                        \
     using namespace llama2;                                                                                            \
                                                                                                                        \
     using DType = _GLINTHAWK_DTYPE_;                                                                                   \
     using ConfigType = configs::CLASS_NAME;                                                                            \
     using ContextType = _GLINTHAWK_ARCH_NS_::DynamicContext<ConfigType, DType>;                                        \
+    using OperationsType = _GLINTHAWK_ARCH_NS_::LlamaOperations<ConfigType, DType, ContextType>;                       \
+    using ModelType = Llama2<ConfigType, DType, OperationsType, ContextType>;                                          \
+                                                                                                                       \
+    Rambler<ModelType> rambler( model_dir_path, tokenizer_path, batch_size );                                          \
+    rambler.ramble();                                                                                                  \
+  } else if ( model_name == MODEL_NAME and context_name == "static" ) {                                                \
+    using namespace llama2;                                                                                            \
+                                                                                                                       \
+    using DType = _GLINTHAWK_DTYPE_;                                                                                   \
+    using ConfigType = configs::CLASS_NAME;                                                                            \
+    using ContextType = _GLINTHAWK_ARCH_NS_::Context<ConfigType, DType>;                                               \
     using OperationsType = _GLINTHAWK_ARCH_NS_::LlamaOperations<ConfigType, DType, ContextType>;                       \
     using ModelType = Llama2<ConfigType, DType, OperationsType, ContextType>;                                          \
                                                                                                                        \
@@ -175,7 +187,7 @@ int main( int argc, char* argv[] )
     else CREATE_AND_RUN( "llama2-13b-chat", Llama2_13B_Chat )
     else CREATE_AND_RUN( "llama2-70b-chat", Llama2_70B_Chat )
     else CREATE_AND_RUN( "llama3-8b-instruct", Llama3_8B_Instruct )
-    else LOG( FATAL ) << "Unknown model name: " << model_name;
+    else LOG( FATAL ) << "Unknown model name: " << model_name << ", or context name: " << context_name;
     // clang-format on
 
     cerr << endl << global_timer().summary() << endl;
