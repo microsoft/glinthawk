@@ -15,10 +15,11 @@
 
 namespace glinthawk::models::common::cuda {
 
-constexpr size_t TPB = 64;    /* threads per block */
-constexpr size_t NRBS = 32;   /* norm reduce block size */
-constexpr size_t AMRBS = 128; /* argmax reduce block size */
-constexpr size_t LPK = 64;     /* gumbel_fix loop iterations per kernel */
+constexpr size_t TPB = 64;         /* threads per block */
+constexpr size_t NRBS = 32;        /* norm reduce block size */
+constexpr size_t AMRBS = 128;      /* argmax reduce block size */
+constexpr size_t LPK = 64;         /* gumbel_fix loop iterations per kernel */
+constexpr size_t MAX_STREAMS = 64; /* max streams in cuda/cublas */
 
 void CHECK_CUBLAS( const cublasStatus_t err, const std::source_location l = std::source_location::current() );
 void CHECK_CUDA( const cudaError_t err, const std::source_location l = std::source_location::current() );
@@ -77,7 +78,7 @@ protected:
   mutable cudaStream_t* streams { nullptr };
   mutable cublasHandle_t cublas_handle_default {};
   mutable cublasHandle_t* cublas_handle_array { nullptr };
-  int cublas_handle_count {};
+  size_t num_allocated_streams { 0 };
   bool rng_initialized { false };
 
   mutable std::unique_ptr<curandState, models::common::cuda::CUDADeleter<curandState>> rng_state { nullptr };
@@ -92,6 +93,7 @@ public:
   Operations( const size_t num_streams,
               const size_t rng_states,
               const bool needs_rng = true,
+              const bool needs_streams = true,
               const size_t batch_size = 1 );
   ~Operations();
 
@@ -524,16 +526,16 @@ __global__ void setup_rng_kernel( curandState* state, unsigned long seed )
 
 }
 
-namespace{ // print
+namespace { // print
 
 template<typename DType>
 __global__ void print_cuda( const DType* x, const uint64_t b )
 {
   for ( uint64_t i = 0; i < b; i++ ) {
     glinthawk::float32_t c = static_cast<glinthawk::float32_t>( x[i] );
-    printf("\t%.10f", c);
+    printf( "\t%.10f", c );
   }
-  printf("\n");
+  printf( "\n" );
 }
 
 }
@@ -544,17 +546,21 @@ template<typename DType>
 Operations<DType>::Operations( const size_t num_streams,
                                const size_t rng_states,
                                const bool needs_rng,
+                               const bool needs_streams,
                                const size_t batch_size )
 {
   // setup cuBLAS
   CHECK_CUBLAS( cublasCreate( &cublas_handle_default ) );
-  cublas_handle_count = num_streams;
-  streams = (cudaStream_t*)malloc( num_streams * sizeof( cudaStream_t ) );
-  cublas_handle_array = (cublasHandle_t*)malloc( num_streams * sizeof( cublasHandle_t ) );
-  for ( size_t i = 0; i < num_streams; i++ ) {
-    CHECK_CUDA( cudaStreamCreate( &( streams[i] ) ) );
-    CHECK_CUBLAS( cublasCreate( &( cublas_handle_array[i] ) ) );
-    CHECK_CUBLAS( cublasSetStream( cublas_handle_array[i], streams[i] ) );
+
+  if ( needs_streams ) {
+    num_allocated_streams = num_streams > MAX_STREAMS ? MAX_STREAMS : num_streams;
+    streams = (cudaStream_t*)malloc( num_allocated_streams * sizeof( cudaStream_t ) );
+    cublas_handle_array = (cublasHandle_t*)malloc( num_allocated_streams * sizeof( cublasHandle_t ) );
+    for ( size_t i = 0; i < num_allocated_streams; i++ ) {
+      CHECK_CUDA( cudaStreamCreate( &( streams[i] ) ) );
+      CHECK_CUBLAS( cublasCreate( &( cublas_handle_array[i] ) ) );
+      CHECK_CUBLAS( cublasSetStream( cublas_handle_array[i], streams[i] ) );
+    }
   }
 
   if ( needs_rng ) {
@@ -567,7 +573,7 @@ template<typename DType>
 Operations<DType>::~Operations()
 {
   CHECK_CUBLAS( cublasDestroy( cublas_handle_default ) );
-  for ( int i = 0; i < cublas_handle_count; i++ ) {
+  for ( size_t i = 0; i < num_allocated_streams; i++ ) {
     CHECK_CUBLAS( cublasDestroy( cublas_handle_array[i] ) );
     cudaStreamDestroy( streams[i] );
   }
@@ -578,9 +584,9 @@ Operations<DType>::~Operations()
 template<typename DType>
 void Operations<DType>::print( const DType* x, const uint64_t b, const std::string base ) const
 {
-  printf("%s", base.c_str());
+  printf( "%s", base.c_str() );
   cudaDeviceSynchronize();
-  print_cuda<<<1, 1>>>(x, b);
+  print_cuda<<<1, 1>>>( x, b );
   cudaDeviceSynchronize();
 }
 
@@ -682,10 +688,11 @@ void Operations<DType>::matmul( DType* xout, const DType* x, const DType* W, con
 template<typename DType>
 void Operations<DType>::soft_sample( DType* v, const std::vector<float>& temperatures, const size_t vocab_size ) const
 {
+  DCHECK_GT( num_allocated_streams, 0 ) << "This operation currently needs streams, but they are not allocated";
   const size_t rng_size = div_ceil_runtime( vocab_size, LPK );
   for ( uint64_t i = 0; i < temperatures.size(); i++ ) {
     if ( temperatures[i] > 0 ) {
-      gumbel_fix<DType, LPK><<<div_ceil_runtime( rng_size, TPB ), TPB, 0, this->streams[i]>>>(
+      gumbel_fix<DType, LPK><<<div_ceil_runtime( rng_size, TPB ), TPB, 0, this->streams[i % MAX_STREAMS]>>>(
         v + i * vocab_size, temperatures[i], vocab_size, rng_state.get() + i * rng_size );
     }
   }
@@ -694,8 +701,10 @@ void Operations<DType>::soft_sample( DType* v, const std::vector<float>& tempera
 template<typename DType>
 Operations<DType>::DeviceUniquePtr Operations<DType>::device_allocate( const uint64_t size_bytes ) const
 {
+  LOG( WARNING ) << "Allocating pointer with size " << ( size_bytes >> 20 ) << " MiB...";
   DType* ptr;
   CHECK_CUDA( cudaMalloc( &ptr, size_bytes ) );
+  LOG( WARNING ) << "Allocated...";
   return DeviceUniquePtr { ptr };
 }
 
@@ -745,8 +754,7 @@ void Operations<DType>::setup_rng( unsigned long seed, const uint64_t size, cons
   rng_state.reset( rng_state_ptr );
 
   for ( uint64_t i = 0; i < batch_size; i++ ) {
-    setup_rng_kernel<<<div_ceil_runtime( rng_size, TPB ), TPB, 0, this->streams[i]>>>( rng_state.get() + i * rng_size,
-                                                                                       seed );
+    setup_rng_kernel<<<div_ceil_runtime( rng_size, TPB ), TPB, 0>>>( rng_state.get() + i * rng_size, seed );
   }
   rng_initialized = true;
 }

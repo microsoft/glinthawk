@@ -12,6 +12,8 @@
 
 namespace glinthawk::models::llama2::cuda {
 
+using glinthawk::models::common::cuda::MAX_STREAMS;
+
 // platform-specific context
 template<typename Config, typename DType>
 class Context;
@@ -281,6 +283,8 @@ LlamaOperations<Config, DType, ContextType>::LlamaOperations( const ConfigRuntim
   : common::cuda::Operations<DType>( settings.concurrency_limit,
                                      Config::vocab_size,
                                      settings.hosts( Config::n_layers - 1, InferenceStage::Classification ),
+                                     settings.hosts_in_any_layer( models::InferenceStage::Classification )
+                                       or settings.hosts_in_any_layer( models::InferenceStage::Attention ),
                                      settings.concurrency_limit )
 {
   // Summary of Checks:
@@ -348,7 +352,7 @@ void LlamaOperations<Config, DType, ContextType>::attention_0_gemm(
       continue;
     }
     const uint64_t m = token_positions[i] + 1;
-    common::cuda::CHECK_CUBLAS( cublasGemmStridedBatchedEx( this->cublas_handle_array[i],
+    common::cuda::CHECK_CUBLAS( cublasGemmStridedBatchedEx( this->cublas_handle_array[i % MAX_STREAMS],
                                                             CUBLAS_OP_T,
                                                             CUBLAS_OP_N,
                                                             m,
@@ -407,7 +411,7 @@ void LlamaOperations<Config, DType, ContextType>::attention_2_gemm(
     }
     const uint64_t k = token_positions[i] + 1;
 
-    common::cuda::CHECK_CUBLAS( cublasGemmStridedBatchedEx( this->cublas_handle_array[i],
+    common::cuda::CHECK_CUBLAS( cublasGemmStridedBatchedEx( this->cublas_handle_array[i % MAX_STREAMS],
                                                             CUBLAS_OP_N,
                                                             CUBLAS_OP_N,
                                                             m,
@@ -445,19 +449,19 @@ void LlamaOperations<Config, DType, ContextType>::attention_softmax( DType* att,
 
     // (1) find the max value for each head (each row)
     find_max_for_rows<DType, Config::seq_len>
-      <<<1, Config::n_heads, 0, this->streams[i]>>>( this_att, this_buff, token_positions[i] );
+      <<<1, Config::n_heads, 0, this->streams[i % MAX_STREAMS]>>>( this_att, this_buff, token_positions[i] );
 
     // (2) exp(att - max)
     subtract_and_expf<DType, Config::seq_len>
-      <<<token_positions[i] + 1, Config::n_heads, 0, this->streams[i]>>>( this_buff, this_att );
+      <<<token_positions[i] + 1, Config::n_heads, 0, this->streams[i % MAX_STREAMS]>>>( this_buff, this_att );
 
     // (3) sum each row
     sum_rows<DType, Config::seq_len>
-      <<<1, Config::n_heads, 0, this->streams[i]>>>( this_att, this_buff, token_positions[i] );
+      <<<1, Config::n_heads, 0, this->streams[i % MAX_STREAMS]>>>( this_att, this_buff, token_positions[i] );
 
     // (4) normalize each row by its sum
     normalize_by_sum<DType, Config::seq_len>
-      <<<token_positions[i] + 1, Config::n_heads, 0, this->streams[i]>>>( this_att, this_buff );
+      <<<token_positions[i] + 1, Config::n_heads, 0, this->streams[i % MAX_STREAMS]>>>( this_att, this_buff );
   }
 }
 
@@ -475,7 +479,7 @@ void LlamaOperations<Config, DType, ContextType>::apply_rope(
       continue;
     }
     do_rope<DType, Config::head_size, Config::gqa_size>
-      <<<Config::n_kv_heads, Config::head_size / 2, 0, this->streams[i]>>>(
+      <<<Config::n_kv_heads, Config::head_size / 2, 0, this->streams[i % MAX_STREAMS]>>>(
         freq_cis_real + token_positions[i] * Config::head_size / 2,
         freq_cis_imag + token_positions[i] * Config::head_size / 2,
         state_q + i * Config::n_kv_heads * Config::gqa_size * Config::head_size,
