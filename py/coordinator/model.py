@@ -1,5 +1,6 @@
 import socket
 from typing import List, Dict
+from math import ceil
 
 from .base import Stage, Platform, Kernel
 from .worker import Worker
@@ -9,12 +10,10 @@ from protobuf import glinthawk_pb2 as protobuf
 class Model:
     def __init__(self, model_name: str, n_layers: int, n_slices: int, tier_config: List[Dict],
                  separate_cls_tiers: List[Dict]):
-        assert n_layers % n_slices == 0, "Number of layers must be divisible by number of slices"
-
         self.model_name = model_name
         self.n_layers = n_layers
         self.n_slices = n_slices
-        self.layers_per_worker = n_layers // n_slices
+        self.layers_per_worker = ceil(n_layers / n_slices)
         self.tier_config = tier_config
         self.n_tiers = len(self.tier_config)
 
@@ -95,6 +94,7 @@ class Model:
 
         first_layer = self._next_worker_loc[i_tier]['slice'] * self.layers_per_worker
         last_layer = (self._next_worker_loc[i_tier]['slice'] + 1) * self.layers_per_worker - 1
+        last_layer = min(last_layer, self.n_layers - 1)
         # assign the worker to the correct slice, tier and rank
         worker.model_slice_start = (first_layer, Stage.PreAttention)
         worker.model_slice_end = (last_layer, Stage.PostAttention)
