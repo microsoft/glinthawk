@@ -3,11 +3,12 @@
 import asyncio
 import json
 import logging
+import math
 import os
 import shlex
 import signal
-import sys
 import socket
+import sys
 from typing import List, Dict, Any
 
 import click
@@ -211,11 +212,15 @@ async def main(**kwargs):
 
     tasks = []
 
+    num_dummies = 2 * sum(
+        config['tiers'][i]['ranks'] * config['tiers'][i]['max_context_count'] for i in range(len(config['tiers'])))
+    num_dummies = math.ceil(num_dummies / 1024) * 1024
+
     tasks.append([
         "python3",
         "run.py",
         "-C", f"{kwargs['config_path']}/coord.json",
-        "-N", "10240",
+        "-N", f"{num_dummies}",
         "-O", kwargs['completion_log_path']
     ])
     for i in range(len(config['tiers'])):
