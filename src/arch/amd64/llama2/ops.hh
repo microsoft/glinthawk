@@ -1,5 +1,6 @@
 #pragma once
 
+#include "time.h"
 #include <glog/logging.h>
 #include <random>
 #include <type_traits>
@@ -27,7 +28,7 @@ public:
   using ContextType = Ctx;
 
 public:
-  LlamaOperations( const ConfigRuntime<Config>& ) {}
+  LlamaOperations( const ConfigRuntime<Config>& ) { srand( time( NULL ) ); }
   ~LlamaOperations() {}
 
   void attention_0_gemm( const DType* query,
