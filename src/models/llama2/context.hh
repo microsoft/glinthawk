@@ -183,6 +183,51 @@ protected:
   }
 };
 
+template<typename Config, typename DType, typename VirtualMemoryRegion>
+class DynamicContext : public Context<Config, DType>
+{
+private:
+  std::optional<VirtualMemoryRegion> storage_;
+  std::array<size_t, Config::n_layers> layer_allocated_offsets_ {};
+
+public:
+  using Context<Config, DType>::Context;
+
+  DynamicContext( const ConfigRuntime<Config>& settings, const bool make_empty = false )
+    : Context<Config, DType>()
+    , storage_( make_empty ? std::nullopt
+                           : std::make_optional<VirtualMemoryRegion>(
+                               Context<Config, DType>::max_size( settings.num_attention_layers_hosted() ) ) )
+  {
+    layer_allocated_offsets_.fill( 0 );
+    Context<Config, DType>::set_buffer( settings,
+                                        storage_.has_value() ? reinterpret_cast<DType*>( storage_->ptr() ) : nullptr );
+  }
+
+  ~DynamicContext() {}
+
+  bool prepare( const size_t layer_num, const size_t token_pos )
+  {
+    constexpr size_t BLOCK_SIZE = 2 * 1024 * 1024; // 2 MiB
+
+    // we need to make sure that for this layer and this token, there is memory allocated
+    const auto layer = this->layer( layer_num );
+    const DType* layer_start_addr = layer.token( 0 ).key();
+    const DType* layer_end_addr = layer.token( token_pos + 1 ).key();
+
+    // (1) do we have enough memory allocated?
+    const size_t layer_allocated_len = layer_allocated_offsets_.at( layer_num );
+    const size_t needed_allocated_len = ( layer_end_addr - layer_start_addr ) * sizeof( DType );
+
+    if ( needed_allocated_len > layer_allocated_len ) {
+      storage_->allocate_span( layer_start_addr + layer_allocated_len / sizeof( DType ), BLOCK_SIZE );
+      layer_allocated_offsets_.at( layer_num ) += BLOCK_SIZE;
+    }
+
+    return true;
+  }
+};
+
 static_assert( ContextConcept<Context<configs::Stories_110M, glinthawk::float32_t>, glinthawk::float32_t> );
 static_assert( LayerContextConcept<LayerContext<configs::Stories_110M, glinthawk::float32_t>, glinthawk::float32_t> );
 static_assert( TokenContextConcept<TokenContext<configs::Stories_110M, glinthawk::float32_t>, glinthawk::float32_t> );
