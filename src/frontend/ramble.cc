@@ -42,6 +42,8 @@ private:
   vector<shared_ptr<typename Model::ContextType>> contexts_ {};
   StateType state_ {};
 
+  bool breakdown_stages_;
+
   void create_initial_state()
   {
     state_ = { batch_size_, DataType::_GLINTHAWK_DTYPE_NAME_, {}, {} };
@@ -66,7 +68,10 @@ private:
   }
 
 public:
-  Rambler( const filesystem::path& model_path, const filesystem::path& tokenizer_path, const uint32_t batch_size )
+  Rambler( const filesystem::path& model_path,
+           const filesystem::path& tokenizer_path,
+           const uint32_t batch_size,
+           const bool breakdown_stages )
     : batch_size_( batch_size )
     , model_( [&]() -> Model {
       std::array<std::array<bool, util::to_underlying( models::InferenceStage::__COUNT__ )>,
@@ -85,6 +90,7 @@ public:
       return { model_path, hosting_table, batch_size, batch_size };
     }() )
     , vocabulary_( tokenizer_path )
+    , breakdown_stages_( breakdown_stages )
   {
     create_initial_state();
 
@@ -101,9 +107,31 @@ public:
       while ( true ) {
         state_.set_temperature( 0, current_temp() );
 
-        {
+        if ( not breakdown_stages_ ) {
           GlobalScopeTimer<Timer::Category::TokenGeneration> _;
           model_.forward( state_, contexts_ );
+        } else {
+          for ( size_t i = 0; i < Model::ConfigType::n_layers; i++ ) {
+            {
+              GlobalScopeTimer<Timer::Category::ForwardPreAttention> _;
+              model_.forward_pre_attention( state_ );
+            }
+
+            {
+              GlobalScopeTimer<Timer::Category::ForwardAttention> _;
+              model_.forward_attention( state_, contexts_ );
+            }
+
+            {
+              GlobalScopeTimer<Timer::Category::ForwardPostAttention> _;
+              model_.forward_post_attention( state_ );
+            }
+
+            if ( i == Model::ConfigType::n_layers - 1 ) {
+              GlobalScopeTimer<Timer::Category::ForwardClassification> _;
+              model_.forward_classify( state_ );
+            }
+          }
         }
 
         if ( state_.finished( 0 ) ) {
@@ -128,7 +156,8 @@ public:
 
 void usage( const char* argv0 )
 {
-  cerr << "Usage: " << argv0 << " <model_dir> <model_name> (paged|static) <tokenizer_path> [<batch_size=1>]" << endl;
+  cerr << "Usage: " << argv0
+       << " <model_dir> <model_name> (paged|static) <tokenizer_path> [<batch_size=1>] [<breakdown_stages=0>]" << endl;
 }
 
 int main( int argc, char* argv[] )
@@ -137,7 +166,7 @@ int main( int argc, char* argv[] )
     abort();
   }
 
-  if ( argc != 5 && argc != 6 ) {
+  if ( argc < 5 || argc > 7 ) {
     usage( argv[0] );
     return EXIT_FAILURE;
   }
@@ -153,7 +182,8 @@ int main( int argc, char* argv[] )
     const string model_name { argv[2] };
     const string context_name { argv[3] };
     const filesystem::path tokenizer_path { argv[4] };
-    const size_t batch_size = ( argc == 6 ) ? stoul( argv[5] ) : 1u;
+    const size_t batch_size = ( argc >= 6 ) ? stoul( argv[5] ) : 1u;
+    const bool breakdown_stages = ( argc >= 7 ) ? static_cast<bool>( stoul( argv[6] ) ) : false;
 
 #define CREATE_AND_RUN( MODEL_NAME, CLASS_NAME )                                                                       \
   if ( model_name == MODEL_NAME and context_name == "paged" ) {                                                        \
@@ -165,7 +195,7 @@ int main( int argc, char* argv[] )
     using OperationsType = _GLINTHAWK_ARCH_NS_::LlamaOperations<ConfigType, DType, ContextType>;                       \
     using ModelType = Llama2<ConfigType, DType, OperationsType, ContextType>;                                          \
                                                                                                                        \
-    Rambler<ModelType> rambler( model_dir_path, tokenizer_path, batch_size );                                          \
+    Rambler<ModelType> rambler( model_dir_path, tokenizer_path, batch_size, breakdown_stages );                        \
     rambler.ramble();                                                                                                  \
   } else if ( model_name == MODEL_NAME and context_name == "static" ) {                                                \
     using namespace llama2;                                                                                            \
@@ -176,7 +206,7 @@ int main( int argc, char* argv[] )
     using OperationsType = _GLINTHAWK_ARCH_NS_::LlamaOperations<ConfigType, DType, ContextType>;                       \
     using ModelType = Llama2<ConfigType, DType, OperationsType, ContextType>;                                          \
                                                                                                                        \
-    Rambler<ModelType> rambler( model_dir_path, tokenizer_path, batch_size );                                          \
+    Rambler<ModelType> rambler( model_dir_path, tokenizer_path, batch_size, breakdown_stages );                        \
     rambler.ramble();                                                                                                  \
   }
 
