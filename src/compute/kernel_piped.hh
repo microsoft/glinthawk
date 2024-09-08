@@ -161,7 +161,7 @@ void PipedComputeKernel<Model>::execution_thread_func(
   while ( running_ ) {
     StateType state {};
 
-    DLOG( WARNING ) << "Current status: " << "incoming_size=" << incoming_.queue.size() << ", " << ", "
+    DLOG( WARNING ) << "Current status: " << "incoming_size=" << incoming_.queue.size() << ", "
                     << "processing_size=" << model_.processing.size();
 
     // get the next state to process

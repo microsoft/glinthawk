@@ -274,7 +274,12 @@ Llama2<Config, DType, LlamaOperations, Context>::Llama2(
                 << " MiB).";
   }
 
-  LOG( INFO ) << "Model " << util::demangle( typeid( decltype( this ) ).name() ) << " instantiated.";
+  LOG( INFO ) << "Model instantiated: \n"
+              << " - Model: " << util::demangle( typeid( *this ).name(), false ) << '\n'
+              << "   DType: " << util::demangle( typeid( DType ).name() ) << " (" << dtype_str<DType>() << ")" << '\n'
+              << "   ConfigType: " << util::demangle( typeid( ConfigType ).name() ) << '\n'
+              << "   OperationsType: " << util::demangle( typeid( LlamaOperations ).name(), false ) << '\n'
+              << "   ContextType: " << util::demangle( typeid( Context ).name(), false );
 }
 template<typename Config, typename DType, typename LlamaOperations, typename Context>
 template<StateConcept StateType>
