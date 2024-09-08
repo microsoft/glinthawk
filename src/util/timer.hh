@@ -65,6 +65,11 @@ public:
     MemoryInitializationHost,
     MemoryInitializationDevice,
 
+    ForwardPreAttention,
+    ForwardAttention,
+    ForwardPostAttention,
+    ForwardClassification,
+
     __COUNT__,
   };
 
@@ -91,6 +96,11 @@ public:
 
     "Mem Init (Host)",
     "Mem Init (Device)",
+
+    "Forward Pre-Attention",
+    "Forward Attention",
+    "Forward Post-Attention",
+    "Forward Classification",
   } };
 
 private:
