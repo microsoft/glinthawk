@@ -765,9 +765,13 @@ bool BatchedWorker<ModelConfig, ComputeKernel>::handle_peer_message( core::Messa
 
           if ( state.active( i ) ) {
             // Have we finished processing the prompt?
+            if ( state.token_pos( i ) == state.prompt_length( i ) ) {
+              prompt.timing_info().set_completion_started(); // TTFT
+            }
+
             if ( state.token_pos( i ) >= state.prompt_length( i ) ) {
               // prompt processing has already finished, and this is a generated token
-              prompt.timing_info().set_completion_started(); // TTFT
+              prompt.timing_info().token_time.add_point();
 
               __stats__.increment<Counters::TokensGenerated>();
               prompt.completion().append( state.token( i ) );
