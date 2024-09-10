@@ -504,8 +504,8 @@ void Llama2<Config, DType, LlamaOperations, Context>::forward_postlude( StateTyp
 
         if ( states.token( i ) == Config::token_eos or states.token( i ) == Config::token_eot
              or states.token_pos( i ) >= Config::seq_len
-             or ( states.max_completion_length() > 0
-                  and states.token_pos( i ) >= states.max_completion_length() + states.prompt_length() ) ) {
+             or ( states.max_completion_length( i ) > 0
+                  and states.token_pos( i ) >= states.max_completion_length( i ) + states.prompt_length( i ) ) ) {
           // Discarding the prompt entry is left to the caller, we just set the finished flag here
           states.set_finished( i );
         }
