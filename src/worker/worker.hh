@@ -104,6 +104,10 @@ private:
   TimerFD stats_timer_ { std::chrono::seconds { 5 } };
   uint64_t dummy_hash_current_id_ { 0 };
 
+  /* XXX(sadjad): HACKY WAY TO COLLECT THE STATS LOCALLY WITHOUT TELEGRAF */
+  const bool collect_local_stats_ { getenv( "_GLINTHAWK_LOCAL_STATS_FILE_" ) != nullptr };
+  std::ofstream fout_local_stats_ {};
+
   void setup_peer( std::map<net::Address, Peer>::iterator peer_it );
   void setup_tier_router_and_compute_kernel( const std::filesystem::path& model_root,
                                              const HostingTable slice_hosting_table,
@@ -161,6 +165,15 @@ void BatchedWorker<ModelConfig, ComputeKernel>::setup_stats_handler()
     telegraf_logger_->install_rules( event_loop_, telegraf_rule_categories_, []( auto&& ) { return true; }, [] {} );
   } else {
     LOG( WARNING ) << "Telegraf socket not found at " << telegraf_socket.string() << "; stats are not being logged.";
+  }
+
+  if ( collect_local_stats_ ) {
+    fout_local_stats_.open( getenv( "_GLINTHAWK_LOCAL_STATS_FILE_" ) );
+    CHECK( fout_local_stats_.is_open() ) << "Failed to open local stats file.";
+
+    fout_local_stats_ << "# "; // XXX some information about the run
+    fout_local_stats_ << __stats__.csv_header() << '\n';
+    fout_local_stats_ << __stats__.to_csv() << '\n';
   }
 
   event_loop_.add_rule(
@@ -520,8 +533,8 @@ bool BatchedWorker<ModelConfig, ComputeKernel>::handle_coordinator_message( core
         }
 
         route_str << "<L" << route.layer_num() << ", T" << static_cast<size_t>( route.tier() ) << ", R"
-                  << static_cast<size_t>( route.rank() ) << ">[" << next_stage << "]"
-                  << " -> " << route.ip() << ":" << route.port() << "; ";
+                  << static_cast<size_t>( route.rank() ) << ">[" << next_stage << "]" << " -> " << route.ip() << ":"
+                  << route.port() << "; ";
 
         new_route.emplace(
           std::make_tuple(
@@ -793,6 +806,10 @@ void BatchedWorker<ModelConfig, ComputeKernel>::handle_stats()
   stats_timer_.read_event();
   if ( telegraf_logger_ != nullptr ) {
     telegraf_logger_->push_measurement( __stats__ );
+  }
+
+  if ( collect_local_stats_ ) {
+    fout_local_stats_ << __stats__.to_csv() << '\n';
   }
 
   // TODO(sadjad): allow pluggable stats handlers
