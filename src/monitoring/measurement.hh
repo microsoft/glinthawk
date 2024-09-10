@@ -2,6 +2,8 @@
 
 #include <array>
 #include <limits>
+#include <chrono>
+#include <sstream>
 #include <string>
 #include <tuple>
 #include <type_traits>
@@ -376,6 +378,105 @@ public:
 
     result.back() = '\n';
     return result;
+  }
+
+  std::string csv_header() const
+  {
+    std::ostringstream result {};
+
+    result << "timestamp,";
+
+    for ( const auto& key : counter_keys ) {
+      result << key;
+      result << ",";
+    }
+
+    for ( const auto& key : int_dist_keys ) {
+      result << key;
+      result << "_count,";
+      result << key;
+      result << "_min,";
+      result << key;
+      result << "_max,";
+      result << key;
+      result << "_avg,";
+      result << key;
+      result << "_var,";
+    }
+
+    for ( const auto& key : float_dist_keys ) {
+      result << key;
+      result << "_count,";
+      result << key;
+      result << "_min,";
+      result << key;
+      result << "_max,";
+      result << key;
+      result << "_avg,";
+      result << key;
+      result << "_var,";
+    }
+
+    for ( const auto& key : ratio_keys ) {
+      result << key;
+      result << "_num,";
+    }
+
+    return result.str();
+  }
+
+  std::string to_csv() const
+  {
+    std::ostringstream result {};
+
+    using clock = std::chrono::high_resolution_clock;
+    auto now
+      = [] { return std::chrono::duration_cast<std::chrono::milliseconds>( clock::now().time_since_epoch() ).count(); };
+
+    result << std::to_string( now() );
+    result << ",";
+
+    for ( const auto& value : fields_counters_ ) {
+      result << std::to_string( value );
+      result << ",";
+    }
+
+    for ( const auto& dist : fields_int_distribution_ ) {
+      result << std::to_string( dist.count );
+      result << ",";
+      result << std::to_string( dist.min );
+      result << ",";
+      result << std::to_string( dist.max );
+      result << ",";
+      result << std::to_string( dist.sum / static_cast<float>( dist.count ) );
+      result << ",";
+      result << std::to_string( dist.sum_of_squares / static_cast<float>( dist.count )
+                                - ( dist.sum / static_cast<float>( dist.count ) )
+                                    * ( dist.sum / static_cast<float>( dist.count ) ) );
+      result << ",";
+    }
+
+    for ( const auto& dist : fields_float_distribution_ ) {
+      result << std::to_string( dist.count );
+      result << ",";
+      result << std::to_string( dist.min );
+      result << ",";
+      result << std::to_string( dist.max );
+      result << ",";
+      result << std::to_string( dist.sum / static_cast<float>( dist.count ) );
+      result << ",";
+      result << std::to_string( dist.sum_of_squares / static_cast<float>( dist.count )
+                                - ( dist.sum / static_cast<float>( dist.count ) )
+                                    * ( dist.sum / static_cast<float>( dist.count ) ) );
+      result << ",";
+    }
+
+    for ( const auto& r : fields_ratio_ ) {
+      result << std::to_string( static_cast<double>( r.numerator ) / static_cast<double>( r.denominator ) );
+      result << ",";
+    }
+
+    return result.str();
   }
 };
 
