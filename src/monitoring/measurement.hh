@@ -1,8 +1,8 @@
 #pragma once
 
 #include <array>
-#include <limits>
 #include <chrono>
+#include <limits>
 #include <sstream>
 #include <string>
 #include <tuple>
@@ -305,22 +305,24 @@ public:
 
   std::string to_string()
   {
-    std::string result = name_;
+    std::ostringstream result {};
+    result << name_;
+
     {
       for ( const auto& [key, value] : tags_ ) {
         if ( value.empty() ) {
           continue;
         }
 
-        result += "," + key + "=" + value;
+        result << "," << key << "=" << value;
       }
     }
 
-    result += " ";
+    result << " ";
 
     size_t i = 0;
     for ( auto& value : fields_counters_ ) {
-      result += std::string { counter_keys[i++] } + "=" + std::to_string( value ) + "u,";
+      result << std::string { counter_keys[i++] } << "=" << std::to_string( value ) << "u,";
     }
 
     i = 0;
@@ -333,11 +335,11 @@ public:
       const double avg = dist.sum / static_cast<float>( dist.count );
       const double var = dist.sum_of_squares / static_cast<float>( dist.count ) - avg * avg;
 
-      result += std::string { int_dist_keys[i] } + "_count=" + std::to_string( dist.count ) + "u,";
-      result += std::string { int_dist_keys[i] } + "_min=" + std::to_string( dist.min ) + "u,";
-      result += std::string { int_dist_keys[i] } + "_max=" + std::to_string( dist.max ) + "u,";
-      result += std::string { int_dist_keys[i] } + "_avg=" + std::to_string( avg ) + ",";
-      result += std::string { int_dist_keys[i] } + "_var=" + std::to_string( var ) + ",";
+      result << int_dist_keys[i] << "_count=" << dist.count << "u,";
+      result << int_dist_keys[i] << "_min=" << dist.min << "u,";
+      result << int_dist_keys[i] << "_max=" << dist.max << "u,";
+      result << int_dist_keys[i] << "_avg=" << avg << ",";
+      result << int_dist_keys[i] << "_var=" << var << ",";
 
       i++;
     }
@@ -352,11 +354,11 @@ public:
       const double avg = dist.sum / static_cast<float>( dist.count );
       const double var = dist.sum_of_squares / static_cast<float>( dist.count ) - avg * avg;
 
-      result += std::string { float_dist_keys[i] } + "_count=" + std::to_string( dist.count ) + ",";
-      result += std::string { float_dist_keys[i] } + "_min=" + std::to_string( dist.min ) + ",";
-      result += std::string { float_dist_keys[i] } + "_max=" + std::to_string( dist.max ) + ",";
-      result += std::string { float_dist_keys[i] } + "_avg=" + std::to_string( avg ) + ",";
-      result += std::string { float_dist_keys[i] } + "_var=" + std::to_string( var ) + ",";
+      result << float_dist_keys[i] << "_count=" << dist.count << ",";
+      result << float_dist_keys[i] << "_min=" << dist.min << ",";
+      result << float_dist_keys[i] << "_max=" << dist.max << ",";
+      result << float_dist_keys[i] << "_avg=" << avg << ",";
+      result << float_dist_keys[i] << "_var=" << var << ",";
 
       i++;
     }
@@ -365,19 +367,21 @@ public:
     for ( const auto& r : fields_ratio_ ) {
       if ( r.denominator == 0 or r.numerator == 0 ) {
         // XXX revisit this
-        result += std::string { ratio_keys[i] } + "=0,";
+        result << ratio_keys[i] << "=0,";
         i++;
         continue;
       }
 
       const auto ratio = static_cast<double>( r.numerator ) / static_cast<double>( r.denominator );
-      result += std::string { ratio_keys[i] } + "_num=" + std::to_string( ratio ) + "u,";
+      result << ratio_keys[i] << "_num=" << ratio << "u,";
 
       i++;
     }
 
-    result.back() = '\n';
-    return result;
+    auto result_str = result.str();
+    result_str.back() = '\n';
+
+    return result_str;
   }
 
   std::string csv_header() const
