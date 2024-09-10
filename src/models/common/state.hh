@@ -52,6 +52,7 @@ struct __attribute__( ( packed ) ) PromptData
   uint32_t token_pos {};
   uint8_t temperature {}; // compact temprature, between [0, 255]; has to be divided by 255.0f before use.
   uint32_t prompt_length {};
+  uint32_t max_completion_length {};
   bool finished { false };
   int8_t kv_tier { -1 }; // Denotes which tier holds the kv cache for this prompt, 0-indexed, -1 means unassigned
   uint8_t kv_rank { 0 }; // Denotes which rank in tier holds the kv-cache for this prompt, 0-indexed
@@ -92,12 +93,13 @@ concept StateConcept = requires( T state, const T cstate, const std::string cstr
   { cstate.is_sharded() } -> std::same_as<bool>;
   { cstate.all_assigned_to_nodes() } -> std::same_as<bool>;
 
-  { state.set_prompt( 0, {}, {}, 0, 0, 0.0f, 0, 0, 0 ) };
+  { state.set_prompt( 0, {}, {}, 0, 0, 0.0f, 0, 0, 0, 0 ) };
   { state.prompt_id( 0 ) } -> std::same_as<PromptID>;
   { state.context_id( 0 ) } -> std::same_as<ContextID>;
   { state.token( 0 ) } -> std::same_as<uint32_t>;
   { state.token_pos( 0 ) } -> std::same_as<uint32_t>;
   { state.prompt_length( 0 ) } -> std::same_as<uint32_t>;
+  { state.max_completion_length( 0 ) } -> std::same_as<uint32_t>;
   { state.temperature( 0 ) } -> std::same_as<float>;
   { state.finished( 0 ) } -> std::same_as<bool>;
   { state.kv_tier( 0 ) } -> std::same_as<int8_t>;
@@ -110,6 +112,7 @@ concept StateConcept = requires( T state, const T cstate, const std::string cstr
   { state.set_token( 0, 0 ) };
   { state.set_token_pos( 0, 0 ) };
   { state.set_prompt_length( 0, 0 ) };
+  { state.set_max_completion_length( 0, 0 ) };
   { state.set_temperature( 0, 0.0f ) };
   { state.set_finished( 0 ) };
   { state.set_kv_tier( 0, 0 ) };
@@ -247,6 +250,7 @@ public:
                    uint32_t token_pos,
                    float temperature,
                    uint32_t prompt_length,
+                   uint32_t max_completion_length,
                    int8_t kv_tier,
                    uint8_t kv_rank );
 
@@ -256,6 +260,7 @@ public:
   uint32_t token( const size_t i ) const { return prompts_[i].token; }
   uint32_t token_pos( const size_t i ) const { return prompts_[i].token_pos; }
   uint32_t prompt_length( const size_t i ) const { return prompts_[i].prompt_length; }
+  uint32_t max_completion_length( const size_t i ) const { return prompts_[i].max_completion_length; }
   float temperature( const size_t i ) const { return prompts_[i].temperature / 255.0f; }
   bool finished( const size_t i ) const { return prompts_[i].finished; }
   int8_t kv_tier( const size_t i ) const { return prompts_[i].kv_tier; }
@@ -269,6 +274,7 @@ public:
   void set_token( const size_t i, uint32_t token ) { prompts_[i].token = token; }
   void set_token_pos( const size_t i, uint32_t token_pos ) { prompts_[i].token_pos = token_pos; }
   void set_prompt_length( const size_t i, uint32_t prompt_length ) { prompts_[i].prompt_length = prompt_length; }
+  void set_max_completion_length( const size_t i, uint32_t m ) { prompts_[i].max_completion_length = m; }
   void set_temperature( const size_t i, float t ) { prompts_[i].temperature = static_cast<uint8_t>( t * 255.0f ); }
   void set_finished( const size_t i ) { prompts_[i].finished = true; }
   void set_kv_tier( const size_t i, int8_t kv_tier ) { prompts_[i].kv_tier = kv_tier; }
@@ -410,11 +416,20 @@ public:
                    uint32_t token_pos,
                    float temperature,
                    uint32_t prompt_length,
+                   uint32_t max_completion_length,
                    int8_t kv_tier,
                    uint8_t kv_rank )
   {
-    state_.set_prompt(
-      off_ + i, prompt_id, context_id, token, token_pos, temperature, prompt_length, kv_tier, kv_rank );
+    state_.set_prompt( off_ + i,
+                       prompt_id,
+                       context_id,
+                       token,
+                       token_pos,
+                       temperature,
+                       prompt_length,
+                       max_completion_length,
+                       kv_tier,
+                       kv_rank );
   }
 
   PromptID prompt_id( const size_t i ) const { return state_.prompt_id( off_ + i ); }
@@ -422,6 +437,7 @@ public:
   uint32_t token( const size_t i ) const { return state_.token( off_ + i ); }
   uint32_t token_pos( const size_t i ) const { return state_.token_pos( off_ + i ); }
   uint32_t prompt_length( const size_t i ) const { return state_.prompt_length( off_ + i ); }
+  uint32_t max_completion_length( const size_t i ) const { return state_.max_completion_length( off_ + i ); }
   float temperature( const size_t i ) const { return state_.temperature( off_ + i ); }
   bool finished( const size_t i ) const { return state_.finished( off_ + i ); }
   bool active( const size_t i ) const { return state_.active( off_ + i ); }
@@ -434,6 +450,7 @@ public:
   void set_token( const size_t i, uint32_t token ) { state_.set_token( off_ + i, token ); }
   void set_token_pos( const size_t i, uint32_t token_pos ) { state_.set_token_pos( off_ + i, token_pos ); }
   void set_prompt_length( const size_t i, uint32_t len ) { state_.set_prompt_length( off_ + i, len ); }
+  void set_max_completion_length( const size_t i, uint32_t m ) { state_.set_max_completion_length( off_ + i, m ); }
   void set_temperature( const size_t i, float t ) { state_.set_temperature( off_ + i, t ); }
   void set_finished( const size_t i ) { state_.set_finished( off_ + i ); }
   void set_kv_tier( const size_t i, int8_t kv_tier ) { state_.set_kv_tier( off_ + i, kv_tier ); }
@@ -588,6 +605,7 @@ void BatchedInferenceState<Config>::set_prompt( const size_t i,
                                                 uint32_t token_pos,
                                                 float temperature,
                                                 uint32_t prompt_length,
+                                                uint32_t max_completion_length,
                                                 int8_t kv_tier,
                                                 uint8_t kv_rank )
 {
@@ -597,6 +615,7 @@ void BatchedInferenceState<Config>::set_prompt( const size_t i,
   prompts_[i].token_pos = token_pos;
   prompts_[i].temperature = static_cast<uint8_t>( temperature * 255.0f );
   prompts_[i].prompt_length = prompt_length;
+  prompts_[i].max_completion_length = max_completion_length;
   prompts_[i].finished = false;
   prompts_[i].active = true;
   prompts_[i].kv_tier = kv_tier;
@@ -1070,7 +1089,8 @@ std::string BatchedInferenceState<Config>::debug_string( const bool prompt_detai
     for ( const auto& p : prompts_ ) {
       oss << " (" << p.prompt_id.base58digest().substr( 0, 8 ) << ", " << p.context_id << ", " << p.token << ", "
           << p.token_pos << ", " << ( static_cast<float>( p.temperature ) / 255.0f ) << ", " << p.prompt_length << ", "
-          << p.finished << ", {" << static_cast<int>( p.kv_tier ) << ", " << static_cast<int>( p.kv_rank ) << "}) ";
+          << p.max_completion_length << ", " << p.finished << ", {" << static_cast<int>( p.kv_tier ) << ", "
+          << static_cast<int>( p.kv_rank ) << "}) ";
     }
 
     oss << "]";

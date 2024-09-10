@@ -520,8 +520,8 @@ bool BatchedWorker<ModelConfig, ComputeKernel>::handle_coordinator_message( core
         }
 
         route_str << "<L" << route.layer_num() << ", T" << static_cast<size_t>( route.tier() ) << ", R"
-                  << static_cast<size_t>( route.rank() ) << ">[" << next_stage << "]" << " -> " << route.ip() << ":"
-                  << route.port() << "; ";
+                  << static_cast<size_t>( route.rank() ) << ">[" << next_stage << "]"
+                  << " -> " << route.ip() << ":" << route.port() << "; ";
 
         new_route.emplace(
           std::make_tuple(
@@ -602,6 +602,7 @@ bool BatchedWorker<ModelConfig, ComputeKernel>::handle_coordinator_message( core
                             0,
                             prompt.temperature(),
                             prompt.prompt().count(),
+                            0,
                             -1,
                             0 );
           // TODO: either use uint32_t directly instead of ContextID, or require some add-ability concept.
@@ -646,6 +647,7 @@ bool BatchedWorker<ModelConfig, ComputeKernel>::handle_coordinator_message( core
                             0,
                             prompt.temperature(),
                             prompt.prompt().count(),
+                            0,
                             -1,
                             0 );
           next_context_id_++;
@@ -764,6 +766,7 @@ bool BatchedWorker<ModelConfig, ComputeKernel>::handle_peer_message( core::Messa
                               0,
                               next_prompt.temperature(),
                               next_prompt.prompt().count(),
+                              0,
                               state.kv_tier( i ),
                               state.kv_rank( i ) );
           }

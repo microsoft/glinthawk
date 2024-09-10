@@ -86,7 +86,7 @@ public:
       auto& entry = active_prompts_.emplace_back( std::move( prompt_queue_.front() ) );
       prompt_queue_.pop();
       active_contexts_.push_back( make_shared<typename Model::ContextType>( model_.settings() ) );
-      state_.set_prompt( i, entry.id(), ContextID {}, entry.prompt().at( 0 ), 0, temp_, entry.prompt().count(), 0, 0 );
+      state_.set_prompt( i, entry.id(), ContextID {}, entry.prompt().at( 0 ), 0, temp_, entry.prompt().count(), 0, 0, 0 );
     }
   }
 
@@ -138,7 +138,7 @@ public:
 
             auto& entry = active_prompts_[i];
             state_.set_prompt(
-              i, entry.id(), state_.context_id( i ), entry.prompt().at( 0 ), 0, temp_, entry.prompt().count(), 0, 0 );
+              i, entry.id(), state_.context_id( i ), entry.prompt().at( 0 ), 0, temp_, entry.prompt().count(), 0, 0, 0 );
           } else {
             state_.discard( i );
           }

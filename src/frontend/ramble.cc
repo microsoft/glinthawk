@@ -51,7 +51,7 @@ private:
     state_.set_next_stage( InferenceStage::PreAttention );
 
     for ( size_t i = 0; i < batch_size_; ++i ) {
-      state_.set_prompt( i, {}, i, Model::ConfigType::token_bos, 0, 1.0, 1, 0, 0 );
+      state_.set_prompt( i, {}, i, Model::ConfigType::token_bos, 0, 1.0, 1, 0, 0, 0 );
     }
   }
 
@@ -141,7 +141,7 @@ public:
         // check for completed dummy prompts, and restart them
         for ( size_t i = 1; i < batch_size_; ++i ) {
           if ( state_.finished( i ) ) {
-            state_.set_prompt( i, {}, i, Model::ConfigType::token_bos, 0, 1.0, 1, 0, 0 );
+            state_.set_prompt( i, {}, i, Model::ConfigType::token_bos, 0, 1.0, 1, 0, 0, 0 );
           }
         }
 

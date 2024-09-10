@@ -57,7 +57,7 @@ private:
 
     // TODO: have to be careful with how many context ids we are making
     for ( size_t i = 0; i < batch_size_; ++i ) {
-      st.set_prompt( i, next_hash_id(), NULL_CONTEXT, 1 /* BOS */, 0, temp_, 1, 0, 0 );
+      st.set_prompt( i, next_hash_id(), NULL_CONTEXT, 1 /* BOS */, 0, temp_, 1, 0, 0, 0 );
     }
 
     st.set_next_layer( 0 );
