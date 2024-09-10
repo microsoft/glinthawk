@@ -1,9 +1,11 @@
 #include "prompt.hh"
 
+#include <chrono>
 #include <endian.h>
 #include <fstream>
 #include <glog/logging.h>
 #include <google/protobuf/util/json_util.h>
+#include <sstream>
 
 #include "util/digest.hh"
 
@@ -38,8 +40,7 @@ protobuf::Prompt Prompt::to_protobuf() const
 Prompt Prompt::from_json( const string& json )
 {
   protobuf::Prompt pb_prompt;
-  CHECK( google::protobuf::util::JsonStringToMessage( json, &pb_prompt, {} ).ok() )
-    << "Failed to parse JSON.";
+  CHECK( google::protobuf::util::JsonStringToMessage( json, &pb_prompt, {} ).ok() ) << "Failed to parse JSON.";
   return from_protobuf( pb_prompt );
 }
 
@@ -49,6 +50,32 @@ string Prompt::to_json() const
   CHECK( google::protobuf::util::MessageToJsonString( to_protobuf(), &json, {} ).ok() )
     << "Failed to serialize to JSON.";
   return json;
+}
+
+std::string Prompt::csv_header()
+{
+  return "id,temperature,max_completion_length,prompt_tokens,completion_tokens,assigned,prompt_started,completion_"
+         "started,completion_finished,tpot_count,tpot_min,tpot_max,tpot_sum,tpot_sum_of_squares";
+}
+
+std::string Prompt::to_csv() const
+{
+  ostringstream oss;
+
+  auto get_time = []( const optional<Measurement::Clock::time_point>& time ) -> string {
+    return time.has_value()
+             ? to_string( chrono::duration_cast<chrono::microseconds>( time->time_since_epoch() ).count() )
+             : "";
+  };
+
+  oss << id_.base58digest() << "," << temperature_ << "," << max_completion_length_ << "," << prompt_tokens_.count()
+      << "," << completion_tokens_.count() << "," << get_time( timing_info_.assigned ) << ","
+      << get_time( timing_info_.prompt_started ) << "," << get_time( timing_info_.completion_started ) << ","
+      << get_time( timing_info_.completion_finished ) << "," << timing_info_.token_time.count << ","
+      << timing_info_.token_time.min << "," << timing_info_.token_time.max << "," << timing_info_.token_time.sum << ","
+      << timing_info_.token_time.sum_of_squares;
+
+  return oss.str();
 }
 
 PromptStore::~PromptStore()

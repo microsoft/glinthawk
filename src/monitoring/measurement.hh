@@ -209,6 +209,9 @@ constexpr std::array<std::string_view, static_cast<size_t>( Ratios::_Count )> ra
 
 class Measurement
 {
+public:
+  using Clock = std::chrono::high_resolution_clock;
+
 private:
   template<class T>
   struct Distribution
@@ -433,9 +436,8 @@ public:
   {
     std::ostringstream result {};
 
-    using clock = std::chrono::high_resolution_clock;
     auto now
-      = [] { return std::chrono::duration_cast<std::chrono::milliseconds>( clock::now().time_since_epoch() ).count(); };
+      = [] { return std::chrono::duration_cast<std::chrono::microseconds>( Clock::now().time_since_epoch() ).count(); };
 
     result << std::to_string( now() );
     result << ",";

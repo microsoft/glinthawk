@@ -10,6 +10,7 @@
 #include <vector>
 
 #include "models/types.hh"
+#include "monitoring/measurement.hh"
 #include "storage/blobstore.hh"
 
 #include "glinthawk.pb.h"
@@ -49,6 +50,57 @@ public:
   {
   }
 
+  struct TimingInfo
+  {
+    using Timestamp = std::optional<Measurement::Clock::time_point>;
+
+    struct TimePerOutputToken
+    {
+      uint64_t count { 0 };
+      uint64_t min { std::numeric_limits<uint64_t>::max() };
+      uint64_t max { 0 };
+      uint64_t sum { 0 };
+      uint64_t sum_of_squares { 0 };
+
+      void add_point()
+      {
+        if ( not last_token_time_.has_value() ) {
+          last_token_time_ = Measurement::Clock::now();
+          return;
+        }
+
+        const auto v
+          = std::chrono::duration_cast<std::chrono::microseconds>( Measurement::Clock::now() - *last_token_time_ )
+              .count();
+
+        if ( v < 0 ) {
+          throw std::runtime_error( "my time machine worked" );
+        }
+
+        const auto value = static_cast<uint64_t>( v );
+
+        count++;
+        min = std::min( min, value );
+        max = std::max( max, value );
+        sum += value;
+        sum_of_squares += value * value;
+      }
+
+    private:
+      Timestamp last_token_time_;
+    } token_time;
+
+    Timestamp assigned;            // When the prompt was assigned to a worker
+    Timestamp prompt_started;      // When the first token of the prompt started being processed
+    Timestamp completion_started;  // When the first token of the completion started being processed (kinda TTFT)
+    Timestamp completion_finished; // When the last token of the completion finished being processed
+
+    void set_assigned() { assigned = Measurement::Clock::now(); }
+    void set_prompt_started() { prompt_started = Measurement::Clock::now(); }
+    void set_completion_started() { completion_started = Measurement::Clock::now(); }
+    void set_completion_finished() { completion_finished = Measurement::Clock::now(); }
+  };
+
   static Prompt from_json( const std::string& json );
   std::string to_json() const;
 
@@ -61,12 +113,19 @@ public:
   const TokenSequence& prompt() const { return prompt_tokens_; }
   TokenSequence& completion() { return completion_tokens_; }
 
+  TimingInfo& timing_info() { return timing_info_; }
+
+  static std::string csv_header();
+  std::string to_csv() const;
+
 private:
   PromptID id_ {};
   uint8_t temperature_ { 0 };
   size_t max_completion_length_ { 0 };
   TokenSequence prompt_tokens_ {};
   TokenSequence completion_tokens_ {};
+
+  TimingInfo timing_info_ {};
 };
 
 class PromptStore

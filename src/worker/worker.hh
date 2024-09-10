@@ -108,6 +108,9 @@ private:
   const bool collect_local_stats_ { getenv( "_GLINTHAWK_LOCAL_STATS_FILE_" ) != nullptr };
   std::ofstream fout_local_stats_ {};
 
+  const bool collect_prompt_info_ { getenv( "_GLINTHAWK_PROMPT_INFO_FILE_" ) != nullptr };
+  std::ofstream fout_prompt_info_ {};
+
   void setup_peer( std::map<net::Address, Peer>::iterator peer_it );
   void setup_tier_router_and_compute_kernel( const std::filesystem::path& model_root,
                                              const HostingTable slice_hosting_table,
@@ -174,6 +177,14 @@ void BatchedWorker<ModelConfig, ComputeKernel>::setup_stats_handler()
     fout_local_stats_ << "# "; // XXX some information about the run
     fout_local_stats_ << __stats__.csv_header() << '\n';
     fout_local_stats_ << __stats__.to_csv() << '\n';
+  }
+
+  if ( collect_prompt_info_ ) {
+    fout_prompt_info_.open( getenv( "_GLINTHAWK_PROMPT_INFO_FILE_" ) );
+    CHECK( fout_prompt_info_.is_open() ) << "Failed to open prompt info file.";
+
+    fout_prompt_info_ << "# "; // XXX some information about the run
+    fout_prompt_info_ << glinthawk::prompt::Prompt::csv_header() << '\n';
   }
 
   event_loop_.add_rule(
@@ -593,6 +604,8 @@ bool BatchedWorker<ModelConfig, ComputeKernel>::handle_coordinator_message( core
 
       for ( size_t i = 0; i < prompt_count; i++ ) {
         prompt::Prompt new_prompt { generate_next_hash_id(), temp_dist( temp_gen ), 1, { ModelConfig::token_bos } };
+        new_prompt.timing_info().set_assigned();
+
         prompt_queue_.push( new_prompt.id() );
         prompt_store_.add( new_prompt.id(), std::move( new_prompt ) );
       }
@@ -608,6 +621,8 @@ bool BatchedWorker<ModelConfig, ComputeKernel>::handle_coordinator_message( core
           PromptID prompt_id = prompt_queue_.front();
           prompt_queue_.pop();
           auto& prompt = prompt_store_.get( prompt_id );
+          prompt.timing_info().set_prompt_started();
+
           state.set_prompt( i,
                             prompt_id,
                             next_context_id_,
@@ -618,6 +633,7 @@ bool BatchedWorker<ModelConfig, ComputeKernel>::handle_coordinator_message( core
                             0,
                             -1,
                             0 );
+
           // TODO: either use uint32_t directly instead of ContextID, or require some add-ability concept.
           next_context_id_++;
           added_prompt_count++;
@@ -640,6 +656,8 @@ bool BatchedWorker<ModelConfig, ComputeKernel>::handle_coordinator_message( core
 
       for ( auto& prompt : proto.prompts() ) {
         auto prompt_obj = prompt::Prompt::from_protobuf( prompt );
+        prompt_obj.timing_info().set_assigned();
+
         prompt_queue_.push( prompt_obj.id() );
         prompt_store_.add( prompt_obj.id(), std::move( prompt_obj ) );
       }
@@ -653,6 +671,8 @@ bool BatchedWorker<ModelConfig, ComputeKernel>::handle_coordinator_message( core
           PromptID prompt_id = prompt_queue_.front();
           prompt_queue_.pop();
           auto& prompt = prompt_store_.get( prompt_id );
+          prompt.timing_info().set_prompt_started();
+
           state.set_prompt( i,
                             prompt_id,
                             next_context_id_,
@@ -740,15 +760,22 @@ bool BatchedWorker<ModelConfig, ComputeKernel>::handle_peer_message( core::Messa
       if ( state.next_layer() == 0 and state.next_stage() == models::InferenceStage::PreAttention and first_parent_ ) {
         /* first worker in the chain */
         for ( size_t i = 0; i < state.batch_size(); i++ ) {
-          if ( state.active( i ) ) {
-            const auto& prompt_id = state.prompt_id( i );
-            auto& prompt = prompt_store_.get( prompt_id );
+          const auto& prompt_id = state.prompt_id( i );
+          auto& prompt = prompt_store_.get( prompt_id );
 
+          if ( state.active( i ) ) {
             // Have we finished processing the prompt?
+            if ( state.token_pos( i ) == state.prompt_length( i ) ) {
+              prompt.timing_info().set_completion_started(); // TTFT
+            }
+
             if ( state.token_pos( i ) >= state.prompt_length( i ) ) {
               // prompt processing has already finished, and this is a generated token
+              prompt.timing_info().token_time.add_point();
+
               __stats__.increment<Counters::TokensGenerated>();
               prompt.completion().append( state.token( i ) );
+
             } else {
               __stats__.increment<Counters::TokensProcessed>();
               // we are still processing the prompt tokens; the next token comes directly from the prompt
@@ -757,6 +784,12 @@ bool BatchedWorker<ModelConfig, ComputeKernel>::handle_peer_message( core::Messa
             }
 
             if ( state.finished( i ) ) {
+              prompt.timing_info().set_completion_finished();
+
+              if ( collect_prompt_info_ ) {
+                fout_prompt_info_ << prompt.to_csv() << '\n';
+              }
+
               prompt_store_.complete( prompt_id );
 
               // XXX(sadjad): this is actually the length of the prompt+completion; will adjust later.
