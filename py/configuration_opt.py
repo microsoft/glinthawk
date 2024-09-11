@@ -5,13 +5,14 @@ import logging
 import math
 import os
 from typing import Dict, List, Tuple
-from tqdm.auto import trange
 
 import click
 import numpy as np
 import pandas as pd
 from scipy import interpolate
+from tqdm.auto import trange
 
+from pipeline_simulation import single_tier_pipeline, two_tier_pipeline
 from variants import get_model
 
 logging.basicConfig(level=logging.INFO)
@@ -22,10 +23,12 @@ def load_profiles(log_dir: str) -> pd.DataFrame:
     for filename in os.listdir(log_dir):
         file_path = os.path.join(log_dir, filename)
         assert os.path.isfile(file_path)
-        model_name, stage, ctx, token_pos, duration, batch_size = filename[:-4].replace("all_no_cls", "all-no-cls").split('_')
+        model_name, stage, ctx, token_pos, duration, batch_size = filename[:-4].replace("all_no_cls",
+                                                                                        "all-no-cls").split('_')
         df = pd.read_csv(file_path, skiprows=1)
         entries.append([
-            model_name, stage, ctx, int(token_pos), float(duration), int(batch_size), df['duration_us'].to_numpy()[1:].mean() / 1000
+            model_name, stage, ctx, int(token_pos), float(duration), int(batch_size),
+            df['duration_us'].to_numpy()[1:].mean() / 1000
         ])
     return pd.DataFrame(entries, columns=["model_name", "stage", "ctx", "token_pos", "test_duration_s", "batch_size",
                                           "latency_us"])
@@ -99,7 +102,7 @@ def opt_single_tier(tier_1_logs: str, opt_config: str, model_name: str, opt_outp
         cap_bps = config['tier_1']['cap_Gbps'] * 1e9
 
         # Loop for all possible batch sizes up to 512
-        for t1_b in range(1, 512 + 1):
+        for t1_b in trange(1, 512 + 1, leave=False):
             # Calculate how many in_flight batches we have
             in_flight = kv_slots // t1_b
 
@@ -134,8 +137,17 @@ def opt_single_tier(tier_1_logs: str, opt_config: str, model_name: str, opt_outp
             pipes = [mid_step_comp * layers_per_node, mid_step_comm, rtt_ms / 2] * (k - 1)
             pipes += [mid_step_comp * (last_node_layers - 1) + last_step_comp, rtt_ms / 2]
             serials = [True, True, False] * (k - 1) + [True, False]
-            thr, tpt = get_throughput(pipeline_step, pipes, serials, in_flight)
-            thr = thr * t1_b * 1000
+
+            # thr, tpt = get_throughput(pipeline_step, pipes, serials, in_flight)
+            # thr = thr * t1_b * 1000
+
+            token_times = single_tier_pipeline(
+                [layers_per_node] * (k - 1) + [last_node_layers],
+                {"mid_layer_comp": mid_step_comp, "mid_layer_comm": mid_step_comm, "rtt": rtt_ms},
+                in_flight
+            )
+            tpt = token_times[-1] - token_times[-2]
+            thr = in_flight * t1_b / tpt * 1000
 
             # Compute time is how much time a token spends in compute.
             comp_time = mid_step_comp * (model.n_layers - 1) + last_step_comp
@@ -212,7 +224,7 @@ def opt_two_tier(tier_1_logs: str, tier_2_logs: str, opt_config: str, model_name
             cap_12_bps = config['inter_tier_cap_Gbps'] * 1e9
 
             # Loop for all possible batch sizes up to 512 for tier 1
-            for t2_b in range(1, 512 // k + 1):
+            for t2_b in trange(1, 512 // k + 1, leave=False):
                 # Calculate how many in_flight batches we have
                 in_flight = kv_slots_t2 // t2_b
                 t1_att_b = kv_slots_t1 // in_flight
@@ -241,28 +253,14 @@ def opt_two_tier(tier_1_logs: str, tier_2_logs: str, opt_config: str, model_name
                 #   5. The commute time for BIS in tier 2
                 mid_step_t2_comm_back = model.bis_size(t2_b * d, "att") * 8 / cap_12_bps * 1000
 
-                # Using an approximation where we assume each slice is one layer, and then later accounting for it.
-                pipeline_step = max(
-                    mid_step_t1_comp,
-                    last_step_t1_comp,
-                    mid_step_t1_comm,
-                    t2_comp,
-                    mid_step_t2_comm,
-                    mid_step_t2_comm_back,
+                token_times = two_tier_pipeline(
+                    [layers_per_node] * (k - 1) + [last_node_layers],
+                    {"mid_layer_t1": mid_step_t1_comp, "t1_to_t2_comm": mid_step_t2_comm, "t1_to_t2_rtt": rtt_12_ms,
+                     "t2_comp": t2_comp, "t2_to_t1_comm": mid_step_t2_comm_back},
+                    in_flight
                 )
-
-                pipes = [mid_step_t1_comp, mid_step_t2_comm, rtt_12_ms/2, t2_comp, mid_step_t2_comm_back, rtt_12_ms/2] * layers_per_node + [mid_step_t1_comm, rtt_11_ms/2]
-                pipes = pipes * (k-1)
-                pipes += [mid_step_t1_comp, mid_step_t2_comm, rtt_12_ms/2, t2_comp, mid_step_t2_comm_back, rtt_12_ms/2] * (last_node_layers - 1)
-                pipes += [last_step_t1_comp, mid_step_t2_comm, rtt_12_ms/2, t2_comp, mid_step_t2_comm_back, rtt_12_ms/2 + rtt_11_ms/2]
-
-                serials = [True, True, False, True, True, False] * layers_per_node + [True, False]
-                serials = serials * (k-1)
-                serials += [True, True, False, True, True, False] * (last_node_layers - 1)
-                serials += [True, True, False, True, True, False, False]
-
-                thr, tpt = get_throughput(pipeline_step, pipes, serials, in_flight)
-                thr = thr * t1_b * 1000
+                tpt = token_times[-1] - token_times[-2]
+                thr = in_flight * t1_b / tpt * 1000
 
                 # Compute time is how much time a token spends in compute.
                 comp_time = (t2_comp + mid_step_t1_comp) * (model.n_layers - 1) + (last_step_t1_comp + t2_comp)
@@ -272,7 +270,7 @@ def opt_two_tier(tier_1_logs: str, tier_2_logs: str, opt_config: str, model_name
                              mid_step_t2_comm_back * model.n_layers +
                              mid_step_t1_comm * (k - 1) +
                              rtt_12_ms * model.n_layers +
-                             rtt_11_ms/2 * k)
+                             rtt_11_ms / 2 * k)
                 cost = k * config['tier_1']['cost'] + d * k * config['tier_2']['cost']
 
                 df_data.append([
@@ -291,10 +289,6 @@ def opt_two_tier(tier_1_logs: str, tier_2_logs: str, opt_config: str, model_name
                     tpt - comp_time - comm_time,
                     cost,
                 ])
-
-                if k == 9 and d == 1 and t2_b == 1:
-                    import pdb
-                    pdb.set_trace()
 
         df = pd.DataFrame(df_data,
                           columns=['t1_nodes', 't2_per_t1_nodes', 't1_slots', 't2_slots', 't1_batch_size',

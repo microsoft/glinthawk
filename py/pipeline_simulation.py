@@ -1,0 +1,162 @@
+#!/usr/bin/env python3
+
+from typing import Dict
+from typing import List, Tuple
+from heapq import heappush, heappop
+import numpy as np
+import bisect
+
+
+# A serial "pipe" box, part of a pipeline. Serial means it can only carry out one "item" at a time. The box has a
+# fixed delay. It is appropriate for things like GPU kernels, network link delay (only the part due to bandwidth), etc.
+class Pipe:
+    delay: float
+    next_start_time_: float
+    queue: List[Tuple[int, float, int]]
+
+    def __init__(self, delay: float):
+        self.next_start_time_ = 0
+        self.delay = delay
+        self.queue = []
+
+    def min_event(self) -> float:
+        if len(self.queue) == 0:
+            return np.inf
+        else:
+            return max(self.queue[0][1], self.next_start_time_)
+
+    def queue_pop(self, current_time: float):
+        best_i = 0
+        for i in range(1, len(self.queue)):
+            if self.queue[i][1] > current_time:
+                break
+            if self.queue[i][0] < self.queue[best_i][0]:
+                best_i = i
+        return self.queue.pop(best_i)
+
+    # push adds a new item to the queue.
+    def push(self, step: int, entry_time: float, batch_id: int):
+        # The queue is indexed by (pipeline step, queue entry time, batch index).
+        # The pipeline step represents (layer, stage). We save "-step" as the first key since heapq emits the smallest
+        # key.
+        bisect.insort(self.queue, (-step, entry_time, batch_id), key=lambda x: x[1])
+
+    def pop(self, current_time: float) -> Tuple[int, float, int]:
+        # Pop an item and pass it through the pipeline
+        step, entry_time, batch_id = self.queue_pop(current_time)
+        step = -step
+        assert current_time >= entry_time, (step, entry_time, batch_id, current_time, self.next_start_time_, self.queue)
+        assert current_time >= self.next_start_time_, (step, entry_time, batch_id, current_time, self.next_start_time_, self.queue)
+        job_end_time = current_time + self.delay
+        self.next_start_time_ = job_end_time
+        return step + 1, job_end_time, batch_id
+
+
+# A simple variation of pipe that is "parallel", meaning it can pass multiple items through at the same time. It is
+# appropriate for things like network link latency.
+class DelayPipe(Pipe):
+    def __init__(self, delay):
+        super(DelayPipe, self).__init__(delay)
+
+    def pop(self, current_time: float) -> Tuple[int, float, int]:
+        step, entry_time, batch_id = heappop(self.queue)
+        step = -step
+        return step + 1, entry_time + self.delay, batch_id
+
+
+def single_tier_pipeline(t1_layers: List[int], delay_dict: Dict[str, float], in_flight: int) -> List[float]:
+    workers: List[Pipe] = []
+
+    # A mapping from the item step to where it should go. This mapping helps the DES manager find out where it needs to
+    # send an item to in the next step.
+    to_id_map: Dict[int, int] = {}
+    layers_so_far = 0
+
+    for k, n in enumerate(t1_layers):
+        workers.append(Pipe(delay_dict["mid_layer_comp"]))
+        workers.append(Pipe(delay_dict["mid_layer_comm"]))
+        workers.append(DelayPipe(delay_dict["rtt"] / 2))
+
+        for i in range(layers_so_far, layers_so_far + n):
+            to_id_map[i * 3 + 0] = k * 3 + 0
+            to_id_map[i * 3 + 1] = k * 3 + 1
+            to_id_map[i * 3 + 2] = k * 3 + 2
+        layers_so_far += n
+
+    next_events = np.array([w.min_event() for w in workers])
+
+    for i in range(in_flight):
+        workers[0].push(0, 0, i)
+    next_events[0] = workers[0].min_event()
+
+    # We want to find throughput. So we only care about how long it takes for one particular batch to make a full pass.
+    # That time is the "Time Per Token" value, and during that time, "in_flight" batches completed.
+    batch_0_complete = []
+    while len(batch_0_complete) < 5:
+        wid = np.argmin(next_events)
+        step, end_time, batch_id = workers[wid].pop(next_events[wid].item())
+        next_events[wid] = workers[wid].min_event()
+
+        if step == layers_so_far * 3:
+            step = 0
+
+        next_wid = to_id_map[step]
+        workers[next_wid].push(step, end_time, batch_id)
+        next_events[next_wid] = workers[next_wid].min_event()
+
+        if batch_id == 0 and step == 0:
+            batch_0_complete.append(end_time)
+
+    return batch_0_complete
+
+
+def two_tier_pipeline(t1_layers: List[int], delay_dict: Dict[str, float], in_flight: int) -> List[float]:
+    workers: List[Pipe] = []
+
+    # A mapping from the item step to where it should go. This mapping helps the DES manager find out where it needs to
+    # send an item to in the next step.
+    to_id_map: Dict[int, int] = {}
+    layers_so_far = 0
+
+    for k, n in enumerate(t1_layers):
+        workers.append(Pipe(delay_dict["mid_layer_t1"]))
+        workers.append(Pipe(delay_dict["t1_to_t2_comm"]))
+        workers.append(DelayPipe(delay_dict["t1_to_t2_rtt"] / 2))
+        workers.append(Pipe(delay_dict["t2_comp"]))
+        workers.append(Pipe(delay_dict["t2_to_t1_comm"]))
+        workers.append(DelayPipe(delay_dict["t1_to_t2_rtt"] / 2))
+
+        for i in range(layers_so_far, layers_so_far + n):
+            to_id_map[i * 6 + 0] = k * 6 + 0
+            to_id_map[i * 6 + 1] = k * 6 + 1
+            to_id_map[i * 6 + 2] = k * 6 + 2
+            to_id_map[i * 6 + 3] = k * 6 + 3
+            to_id_map[i * 6 + 4] = k * 6 + 4
+            to_id_map[i * 6 + 5] = k * 6 + 5
+        layers_so_far += n
+
+    next_events = np.array([w.min_event() for w in workers])
+
+    for i in range(in_flight):
+        workers[0].push(0, 0, i)
+    next_events[0] = workers[0].min_event()
+
+    # We want to find throughput. So we only care about how long it takes for one particular batch to make a full pass.
+    # That time is the "Time Per Token" value, and during that time, "in_flight" batches completed.
+    batch_0_complete = []
+    while len(batch_0_complete) < 2:
+        wid = np.argmin(next_events)
+        step, end_time, batch_id = workers[wid].pop(next_events[wid].item())
+        next_events[wid] = workers[wid].min_event()
+
+        if step == layers_so_far * 3:
+            step = 0
+
+        next_wid = to_id_map[step]
+        workers[next_wid].push(step, end_time, batch_id)
+        next_events[next_wid] = workers[next_wid].min_event()
+
+        if batch_id == 0 and step == 0:
+            batch_0_complete.append(end_time)
+
+    return batch_0_complete
