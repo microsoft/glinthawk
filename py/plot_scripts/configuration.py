@@ -21,25 +21,20 @@ def plot(single_tier_sim: str, two_tier_sim: str, plot_dir: str):
     nice_plt_cfg()
     fig, ax = plt.subplots(1, 1, figsize=(3.25, 2))
 
-    data_single = [[], []]
-    for grp, df in df_single.groupby("t1_nodes"):
-        irow = df['throughput'].argmax()
-        if df.iloc[irow]['cost'] < 100e3:
-            data_single[1].append(df.iloc[irow]['throughput'])
-            data_single[0].append(df.iloc[irow]['cost']/1000)
+    df_single_best = df_single.loc[df_single.groupby(['t1_nodes'])['throughput'].idxmax()].reset_index(drop=True)
+    df_single_best['cost_per_thr'] = df_single_best['cost'] / df_single_best['throughput']
+    print(df_single_best)
 
-    data_double = [[], []]
-    for grp, df in df_double.groupby(["t1_nodes", "t2_per_t1_nodes"]):
-        irow = df['throughput'].argmax()
-        if df.iloc[irow]['cost'] < 100e3:
-            data_double[1].append(df.iloc[irow]['throughput'])
-            data_double[0].append(df.iloc[irow]['cost']/1000)
+    df_double_best = df_double.loc[df_double.groupby(['t1_nodes', "t2_per_t1_nodes"])['throughput'].idxmax()].reset_index(drop=True)
+    df_double_best['cost_per_thr'] = df_double_best['cost'] / df_double_best['throughput']
+    df_double_best = df_double_best.loc[df_double_best.groupby(["t1_nodes"])['cost_per_thr'].idxmin()].reset_index(drop=True)
+    print(df_double_best)
 
-    ax.scatter(data_single[0], data_single[1], color='C3', label='Single-Tier', marker='v', s=1)
-    ax.scatter(data_double[0], data_double[1], color='C2', label='Two-Tier', marker='s', s=1)
+    ax.scatter(df_single_best["cost"]/1000, df_single_best["throughput"]/1000, color='C3', label='Single-Tier', marker='v', s=1)
+    ax.scatter(df_double_best["cost"]/1000, df_double_best["throughput"]/1000, color='C2', label='Two-Tier', marker='s', s=1)
 
     ax.set_xlabel(r"Cost (\$K)")
-    ax.set_ylabel(r"Throughput (tk/s)")
+    ax.set_ylabel(r"Throughput (Ktk/s)")
 
     nice_ax(ax)
     ax.legend(ncol=2, loc='lower left', bbox_to_anchor=(0.1, 1.03, 0.8, 0.1), mode="expand", handlelength=3)

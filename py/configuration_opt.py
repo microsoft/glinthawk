@@ -64,8 +64,8 @@ def get_throughput(pipe_step: float, pipe_times: List[float], serial: List[bool]
 def opt_single_tier(tier_1_logs: str, opt_config: str, model_name: str, opt_output: str, paged_kv_factor: float):
     with open(opt_config, "r") as f:
         config = json.load(f)
-    tier_1_profile = load_profiles(tier_1_logs)
-    tier_1_full_profile = interpolate_profile(tier_1_profile)
+    df_t1 = load_profiles(tier_1_logs)
+    t1_profiles = interpolate_profile(df_t1)
     model = get_model(model_name, 2)
 
     df_data = []
@@ -113,9 +113,9 @@ def opt_single_tier(tier_1_logs: str, opt_config: str, model_name: str, opt_outp
 
             # Three important timings here:
             #   1. The compute time for all stages but classification
-            mid_step_comp = tier_1_full_profile["all-no-cls"][t1_b].item()
+            mid_step_comp = t1_profiles["all-no-cls"][t1_b].item()
             #   2. The compute time for all stages
-            last_step_comp = tier_1_full_profile["all"][t1_b].item()
+            last_step_comp = t1_profiles["all"][t1_b].item()
             #   3. The commute time for BIS
             mid_step_comm = model.bis_size(t1_b, "post") * 8 / cap_bps * 1000
             assert model.bis_size(t1_b, "cls") == 0
@@ -182,11 +182,12 @@ def opt_two_tier(tier_1_logs: str, tier_2_logs: str, opt_config: str, model_name
                  paged_kv_factor: float):
     with open(opt_config, "r") as f:
         config = json.load(f)
-    tier_1_profile = load_profiles(tier_1_logs)
-    tier_1_full_profile = interpolate_profile(tier_1_profile)
-    tier_2_profile = load_profiles(tier_2_logs)
-    tier_2_full_profile = interpolate_profile(tier_2_profile)
-    model = get_model(model_name, 2)
+    df_t1 = load_profiles(tier_1_logs)
+    t1_profiles = interpolate_profile(df_t1)
+    df_t2 = load_profiles(tier_2_logs)
+    t2_profiles = interpolate_profile(df_t2)
+    model_t1 = get_model(model_name, 2)
+    model_t2 = get_model(model_name, 4)
 
     df_data = []
 
@@ -195,8 +196,8 @@ def opt_two_tier(tier_1_logs: str, tier_2_logs: str, opt_config: str, model_name
             # Get number of layers hosted per each node, the first and last layer are important because:
             #   1. The first layer hosts the embedding table
             #   2. The last layer hosts the classification table and the classification compute
-            layers_per_node = math.ceil(model.n_layers / k)
-            last_node_layers = model.n_layers - layers_per_node * (k - 1)
+            layers_per_node = math.ceil(model_t1.n_layers / k)
+            last_node_layers = model_t1.n_layers - layers_per_node * (k - 1)
 
             # We might have too many nodes, e.g. 32 layers and 40 nodes. Ignore those cases
             if last_node_layers <= 0:
@@ -204,17 +205,17 @@ def opt_two_tier(tier_1_logs: str, tier_2_logs: str, opt_config: str, model_name
 
             # Calculate the remaining memory in last and first layer
             mem_t1_first_node = (config["tier_1"]["mem_GiB"] * 2 ** 30 -
-                                 model.base_size(first_layer_pre=True, last_layer_cls=k == 1, att=True) -
-                                 model.layer_size(pre=True, post=True) * layers_per_node)
+                                 model_t1.base_size(first_layer_pre=True, last_layer_cls=k == 1, att=True) -
+                                 model_t1.layer_size(pre=True, post=True) * layers_per_node)
             mem_t1_last_node = (config["tier_1"]["mem_GiB"] * 2 ** 30 -
-                                model.base_size(first_layer_pre=k == 1, last_layer_cls=True, att=True) -
-                                model.layer_size(pre=True, post=True) * last_node_layers)
-            mem_t2_node = (config["tier_2"]["mem_GiB"] * 2 ** 30 - model.base_size(att=True))
+                                model_t1.base_size(first_layer_pre=k == 1, last_layer_cls=True, att=True) -
+                                model_t1.layer_size(pre=True, post=True) * last_node_layers)
+            mem_t2_node = (config["tier_2"]["mem_GiB"] * 2 ** 30 - model_t2.base_size(att=True))
 
             # Calculate how many prompts we have KV for across all nodes (hence the min)
-            kv_slots_t1 = min(mem_t1_last_node // (model.kv_size(last_node_layers) / paged_kv_factor),
-                              mem_t1_first_node // (model.kv_size(layers_per_node) / paged_kv_factor))
-            kv_slots_t2 = mem_t2_node // (model.kv_size(max(last_node_layers, layers_per_node)) / paged_kv_factor)
+            kv_slots_t1 = min(mem_t1_last_node // (model_t1.kv_size(last_node_layers) / paged_kv_factor),
+                              mem_t1_first_node // (model_t1.kv_size(layers_per_node) / paged_kv_factor))
+            kv_slots_t2 = mem_t2_node // (model_t2.kv_size(max(last_node_layers, layers_per_node)) / paged_kv_factor)
 
             kv_slots_t1 = int(kv_slots_t1)
             kv_slots_t2 = int(kv_slots_t2)
@@ -230,34 +231,47 @@ def opt_two_tier(tier_1_logs: str, tier_2_logs: str, opt_config: str, model_name
             cap_12_bps = config['inter_tier_cap_Gbps'] * 1e9
 
             # Loop for all possible batch sizes up to 512 for tier 1
-            for t2_b in trange(1, 512 // k + 1, leave=False):
+            for t2_b in trange(1, 2048 // d + 1, leave=False):
                 # Calculate how many in_flight batches we have
                 in_flight = kv_slots_t2 // t2_b
-                t1_att_b = kv_slots_t1 // in_flight
-                t1_b = t2_b * d + t1_att_b
-                if t1_b > 512:
-                    continue
 
                 # If we cannot load a full batch, ignore this configuration
                 if in_flight == 0:
                     continue
 
+                t1_att_b = kv_slots_t1 // in_flight
+                t1_b = t2_b * d + t1_att_b
+
+                if t1_b >= t1_profiles["pre"].shape[0]:
+                    continue
+                if t1_b >= t1_profiles["post"].shape[0]:
+                    continue
+                if t1_b >= t1_profiles["cls"].shape[0]:
+                    continue
+                if t1_att_b >= t1_profiles["att"].shape[0]:
+                    continue
+
                 # Four important timings here:
                 #   1. The compute time for tier 1 besides classification
-                mid_step_t1_comp = tier_1_full_profile["pre"][t1_b].item() + tier_1_full_profile["att"][
-                    t1_att_b].item() + tier_1_full_profile["post"][t1_b].item()
+                mid_step_t1_comp = t1_profiles["pre"][t1_b].item() + t1_profiles["att"][t1_att_b].item() + \
+                                   t1_profiles["post"][t1_b].item()
                 #   2. The compute time for tier 1, all stages
-                last_step_t1_comp = tier_1_full_profile["pre"][t1_b].item() + tier_1_full_profile["att"][
-                    t1_att_b].item() + \
-                                    tier_1_full_profile["post"][t1_b].item() + tier_1_full_profile["cls"][t1_b].item()
+                last_step_t1_comp = t1_profiles["pre"][t1_b].item() + t1_profiles["att"][t1_att_b].item() + \
+                                    t1_profiles["post"][t1_b].item() + t1_profiles["cls"][t1_b].item()
                 #   3. The compute time for tier 2
-                t2_comp = tier_2_full_profile["att"][t2_b].item()
+                t2_comp = t2_profiles["att"][t2_b].item()
                 #   4. The commute time for BIS in tier 1
-                mid_step_t1_comm = model.bis_size(t1_b, "post") * 8 / cap_11_bps * 1000
+                mid_step_t1_comm = model_t1.bis_size(t1_b, "post") * 8 / cap_11_bps * 1000
                 #   5. The commute time for BIS in tier 2
-                mid_step_t2_comm = model.bis_size(t2_b * d, "pre") * 8 / cap_12_bps * 1000
+                mid_step_t2_comm = model_t1.bis_size(t2_b * d, "pre") * 8 / cap_12_bps * 1000
                 #   5. The commute time for BIS in tier 2
-                mid_step_t2_comm_back = model.bis_size(t2_b * d, "att") * 8 / cap_12_bps * 1000
+                mid_step_t2_comm_back = model_t1.bis_size(t2_b * d, "att") * 8 / cap_12_bps * 1000
+
+                # There are 6 active stages
+                max_in_flight_needed = k * (1 + math.ceil(
+                    (mid_step_t1_comm + t2_comp + mid_step_t2_comm_back + rtt_12_ms) / mid_step_t1_comp))
+                if in_flight > max_in_flight_needed * 2:
+                    continue
 
                 token_times = two_tier_pipeline(
                     [layers_per_node] * (k - 1) + [last_node_layers],
@@ -269,13 +283,13 @@ def opt_two_tier(tier_1_logs: str, tier_2_logs: str, opt_config: str, model_name
                 thr = in_flight * t1_b / tpt * 1000
 
                 # Compute time is how much time a token spends in compute.
-                comp_time = (t2_comp + mid_step_t1_comp) * (model.n_layers - 1) + (last_step_t1_comp + t2_comp)
+                comp_time = (t2_comp + mid_step_t1_comp) * (model_t1.n_layers - 1) + (last_step_t1_comp + t2_comp)
                 # Commute time is how much time a token spends in network.
                 # Time per token minus the two above is queueing time.
-                comm_time = (mid_step_t2_comm * model.n_layers +
-                             mid_step_t2_comm_back * model.n_layers +
+                comm_time = (mid_step_t2_comm * model_t1.n_layers +
+                             mid_step_t2_comm_back * model_t1.n_layers +
                              mid_step_t1_comm * (k - 1) +
-                             rtt_12_ms * model.n_layers +
+                             rtt_12_ms * model_t1.n_layers +
                              rtt_11_ms / 2 * k)
                 cost = k * config['tier_1']['cost'] + d * k * config['tier_2']['cost']
 
