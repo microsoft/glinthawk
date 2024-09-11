@@ -230,8 +230,10 @@ def opt_two_tier(tier_1_logs: str, tier_2_logs: str, opt_config: str, model_name
             rtt_12_ms = config['inter_tier_rtt_ms']
             cap_12_bps = config['inter_tier_cap_Gbps'] * 1e9
 
-            # Loop for all possible batch sizes up to 512 for tier 1
-            for t2_b in trange(1, 2048 // d + 1, leave=False):
+            max_t2_b = min((t1_profiles["pre"].shape[0] - 1) // d, t2_profiles["att"].shape[0] - 1)
+
+            # Loop for all possible batch sizes for tier 2
+            for t2_b in trange(1, max_t2_b + 1, leave=False):
                 # Calculate how many in_flight batches we have
                 in_flight = kv_slots_t2 // t2_b
 

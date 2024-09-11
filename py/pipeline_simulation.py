@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 
+import bisect
+from heapq import heappop
 from typing import Dict
 from typing import List, Tuple
-from heapq import heappush, heappop
+
 import numpy as np
-import bisect
 
 
 # A serial "pipe" box, part of a pipeline. Serial means it can only carry out one "item" at a time. The box has a
@@ -46,7 +47,8 @@ class Pipe:
         step, entry_time, batch_id = self.queue_pop(current_time)
         step = -step
         assert current_time >= entry_time, (step, entry_time, batch_id, current_time, self.next_start_time_, self.queue)
-        assert current_time >= self.next_start_time_, (step, entry_time, batch_id, current_time, self.next_start_time_, self.queue)
+        assert current_time >= self.next_start_time_, (
+            step, entry_time, batch_id, current_time, self.next_start_time_, self.queue)
         job_end_time = current_time + self.delay
         self.next_start_time_ = job_end_time
         return step + 1, job_end_time, batch_id
@@ -106,6 +108,8 @@ def single_tier_pipeline(t1_layers: List[int], delay_dict: Dict[str, float], in_
 
         if batch_id == 0 and step == 0:
             batch_0_complete.append(end_time)
+            assert end_time >= (delay_dict["mid_layer_comp"] + delay_dict["mid_layer_comm"] + delay_dict[
+                "rtt"] / 2) * layers_so_far * 0.99
 
     return batch_0_complete
 
@@ -149,7 +153,7 @@ def two_tier_pipeline(t1_layers: List[int], delay_dict: Dict[str, float], in_fli
         step, end_time, batch_id = workers[wid].pop(next_events[wid].item())
         next_events[wid] = workers[wid].min_event()
 
-        if step == layers_so_far * 3:
+        if step == layers_so_far * 6:
             step = 0
 
         next_wid = to_id_map[step]
@@ -158,5 +162,6 @@ def two_tier_pipeline(t1_layers: List[int], delay_dict: Dict[str, float], in_fli
 
         if batch_id == 0 and step == 0:
             batch_0_complete.append(end_time)
-
+            assert end_time >= (delay_dict["mid_layer_t1"] + delay_dict["t1_to_t2_comm"] + delay_dict["t1_to_t2_rtt"] +
+                                delay_dict["t2_comp"] + delay_dict["t2_to_t1_comm"]) * layers_so_far * 0.99
     return batch_0_complete
