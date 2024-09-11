@@ -61,7 +61,7 @@ def get_throughput(pipe_step: float, pipe_times: List[float], serial: List[bool]
     return in_flight / (round_2_loc - round_2_start), round_2_loc - round_2_start
 
 
-def opt_single_tier(tier_1_logs: str, opt_config: str, model_name: str, opt_output: str):
+def opt_single_tier(tier_1_logs: str, opt_config: str, model_name: str, opt_output: str, paged_kv_factor: float):
     with open(opt_config, "r") as f:
         config = json.load(f)
     tier_1_profile = load_profiles(tier_1_logs)
@@ -90,8 +90,9 @@ def opt_single_tier(tier_1_logs: str, opt_config: str, model_name: str, opt_outp
                          model.layer_size(pre=True, post=True) * last_node_layers)
 
         # Calculate how many prompts we have KV for across all nodes (hence the min)
-        kv_slots = min(mem_last_node // model.kv_size(last_node_layers),
-                       mem_first_node // model.kv_size(layers_per_node))
+        kv_slots = min(mem_last_node // (model.kv_size(last_node_layers) / paged_kv_factor),
+                       mem_first_node // (model.kv_size(layers_per_node) / paged_kv_factor))
+        kv_slots = int(kv_slots)
 
         # Can't fit the weights on these many nodes
         if mem_last_node < 0 or mem_first_node < 0:
@@ -118,26 +119,27 @@ def opt_single_tier(tier_1_logs: str, opt_config: str, model_name: str, opt_outp
             #   3. The commute time for BIS
             mid_step_comm = model.bis_size(t1_b, "post") * 8 / cap_bps * 1000
             assert model.bis_size(t1_b, "cls") == 0
-            # The pipeline step is the maximum of:
-            #   1. The compute time for nodes but the last one
-            #   2. The compute time for the last nodes
-            #   3. The commute time for BIS
-            pipeline_step = max(
-                mid_step_comp * layers_per_node,
-                last_step_comp + mid_step_comp * (last_node_layers - 1),
-                mid_step_comm
-            )
 
-            # Here we flesh out the full pipeline timings, including compute, commute and RTT
-            #   Why separate RTT and commute (transit time due to link BW)?
-            #   Because when a link is busy sending a packet due to limited bandwidth, it can't accept any other
-            #   packets. When a link is busy sending a packet due to RTT latency, it can actually send other packets in
-            #   parallel. So time losses due to RTT are just "delay boxes" in the pipeline, whereas time losses due to
-            #   link BW should be treated like a serial part of the pipeline, similar to compute kernels.
-            pipes = [mid_step_comp * layers_per_node, mid_step_comm, rtt_ms / 2] * (k - 1)
-            pipes += [mid_step_comp * (last_node_layers - 1) + last_step_comp, rtt_ms / 2]
-            serials = [True, True, False] * (k - 1) + [True, False]
-
+            # # The pipeline step is the maximum of:
+            # #   1. The compute time for nodes but the last one
+            # #   2. The compute time for the last nodes
+            # #   3. The commute time for BIS
+            # pipeline_step = max(
+            #     mid_step_comp * layers_per_node,
+            #     last_step_comp + mid_step_comp * (last_node_layers - 1),
+            #     mid_step_comm
+            # )
+            #
+            # # Here we flesh out the full pipeline timings, including compute, commute and RTT
+            # #   Why separate RTT and commute (transit time due to link BW)?
+            # #   Because when a link is busy sending a packet due to limited bandwidth, it can't accept any other
+            # #   packets. When a link is busy sending a packet due to RTT latency, it can actually send other packets in
+            # #   parallel. So time losses due to RTT are just "delay boxes" in the pipeline, whereas time losses due to
+            # #   link BW should be treated like a serial part of the pipeline, similar to compute kernels.
+            # pipes = [mid_step_comp * layers_per_node, mid_step_comm, rtt_ms / 2] * (k - 1)
+            # pipes += [mid_step_comp * (last_node_layers - 1) + last_step_comp, rtt_ms / 2]
+            # serials = [True, True, False] * (k - 1) + [True, False]
+            #
             # thr, tpt = get_throughput(pipeline_step, pipes, serials, in_flight)
             # thr = thr * t1_b * 1000
 
@@ -176,7 +178,8 @@ def opt_single_tier(tier_1_logs: str, opt_config: str, model_name: str, opt_outp
     df.to_csv(opt_output)
 
 
-def opt_two_tier(tier_1_logs: str, tier_2_logs: str, opt_config: str, model_name: str, opt_output: str):
+def opt_two_tier(tier_1_logs: str, tier_2_logs: str, opt_config: str, model_name: str, opt_output: str,
+                 paged_kv_factor: float):
     with open(opt_config, "r") as f:
         config = json.load(f)
     tier_1_profile = load_profiles(tier_1_logs)
@@ -209,9 +212,12 @@ def opt_two_tier(tier_1_logs: str, tier_2_logs: str, opt_config: str, model_name
             mem_t2_node = (config["tier_2"]["mem_GiB"] * 2 ** 30 - model.base_size(att=True))
 
             # Calculate how many prompts we have KV for across all nodes (hence the min)
-            kv_slots_t1 = min(mem_t1_last_node // model.kv_size(last_node_layers),
-                              mem_t1_first_node // model.kv_size(layers_per_node))
-            kv_slots_t2 = mem_t2_node // model.kv_size(max(last_node_layers, layers_per_node))
+            kv_slots_t1 = min(mem_t1_last_node // (model.kv_size(last_node_layers) / paged_kv_factor),
+                              mem_t1_first_node // (model.kv_size(layers_per_node) / paged_kv_factor))
+            kv_slots_t2 = mem_t2_node // (model.kv_size(max(last_node_layers, layers_per_node)) / paged_kv_factor)
+
+            kv_slots_t1 = int(kv_slots_t1)
+            kv_slots_t2 = int(kv_slots_t2)
 
             # Can't fit the weights on these many nodes
             if mem_t1_last_node < 0 or mem_t1_first_node < 0 or mem_t2_node < 0 or kv_slots_t2 == 0:
@@ -302,14 +308,15 @@ def opt_two_tier(tier_1_logs: str, tier_2_logs: str, opt_config: str, model_name
 @click.option("--tier-logs", required=True, multiple=True, type=click.Path(exists=True, file_okay=False, dir_okay=True))
 @click.option("--opt-config", required=True, type=click.Path(exists=True, file_okay=True, dir_okay=False))
 @click.option("--model-name", required=True, type=str)
+@click.option("--paged-kv-reuse-factor", required=False, default=2.5, type=float)
 @click.option("--opt-output", required=True, type=click.Path(exists=False))
 def main(**kwargs):
     if len(kwargs.get("tier_logs")) == 1:
         opt_single_tier(kwargs.get("tier_logs")[0], kwargs.get("opt_config"), kwargs.get("model_name"),
-                        kwargs.get("opt_output"))
+                        kwargs.get("opt_output"), kwargs.get("paged_kv_reuse_factor"))
     elif len(kwargs.get("tier_logs")) == 2:
         opt_two_tier(kwargs.get("tier_logs")[0], kwargs.get("tier_logs")[1], kwargs.get("opt_config"),
-                     kwargs.get("model_name"), kwargs.get("opt_output"))
+                     kwargs.get("model_name"), kwargs.get("opt_output"), kwargs.get("paged_kv_reuse_factor"))
     else:
         raise ValueError(f'Current cannot support {len(kwargs.get("tier_logs"))} tiers.')
 
