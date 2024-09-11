@@ -51,6 +51,7 @@ class Coordinator:
             n_slices=kwargs.get("n_slices"),
             tier_config=kwargs.get("tiers"),
             separate_cls_tiers=kwargs.get("separate_cls_tiers"),
+            faux=kwargs.get("faux"),
         )
 
         # Job info
@@ -362,7 +363,6 @@ class Coordinator:
                 f.flush()
 
     async def show_status(self):
-        # TODO(pouya): I broke this, fix it
         with Live(transient=True, auto_refresh=False) as live:
             while self.state != Coordinator.State.Stopped:
                 elapsed_time = datetime.datetime.now() - self.start_time

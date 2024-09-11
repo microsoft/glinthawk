@@ -41,7 +41,7 @@ requires models::llama2::ModelConfig<ModelConfig>
          && compute::KernelConcept<ComputeKernel, models::BatchedInferenceState<ModelConfig>>
 class BatchedWorker
 {
-private:
+protected:
   class Peer
   {
   public:
@@ -56,7 +56,7 @@ private:
     }
   };
 
-private:
+protected:
   using BatchedState = glinthawk::models::BatchedInferenceState<ModelConfig>;
   using RouteMap = std::map<std::tuple<uint32_t, typename models::InferenceStage, uint8_t, uint8_t>, net::Address>;
   using HostingTable = typename std::array<std::array<bool, util::to_underlying( models::InferenceStage::__COUNT__ )>,
@@ -75,6 +75,9 @@ private:
   std::unique_ptr<compute::TierRouter<ComputeKernel, ModelConfig>> tier_router_ { nullptr };
   ContextID next_context_id_ { NULL_CONTEXT + 1 };
   bool first_parent_ { false };
+  std::optional<int8_t> tier_ {};
+  std::optional<uint8_t> rank_ {};
+  BatchedWorker<ModelConfig, ComputeKernel>::HostingTable slice_hosting_table_ {};
 
   std::unordered_map<RouteID, RouteMap> route_set_ {};
   glinthawk::prompt::PromptStore prompt_store_ {};
@@ -123,8 +126,9 @@ private:
   void setup_stats_handler();
 
   void listen_callback();
-  void handle_tier_router_event();
+  virtual void handle_tier_router_event();
   bool handle_coordinator_message( core::Message&& msg );
+  void handle_batch_inference_state( BatchedState&& state );
   bool handle_peer_message( core::Message&& msg );
   void handle_stats();
   void handle_completions( const bool reset_timer );
@@ -149,7 +153,7 @@ public:
                  const net::Address& coordinator_address,
                  const std::filesystem::path& model_root );
 
-  ~BatchedWorker();
+  virtual ~BatchedWorker();
 
   void run();
 };
@@ -235,6 +239,9 @@ void BatchedWorker<ModelConfig, ComputeKernel>::setup_tier_router_and_compute_ke
   const uint8_t rank,
   const bool randomize )
 {
+  tier_ = tier;
+  rank_ = rank;
+  slice_hosting_table_ = slice_hosting_table;
   monolith_concurrency_size_ = concurrency.full_batch();
   first_parent_
     = slice_hosting_table[0][util::to_underlying( models::InferenceStage::PreAttention )] and tier == 0 and rank == 0;
@@ -741,6 +748,81 @@ void BatchedWorker<ModelConfig, ComputeKernel>::handle_tier_router_event()
 template<typename ModelConfig, typename ComputeKernel>
 requires models::llama2::ModelConfig<ModelConfig>
          && compute::KernelConcept<ComputeKernel, models::BatchedInferenceState<ModelConfig>>
+void BatchedWorker<ModelConfig, ComputeKernel>::handle_batch_inference_state( BatchedState&& state )
+{
+  DLOG( INFO ) << state.debug_string( true );
+
+  if ( route_set_.find( state.route_id() ) == route_set_.end() ) {
+    LOG( FATAL ) << "No route with id=" << state.route_id() << " in route set.";
+  }
+
+  if ( state.next_layer() == 0 and state.next_stage() == models::InferenceStage::PreAttention and first_parent_ ) {
+    /* first worker in the chain */
+    for ( size_t i = 0; i < state.batch_size(); i++ ) {
+      const auto& prompt_id = state.prompt_id( i );
+      auto& prompt = prompt_store_.get( prompt_id );
+
+      if ( state.active( i ) ) {
+        // Have we finished processing the prompt?
+        if ( state.token_pos( i ) == state.prompt_length( i ) ) {
+          prompt.timing_info().set_completion_started(); // TTFT
+        }
+
+        if ( state.token_pos( i ) >= state.prompt_length( i ) ) {
+          // prompt processing has already finished, and this is a generated token
+          prompt.timing_info().token_time.add_point();
+
+          __stats__.increment<Counters::TokensGenerated>();
+          prompt.completion().append( state.token( i ) );
+
+        } else {
+          __stats__.increment<Counters::TokensProcessed>();
+          // we are still processing the prompt tokens; the next token comes directly from the prompt
+          const auto next_token = prompt.prompt().at( state.token_pos( i ) );
+          state.set_token( i, next_token );
+        }
+
+        if ( state.finished( i ) ) {
+          prompt.timing_info().set_completion_finished();
+
+          if ( collect_prompt_info_ ) {
+            fout_prompt_info_ << prompt.to_csv() << '\n';
+          }
+
+          prompt_store_.complete( prompt_id );
+
+          // XXX(sadjad): this is actually the length of the prompt+completion; will adjust later.
+          __stats__.add_point<IntDistributions::PromptLength>( state.token_pos( i ) );
+          __stats__.increment<Counters::PromptsCompleted>();
+
+          state.discard( i );
+        }
+      }
+
+      // let's replace this with the next prompt, if one is available
+      if ( not state.active( i ) and not prompt_queue_.empty() ) {
+        auto next_prompt_id = prompt_queue_.front();
+        prompt_queue_.pop();
+        auto& next_prompt = prompt_store_.get( next_prompt_id );
+        state.set_prompt( i,
+                          next_prompt_id,
+                          state.context_id( i ),
+                          next_prompt.prompt().at( 0 ),
+                          0,
+                          next_prompt.temperature(),
+                          next_prompt.prompt().count(),
+                          0,
+                          state.kv_tier( i ),
+                          state.kv_rank( i ) );
+      }
+    }
+  }
+  this->tier_router_->push( std::move( state ) );
+}
+
+template<typename ModelConfig, typename ComputeKernel>
+requires models::llama2::ModelConfig<ModelConfig>
+         && compute::KernelConcept<ComputeKernel, models::BatchedInferenceState<ModelConfig>>
 bool BatchedWorker<ModelConfig, ComputeKernel>::handle_peer_message( core::Message&& msg )
 {
   DLOG( INFO ) << "(Peer) Incoming message: " << msg.info();
@@ -748,77 +830,8 @@ bool BatchedWorker<ModelConfig, ComputeKernel>::handle_peer_message( core::Messa
   switch ( msg.opcode() ) {
     case Message::OpCode::BatchedInferenceState: {
       __stats__.increment<Counters::StatesReceived>();
-
       BatchedState state { msg.payload() };
-
-      DLOG( INFO ) << state.debug_string( true );
-
-      if ( route_set_.find( state.route_id() ) == route_set_.end() ) {
-        LOG( FATAL ) << "No route with id=" << state.route_id() << " in route set.";
-      }
-
-      if ( state.next_layer() == 0 and state.next_stage() == models::InferenceStage::PreAttention and first_parent_ ) {
-        /* first worker in the chain */
-        for ( size_t i = 0; i < state.batch_size(); i++ ) {
-          const auto& prompt_id = state.prompt_id( i );
-          auto& prompt = prompt_store_.get( prompt_id );
-
-          if ( state.active( i ) ) {
-            // Have we finished processing the prompt?
-            if ( state.token_pos( i ) == state.prompt_length( i ) ) {
-              prompt.timing_info().set_completion_started(); // TTFT
-            }
-
-            if ( state.token_pos( i ) >= state.prompt_length( i ) ) {
-              // prompt processing has already finished, and this is a generated token
-              prompt.timing_info().token_time.add_point();
-
-              __stats__.increment<Counters::TokensGenerated>();
-              prompt.completion().append( state.token( i ) );
-
-            } else {
-              __stats__.increment<Counters::TokensProcessed>();
-              // we are still processing the prompt tokens; the next token comes directly from the prompt
-              const auto next_token = prompt.prompt().at( state.token_pos( i ) );
-              state.set_token( i, next_token );
-            }
-
-            if ( state.finished( i ) ) {
-              prompt.timing_info().set_completion_finished();
-
-              if ( collect_prompt_info_ ) {
-                fout_prompt_info_ << prompt.to_csv() << '\n';
-              }
-
-              prompt_store_.complete( prompt_id );
-
-              // XXX(sadjad): this is actually the length of the prompt+completion; will adjust later.
-              __stats__.add_point<IntDistributions::PromptLength>( state.token_pos( i ) );
-              __stats__.increment<Counters::PromptsCompleted>();
-
-              state.discard( i );
-            }
-          }
-
-          // let's replace this with the next prompt, if one is available
-          if ( not state.active( i ) and not prompt_queue_.empty() ) {
-            auto next_prompt_id = prompt_queue_.front();
-            prompt_queue_.pop();
-            auto& next_prompt = prompt_store_.get( next_prompt_id );
-            state.set_prompt( i,
-                              next_prompt_id,
-                              state.context_id( i ),
-                              next_prompt.prompt().at( 0 ),
-                              0,
-                              next_prompt.temperature(),
-                              next_prompt.prompt().count(),
-                              0,
-                              state.kv_tier( i ),
-                              state.kv_rank( i ) );
-          }
-        }
-      }
-      this->tier_router_->push( std::move( state ) );
+      handle_batch_inference_state( std::move( state ) );
       break;
     }
 

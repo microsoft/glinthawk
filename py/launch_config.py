@@ -6,6 +6,7 @@ import logging
 import math
 import os
 import shlex
+import shutil
 import signal
 import socket
 import sys
@@ -150,12 +151,24 @@ def shutdown():
 
 
 async def main(**kwargs):
-    with open(f"{kwargs['config_path']}/coord.json", 'rb') as f:
+    os.makedirs("/tmp/glinthawk.service/", exist_ok=True)
+    shutil.copy(f"{kwargs['config_path']}/coord.json", "/tmp/glinthawk.service/coord.json")
+    with open("/tmp/glinthawk.service/coord.json", 'rb') as f:
         config = json.load(f)
+
     for i in range(len(config['tiers'])):
         assert os.path.exists(f"{kwargs['config_path']}/remote.tier{i}.conf")
         with open(f"{kwargs['config_path']}/remote.tier{i}.conf", "r") as f:
             assert len(f.readlines()) == config['tiers'][i]['ranks'] * config['n_slices']
+
+        if kwargs['faux']:
+            with open(f"{kwargs['config_path']}/remote.tier{i}.conf", "r") as f_src:
+                with open(f"/tmp/glinthawk.service/remote.tier{i}.conf", "w") as f_dst:
+                    f_dst.writelines(f_src.readlines()[:config['tiers'][i]['ranks']])
+        else:
+            shutil.copy(f"{kwargs['config_path']}/remote.tier{i}.conf", f"/tmp/glinthawk.service/remote.tier{i}.conf")
+
+    kwargs['config_path'] = '/tmp/glinthawk.service/'
 
     unique_run_id = str(uuid.uuid4())
 
@@ -227,6 +240,9 @@ async def main(**kwargs):
         "-O", kwargs['completion_log_path']
     ])
 
+    if kwargs['faux']:
+        tasks[-1].append("--faux")
+
     for i in range(len(config['tiers'])):
         # XXX On a single node, we can't have multiple workers from the same tier
         stats_log_file = f'stats_{unique_run_id}_{i}.csv'
@@ -251,6 +267,10 @@ async def main(**kwargs):
                 "--docker-options", "--runtime=nvidia",
                 "--docker-options", "--gpus all",
             ] + docker_remote_common_args
+            if kwargs['faux']:
+                command += ["--docker-options", "--entrypoint /app/faux-worker-cuda-fp16"]
+            else:
+                command += ["--docker-options", "--entrypoint /app/worker-cuda-fp16"]
 
             command += add_args(config, kwargs, add_workers=False)
             command += [
@@ -269,8 +289,11 @@ async def main(**kwargs):
                 "python3",
                 "run-docker-remotes.py",
                 "--docker-options", "--runtime=nvidia",
-                "--docker-options", "--entrypoint /app/worker-amd64-fp32"
             ] + docker_remote_common_args
+            if kwargs['faux']:
+                command += ["--docker-options", "--entrypoint /app/faux-worker-amd64-fp32"]
+            else:
+                command += ["--docker-options", "--entrypoint /app/worker-amd64-fp32"]
 
             command += add_args(config, kwargs, add_workers=False)
             command += [
@@ -318,6 +341,7 @@ async def main(**kwargs):
 @click.option("--send-model", is_flag=True, help="Send the model.")
 @click.option("--pull-image", is_flag=True, help="Pull the docker image.")
 @click.option("--reboot", is_flag=True, help="Reboot the machines.")
+@click.option("--faux", is_flag=True, help="Do a microbenchmark with one slice.")
 def start(**kwargs):
     """This program runs an inference session with a given config."""
     asyncio.run(main(**kwargs))

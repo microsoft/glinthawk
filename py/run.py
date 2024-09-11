@@ -36,6 +36,7 @@ logo = rich.align.Align.center(
 @click.command()
 @click.option("--config-file", "-C", help="Config file for setting up nodes", required=True, type=click.STRING)
 @click.option("--dummy-count", "-N", help="Number of dummy prompts", type=click.INT)
+@click.option("--faux", is_flag=True, help="Do a microbenchmark with one slice.")
 @click.option("--prompt-dir", "-P", help="Directory for input files.", type=click.STRING)
 @click.option("--output-dir", "-O", help="Directory for output files.", required=True, type=click.STRING)
 def main(config_file, **kwargs):

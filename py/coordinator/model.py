@@ -1,21 +1,23 @@
 import socket
-from typing import List, Dict
 from math import ceil
+from typing import List, Dict
+
+from protobuf import glinthawk_pb2 as protobuf
 
 from .base import Stage, Platform, Kernel
 from .worker import Worker
-from protobuf import glinthawk_pb2 as protobuf
 
 
 class Model:
     def __init__(self, model_name: str, n_layers: int, n_slices: int, tier_config: List[Dict],
-                 separate_cls_tiers: List[Dict]):
+                 separate_cls_tiers: List[Dict], faux: bool):
         self.model_name = model_name
         self.n_layers = n_layers
         self.n_slices = n_slices
         self.layers_per_worker = ceil(n_layers / n_slices)
         self.tier_config = tier_config
         self.n_tiers = len(self.tier_config)
+        self.faux = faux
 
         self.tier_concurrency_s = [
             protobuf.InitializeWorker.TierConcurrency(
@@ -24,7 +26,7 @@ class Model:
                 concurrency_att_size=self.tier_config[i]['concurrency_size_att'],
                 concurrency_post_att_size=self.tier_config[i]['concurrency_size_post'],
                 concurrency_cls_size=self.tier_config[i]['concurrency_size_cls'],
-                max_context_count=self.tier_config[i]['max_context_count'],
+                max_context_count=self.tier_config[i]['max_context_count'] // (self.n_slices if self.faux else 1),
             )
             for i in range(self.n_tiers)
         ]
@@ -56,21 +58,25 @@ class Model:
 
         assert self.separate_cls is False, "We don't support separate classification worker yet!"
 
-        assert sum(self.tier_config[i]['concurrency_size_cls']*self.tier_config[i]['ranks'] for i in range(self.n_tiers)) == sum(
-            self.tier_config[i]['concurrency_size_pre']*self.tier_config[i]['ranks'] for i in range(self.n_tiers))
+        assert sum(self.tier_config[i]['concurrency_size_cls'] * self.tier_config[i]['ranks'] for i in
+                   range(self.n_tiers)) == sum(
+            self.tier_config[i]['concurrency_size_pre'] * self.tier_config[i]['ranks'] for i in range(self.n_tiers))
 
-        assert sum(self.tier_config[i]['concurrency_size_cls']*self.tier_config[i]['ranks'] for i in range(self.n_tiers)) == sum(
-            self.tier_config[i]['concurrency_size_att']*self.tier_config[i]['ranks'] for i in range(self.n_tiers))
+        assert sum(self.tier_config[i]['concurrency_size_cls'] * self.tier_config[i]['ranks'] for i in
+                   range(self.n_tiers)) == sum(
+            self.tier_config[i]['concurrency_size_att'] * self.tier_config[i]['ranks'] for i in range(self.n_tiers))
 
-        assert sum(self.tier_config[i]['concurrency_size_cls']*self.tier_config[i]['ranks'] for i in range(self.n_tiers)) == sum(
-            self.tier_config[i]['concurrency_size_post']*self.tier_config[i]['ranks'] for i in range(self.n_tiers))
+        assert sum(self.tier_config[i]['concurrency_size_cls'] * self.tier_config[i]['ranks'] for i in
+                   range(self.n_tiers)) == sum(
+            self.tier_config[i]['concurrency_size_post'] * self.tier_config[i]['ranks'] for i in range(self.n_tiers))
 
         # For each tier, what is the next (slice, rank) to place the worker at.
         self._next_worker_loc = [{"slice": 0, "rank": 0} for _ in range(self.n_tiers)]
 
     def all_assigned(self) -> bool:
         for i_tier in range(self.n_tiers):
-            if self._next_worker_loc[i_tier]["slice"] < self.n_slices:
+            if (not self.faux and self._next_worker_loc[i_tier]["slice"] < self.n_slices) or (
+                    self.faux and self._next_worker_loc[i_tier]["slice"] == 0):
                 return False
         return True
 
