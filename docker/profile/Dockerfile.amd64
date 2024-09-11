@@ -33,4 +33,4 @@ RUN chmod +x /app/profile-fp16.bash
 COPY --from=0 /app/src/tools/profile.bash /app/profile-fp32.bash
 RUN sed -i 's/profile-stage/profile-stage-fp32/g' /app/profile-fp32.bash
 RUN chmod +x /app/profile-fp32.bash
-ENTRYPOINT ["/app/profile-fp16.bash"]
+ENTRYPOINT ["/app/profile-fp32.bash"]

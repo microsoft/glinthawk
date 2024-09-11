@@ -18,14 +18,18 @@ COPY . ./
 WORKDIR /app/build
 ENV CXX="g++-12" CC="gcc-12"
 RUN cmake -DCMAKE_BUILD_TYPE=Release -DGCC_TARGET_ARCH=znver2 ../src
-RUN cmake --build . --target profile-stage-cuda-fp16 -j$(nproc)
+RUN cmake --build . --target profile-stage-cuda-fp16 profile-stage-amd64-fp32 -j$(nproc)
 
 FROM nvidia/cuda:12.3.0-runtime-ubuntu22.04
 RUN apt-get update -qq
 RUN apt-get install -y libprotobuf23 libssl3 libgoogle-glog0v5 libgomp1
 WORKDIR /app
 COPY --from=0 /app/build/cuda/profile-stage-fp16 /app/profile-stage-fp16
+COPY --from=0 /app/build/amd64/profile-stage-fp32 /app/profile-stage-fp32
 COPY --from=0 /app/src/tools/profile.bash /app/profile-fp16.bash
 RUN sed -i 's/profile-stage/profile-stage-fp16/g' /app/profile-fp16.bash
 RUN chmod +x /app/profile-fp16.bash
+COPY --from=0 /app/src/tools/profile.bash /app/profile-fp32.bash
+RUN sed -i 's/profile-stage/profile-stage-fp32/g' /app/profile-fp32.bash
+RUN chmod +x /app/profile-fp32.bash
 ENTRYPOINT ["/app/profile-fp16.bash"]
