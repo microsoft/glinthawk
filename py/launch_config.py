@@ -158,6 +158,7 @@ async def main(**kwargs):
             assert len(f.readlines()) == config['tiers'][i]['ranks'] * config['n_slices']
 
     unique_run_id = str(uuid.uuid4())
+    logging.warning(f"RUN_ID: {unique_run_id}")
 
     os.makedirs(f"{kwargs['worker_log_path']}/{config['config_name']}/", exist_ok=True)
     os.makedirs(f"{kwargs['completion_log_path']}/{config['config_name']}/", exist_ok=True)
@@ -232,9 +233,6 @@ async def main(**kwargs):
         stats_log_file = f'stats_{unique_run_id}_{i}.csv'
         promptinfo_file = f'promptinfo_{unique_run_id}_{i}.csv'
 
-        logging.info(f'Worker stats logs: {stats_log_file}')
-        logging.info(f'Worker prompt info logs: {promptinfo_file}')
-
         docker_remote_common_args = [
             "--workers-file", f"{kwargs['config_path']}/remote.tier{i}.conf",
             "--mount-ro", f"{kwargs['dst_model_path']}/{model_name_to_dir[config['model_name']]}/", "/app/model",
@@ -298,6 +296,8 @@ async def main(**kwargs):
         await asyncio.gather(*tasks)
     except asyncio.CancelledError:
         logging.warning("Cancelled all processes.")
+
+    logging.warning(f"RUN_ID: {unique_run_id}")
 
 
 @click.command()
