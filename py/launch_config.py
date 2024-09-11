@@ -9,6 +9,7 @@ import shlex
 import signal
 import socket
 import sys
+import uuid
 from typing import List, Dict, Any
 
 import click
@@ -156,6 +157,8 @@ async def main(**kwargs):
         with open(f"{kwargs['config_path']}/remote.tier{i}.conf", "r") as f:
             assert len(f.readlines()) == config['tiers'][i]['ranks'] * config['n_slices']
 
+    unique_run_id = str(uuid.uuid4())
+
     os.makedirs(f"{kwargs['worker_log_path']}/{config['config_name']}/", exist_ok=True)
     os.makedirs(f"{kwargs['completion_log_path']}/{config['config_name']}/", exist_ok=True)
 
@@ -223,17 +226,32 @@ async def main(**kwargs):
         "-N", f"{num_dummies}",
         "-O", kwargs['completion_log_path']
     ])
+
     for i in range(len(config['tiers'])):
+        # XXX On a single node, we can't have multiple workers from the same tier
+        stats_log_file = f'stats_{unique_run_id}_{i}.csv'
+        promptinfo_file = f'promptinfo_{unique_run_id}_{i}.csv'
+
+        logging.info(f'Worker stats logs: {stats_log_file}')
+        logging.info(f'Worker prompt info logs: {promptinfo_file}')
+
+        docker_remote_common_args = [
+            "--workers-file", f"{kwargs['config_path']}/remote.tier{i}.conf",
+            "--mount-ro", f"{kwargs['dst_model_path']}/{model_name_to_dir[config['model_name']]}/", "/app/model",
+            "--mount-rw", "/tmp/telegraf.sock", "/tmp/telegraf.sock",
+            "--mount-rw", f"/tmp/", "/app/logs/",
+            "--env", f"_GLINTHAWK_LOCAL_STATS_FILE_", f"/app/logs/{stats_log_file}",
+            "--env", f"_GLINTHAWK_PROMPT_INFO_FILE_", f"/app/logs/{promptinfo_file}",
+        ]
+
         if config['tiers'][i]['platform'] == 'cuda':
             command = [
                 "python3",
                 "run-docker-remotes.py",
-                "--workers-file", f"{kwargs['config_path']}/remote.tier{i}.conf",
                 "--docker-options", "--runtime=nvidia",
                 "--docker-options", "--gpus all",
-                "--mount-ro", f"{kwargs['dst_model_path']}/{model_name_to_dir[config['model_name']]}/", "/app/model",
-                "--mount-rw", "/tmp/telegraf.sock", "/tmp/telegraf.sock",
-            ]
+            ] + docker_remote_common_args
+
             command += add_args(config, kwargs, add_workers=False)
             command += [
                 "glinthawk.azurecr.io/glinthawk-worker-cuda:latest",
@@ -250,12 +268,10 @@ async def main(**kwargs):
             command = [
                 "python3",
                 "run-docker-remotes.py",
-                "--workers-file", f"{kwargs['config_path']}/remote.tier{i}.conf",
                 "--docker-options", "--runtime=nvidia",
-                "--mount-ro", f"{kwargs['dst_model_path']}/{model_name_to_dir[config['model_name']]}/", "/app/model",
-                "--mount-rw", "/tmp/telegraf.sock", "/tmp/telegraf.sock",
                 "--docker-options", "--entrypoint /app/worker-amd64-fp32"
-            ]
+            ] + docker_remote_common_args
+
             command += add_args(config, kwargs, add_workers=False)
             command += [
                 "glinthawk.azurecr.io/glinthawk-worker-cuda:latest",
