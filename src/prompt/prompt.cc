@@ -68,8 +68,8 @@ std::string Prompt::to_csv() const
              : "";
   };
 
-  oss << id_.base58digest() << "," << temperature_ << "," << max_completion_length_ << "," << prompt_tokens_.count()
-      << "," << completion_tokens_.count() << "," << get_time( timing_info_.assigned ) << ","
+  oss << id_.base58digest() << "," << static_cast<int32_t>( temperature_ ) << "," << max_completion_length_ << ","
+      << prompt_tokens_.count() << "," << completion_tokens_.count() << "," << get_time( timing_info_.assigned ) << ","
       << get_time( timing_info_.prompt_started ) << "," << get_time( timing_info_.completion_started ) << ","
       << get_time( timing_info_.completion_finished ) << "," << timing_info_.token_time.count << ","
       << timing_info_.token_time.min << "," << timing_info_.token_time.max << "," << timing_info_.token_time.sum << ","
