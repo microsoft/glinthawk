@@ -22,11 +22,11 @@ logging.basicConfig(
 
 
 def get_ssh_command(
-        command: str,
-        worker_address: str,
-        ssh_user: str,
-        ssh_port: int = None,
-        ssh_key: str = None,
+    command: str,
+    worker_address: str,
+    ssh_user: str,
+    ssh_port: int = None,
+    ssh_key: str = None,
 ):
     ssh_command = [
         "ssh",
@@ -51,21 +51,20 @@ def get_ssh_command(
 
 
 def get_worker_command(
-        worker_address: str,
-        worker_port: int,
-        image_name: str,
-        image_args: list,
-        ssh_user: str,
-        ssh_port: int = None,
-        ssh_key: str = None,
-        **kwargs,
+    worker_address: str,
+    worker_port: int,
+    image_name: str,
+    image_args: list,
+    ssh_user: str,
+    ssh_port: int = None,
+    ssh_key: str = None,
+    **kwargs,
 ):
     container_name = (
-            "glinthawk-"
-            + hashlib.sha256(
-        (image_name + " ".join(image_args) + worker_address + str(worker_port)).encode()).hexdigest()[
-              :12
-              ]
+        "glinthawk-"
+        + hashlib.sha256((image_name + " ".join(image_args) + worker_address + str(worker_port)).encode()).hexdigest()[
+            :12
+        ]
     )
 
     docker_command = [
@@ -88,6 +87,9 @@ def get_worker_command(
 
     for src, dst in kwargs.get("mount_rw", []):
         docker_command += [f"--mount=type=bind,src={shlex.quote(src)},dst={shlex.quote(dst)}"]
+
+    for envar, value in kwargs.get("env", []):
+        docker_command += [f"-e={envar}={value}"]
 
     image_instance_args = list(image_args[:])
 
@@ -116,10 +118,16 @@ def get_worker_command(
 
 async def run_command(command, container_name, addr, port, log_stdout_dir=None, log_stderr_dir=None, **kwargs):
     try:
-        f_out = open(os.path.join(log_stdout_dir, f"{addr}-{port}.stdout.log"),
-                     "wb") if log_stdout_dir else asyncio.subprocess.DEVNULL
-        f_err = open(os.path.join(log_stderr_dir, f"{addr}-{port}.stderr.log"),
-                     "wb") if log_stderr_dir else asyncio.subprocess.DEVNULL
+        f_out = (
+            open(os.path.join(log_stdout_dir, f"{addr}-{port}.stdout.log"), "wb")
+            if log_stdout_dir
+            else asyncio.subprocess.DEVNULL
+        )
+        f_err = (
+            open(os.path.join(log_stderr_dir, f"{addr}-{port}.stderr.log"), "wb")
+            if log_stderr_dir
+            else asyncio.subprocess.DEVNULL
+        )
 
         process = await asyncio.create_subprocess_exec(
             *command,
@@ -194,7 +202,7 @@ async def main(**kwargs):
                 **kwargs,
             )
 
-            time_string = time.strftime('%Y-%m-%d-%H-%M-%S', time.gmtime())
+            time_string = time.strftime("%Y-%m-%d-%H-%M-%S", time.gmtime())
             log_std_out = kwargs.get("log_stdout")
             log_std_err = kwargs.get("log_stderr")
             if log_std_out:
@@ -240,6 +248,7 @@ async def main(**kwargs):
 )
 @click.option("--mount-ro", nargs=2, multiple=True, help="Mount a read-only volume.", required=False)
 @click.option("--mount-rw", nargs=2, multiple=True, help="Mount a read-write volume.", required=False)
+@click.option("--env", nargs=2, multiple=True, help="Environment variables.", required=False)
 @click.option(
     "--log-stdout", type=click.Path(dir_okay=True, file_okay=False, exists=True), help="Log stdouts.", required=False
 )
