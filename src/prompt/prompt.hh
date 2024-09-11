@@ -87,13 +87,13 @@ public:
       }
 
     private:
-      Timestamp last_token_time_;
+      Timestamp last_token_time_ {};
     } token_time;
 
-    Timestamp assigned;            // When the prompt was assigned to a worker
-    Timestamp prompt_started;      // When the first token of the prompt started being processed
-    Timestamp completion_started;  // When the first token of the completion started being processed (kinda TTFT)
-    Timestamp completion_finished; // When the last token of the completion finished being processed
+    Timestamp assigned {};            // When the prompt was assigned to a worker
+    Timestamp prompt_started {};      // When the first token of the prompt started being processed
+    Timestamp completion_started {};  // When the first token of the completion started being processed (kinda TTFT)
+    Timestamp completion_finished {}; // When the last token of the completion finished being processed
 
     void set_assigned() { assigned = Measurement::Clock::now(); }
     void set_prompt_started() { prompt_started = Measurement::Clock::now(); }
