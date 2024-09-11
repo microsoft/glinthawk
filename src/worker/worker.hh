@@ -804,6 +804,8 @@ void BatchedWorker<ModelConfig, ComputeKernel>::handle_batch_inference_state( Ba
         auto next_prompt_id = prompt_queue_.front();
         prompt_queue_.pop();
         auto& next_prompt = prompt_store_.get( next_prompt_id );
+        next_prompt.timing_info().set_prompt_started();
+
         state.set_prompt( i,
                           next_prompt_id,
                           state.context_id( i ),
