@@ -72,6 +72,7 @@ private:
   ModelData<Model> model_;
 
   EventFD event_fd_ {};
+  Measurement& __stats__ { global_measurement() };
   std::atomic<bool> running_ { true };
 
   // <context management>
@@ -179,17 +180,28 @@ void PipedComputeKernel<Model>::execution_thread_func(
 
     // run the corresponding forward function
     switch ( next_stage ) {
-      case Stage::PreAttention: model_data.model->forward_pre_attention( state ); break;
+      case Stage::PreAttention:
+        timeit<IntDistributions::KernelPreAttentionForwardTime>(
+          __stats__, [&] { model_data.model->forward_pre_attention( state ); } );
+        break;
 
       case Stage::Attention: {
         std::unique_lock lock { context_mutex_ };
         auto& contexts = context_map_[local_id];
         lock.unlock();
-        model_data.model->forward_attention( state, contexts );
+        timeit<IntDistributions::KernelAttentionForwardTime>(
+          __stats__, [&] { model_data.model->forward_attention( state, contexts ); } );
       } break;
 
-      case Stage::PostAttention: model_data.model->forward_post_attention( state ); break;
-      case Stage::Classification: model_data.model->forward_classify( state ); break;
+      case Stage::PostAttention:
+        timeit<IntDistributions::KernelPostAttentionForwardTime>(
+          __stats__, [&] { model_data.model->forward_post_attention( state ); } );
+        break;
+
+      case Stage::Classification:
+        timeit<IntDistributions::KernelClassificationForwardTime>(
+          __stats__, [&] { model_data.model->forward_classify( state ); } );
+        break;
       default: LOG( FATAL ) << "Invalid stage: " << state.next_stage(); break;
     }
 
