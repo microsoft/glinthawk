@@ -3,16 +3,16 @@
       "num": 80,
       "cost": 900,
       "rtt_ms": 2,
-      "cap_Gbps": 2,
+      "cap_Gbps": 8,
       "mem_GiB": 16
   },
   "tier_2":  {
-    "num": 80,
+    "num": 40,
     "cost": 200,
     "rtt_ms": 2,
-    "cap_Gbps": 2,
+    "cap_Gbps": 8,
     "mem_GiB": 110
     },
   "inter_tier_rtt_ms": 2,
-  "inter_tier_cap_Gbps": 2
+  "inter_tier_cap_Gbps": 8
 }
