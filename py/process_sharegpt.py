@@ -1,57 +1,47 @@
 #!/usr/bin/env python3
 
-import os
-import sys
 import json
 import logging
-import hashlib
-import base58
+import os
+from typing import List, Tuple
+
 import click
+import numpy as np
+from tqdm.auto import tqdm
 
 from common.tokenizer import Tokenizer
 
-from google.protobuf.json_format import MessageToDict, MessageToJson
-from protobuf import glinthawk_pb2 as pb
-
 logging.basicConfig(level=logging.INFO)
 
-DEFAULTS_PROMPTS_PER_FILE = 2**16
 B_INST, E_INST = ("[INST]", "[/INST]")
-B_SYS, E_SYS = ("<<SYS>>\n", "\n<</SYS>>\n\n")
 
 
-def create_chat_prompt(tokenizer, user_message, system_message, temperature):
-    prompt_text = ""
+def preprocess_json(tokenizer: Tokenizer, file: str) -> Tuple[List[int], List[int]]:
+    with open(file, "r") as f:
+        prompts = json.load(f)
 
-    if system_message:
-        prompt_text = f"{B_INST} {B_SYS} {system_message.strip()} {E_SYS} {user_message.strip()} {E_INST}"
-    else:
-        prompt_text = f"{B_INST} {user_message.strip()} {E_INST}"
+    input_lengths = []
+    output_lengths = []
 
-    entry = pb.Prompt()
-    entry.id = ""
-    entry.prompt.extend(tokenizer.encode(prompt_text, prepend_bos=True, append_eos=False))
-    entry.temperature = int(255 * temperature)
-    entry.prompt_text = prompt_text
+    for chat in tqdm(prompts):
+        if len(chat['conversations']) < 2:
+            continue
+        if chat['conversations'][0]['from'] != 'human':
+            continue
+        if chat['conversations'][1]['from'] != 'gpt':
+            continue
 
-    entry.id = base58.b58encode(hashlib.sha256(MessageToJson(entry).encode()).digest()).decode()
-    return entry
+        human_msg = chat['conversations'][0]['value']
+        prompt_text = f"{B_INST} {human_msg.strip()} {E_INST}"
+        new_in_len = len(tokenizer.encode(prompt_text, prepend_bos=True, append_eos=False))
+        input_lengths.append(new_in_len)
 
+        gpt_msg = chat['conversations'][1]['value']
+        result_text = f"{gpt_msg.strip()}"
+        new_out_len = len(tokenizer.encode(result_text, prepend_bos=False, append_eos=True))
+        output_lengths.append(new_out_len)
 
-def preprocess_slice(tokenizer, files, output_name, system_message, temperature, max_seq_length):
-    with open(output_name, "w") as fout:
-        for f in files:
-            with open(f, "r") as g:
-                text = g.read()
-
-            entry = create_chat_prompt(tokenizer, text, system_message, temperature)
-
-            if len(entry.prompt) > max_seq_length:
-                logging.warning(f"Skipping {f} due to excessive length ({len(entry.prompt)} > {max_seq_length}).")
-                continue
-
-            entry.user_data = f
-            fout.write(json.dumps(MessageToDict(entry), indent=None, separators=(",", ":")) + "\n")
+    return input_lengths, output_lengths
 
 
 @click.command()
@@ -60,59 +50,42 @@ def preprocess_slice(tokenizer, files, output_name, system_message, temperature,
     "--input-dir",
     required=True,
     type=click.Path(exists=True, file_okay=False, dir_okay=True),
-    help="A directory containing text files (.txt), one prompt per file.",
+    help="A directory containing the ShareGPT json files (.json).",
 )
 @click.option(
     "--output-dir",
     required=True,
     type=click.Path(),
-    help="Output directory for the preprocessed prompts.",
+    help="Output directory for the preprocessed prompt distribution.",
 )
-@click.option("--prompts-per-file", type=int, default=DEFAULTS_PROMPTS_PER_FILE)
-@click.option("--temperature", type=float, default=0)
-@click.option(
-    "--system-message",
-    type=click.Path(exists=True, file_okay=True, dir_okay=False),
-    default=None,
-    help="A text file containing a system message to prepend to each prompt.",
-)
-@click.option("--max-seq-length", type=int, default=2048)
 def main(
-    tokenizer_path,
-    input_dir,
-    output_dir,
-    prompts_per_file,
-    temperature,
-    system_message,
-    max_seq_length,
+        tokenizer_path,
+        input_dir,
+        output_dir,
 ):
-    files = [os.path.join(input_dir, x) for x in os.listdir(input_dir) if x.endswith(".txt")]
+    files = [os.path.join(input_dir, x) for x in os.listdir(input_dir) if x.endswith(".json")]
     if len(files) == 0:
-        logging.error(f"No .txt files found in {input_dir}.")
+        logging.error(f"No .json files found in {input_dir}.")
         return
-
-    system_message_str = None
-    if system_message is not None:
-        with open(system_message, "r") as f:
-            system_message_str = f.read().strip()
 
     os.makedirs(output_dir, exist_ok=True)
 
-    f_idx = 0
     tokenizer = Tokenizer(tokenizer_path)
 
-    for i in range(0, len(files), prompts_per_file):
-        files_slice = files[i : i + prompts_per_file]
-        preprocess_slice(
+    input_len = []
+    output_len = []
+
+    for i in range(len(files)):
+        input_len_this_file, output_len_this_file = preprocess_json(
             tokenizer,
-            files_slice,
-            os.path.join(output_dir, f"prompts_{f_idx}.jsonl"),
-            system_message_str,
-            temperature,
-            max_seq_length,
+            files[i],
         )
 
-        f_idx += 1
+        input_len.extend(input_len_this_file)
+        output_len.extend(output_len_this_file)
+
+    len_arr = np.c_[input_len, output_len]
+    np.save(f"{output_dir}/full_len.npy", len_arr)
 
 
 if __name__ == "__main__":
