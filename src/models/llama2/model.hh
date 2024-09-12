@@ -453,7 +453,10 @@ void Llama2<Config, DType, LlamaOperations, Context>::forward_prelude( StateType
 
   for ( size_t i = 0; i < contexts.size(); i++ ) {
     // TODO: Make sure empty contexts do not clash with DynamicContext
-    CHECK( contexts[i]->prepare( next_layer_batch, states.token_pos( i ) + 1 ) );
+    CHECK(
+      contexts[i]->prepare( next_layer_batch,
+                            states.token_pos( i ) + 1,
+                            ( states.token_pos( i ) == 0 && settings().first_layer_served == next_layer_batch ) ) );
 
     this->scratchpad_.batch_token_positions[i] = states.token_pos( i );
     this->scratchpad_.batch_layer_contexts[i] = contexts[i]->layer( next_layer_batch );
@@ -542,7 +545,9 @@ void Llama2<Config, DType, LlamaOperations, Context>::forward( StateType& states
     for ( size_t i = 0; i < contexts.size(); i++ ) {
       // make sure the context is allocated
       // TODO: Make sure empty contexts do not clash with DynamicContext
-      CHECK( contexts[i]->prepare( layer_num, states.token_pos( i ) + 1 ) );
+      CHECK( contexts[i]->prepare( layer_num,
+                                   states.token_pos( i ) + 1,
+                                   ( states.token_pos( i ) == 0 && settings().first_layer_served == layer_num ) ) );
 
       this->scratchpad_.batch_layer_contexts[i] = contexts[i]->layer( layer_num );
       this->scratchpad_.batch_token_contexts[i] = contexts[i]->layer( layer_num ).token( states.token_pos( i ) );
@@ -613,7 +618,10 @@ void Llama2<Config, DType, LlamaOperations, Context>::forward_attention( StateTy
 
   for ( size_t i = 0; i < states.batch_size(); i++ ) {
     // TODO: Make sure empty contexts do not clash with DynamicContext
-    CHECK( contexts[i]->prepare( states.next_layer(), states.token_pos( i ) ) );
+    CHECK(
+      contexts[i]->prepare( states.next_layer(),
+                            states.token_pos( i ),
+                            ( states.token_pos( i ) == 0 && settings().first_layer_served == states.next_layer() ) ) );
 
     this->scratchpad_.batch_token_positions[i] = states.token_pos( i );
     this->scratchpad_.batch_layer_contexts[i] = contexts[i]->layer( states.next_layer() );

@@ -59,11 +59,14 @@ struct ConfigRuntime
 
   const std::array<std::array<bool, util::to_underlying( models::InferenceStage::__COUNT__ )>, Config::n_layers>
     hosting_table_;
+
   std::array<bool, util::to_underlying( models::InferenceStage::__COUNT__ )> hosting_stage_table_ {};
   const uint64_t concurrency_limit { 1 };    // max concurrent inference size
   const uint64_t max_context_count { 1 };    // max number of contexts
   size_t num_attention_layers_hosted_ { 0 }; // how many attention layers are supported
   bool randomize_parameters { false };
+
+  uint32_t first_layer_served {};
 };
 
 class Vocabulary
@@ -294,6 +297,17 @@ ConfigRuntime<Config>::ConfigRuntime(
   for ( size_t j = 0; j < Config::n_layers; j++ ) {
     if ( hosting_table_[j][util::to_underlying( models::InferenceStage::Attention )] ) {
       num_attention_layers_hosted_++;
+    }
+  }
+
+  bool first_layer_found = false;
+  for ( size_t i = 0; i < Config::n_layers && not first_layer_found; i++ ) {
+    for ( size_t j = 0; j < util::to_underlying( models::InferenceStage::__COUNT__ ); j++ ) {
+      if ( hosting_table_[i][j] ) {
+        first_layer_served = i;
+        first_layer_found = true;
+        break;
+      }
     }
   }
 

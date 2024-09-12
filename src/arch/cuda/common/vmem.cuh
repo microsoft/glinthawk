@@ -155,6 +155,8 @@ public:
 
   void* ptr() const { return reinterpret_cast<void*>( dptr_ ); }
   size_t max_len() const { return max_len_; }
+
+  void clear() { physical_regions_.clear(); }
 };
 
 } // namespace glinthawk::models::common::cuda

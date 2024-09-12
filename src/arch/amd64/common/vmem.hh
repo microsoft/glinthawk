@@ -74,6 +74,8 @@ public:
 
   void* ptr() const { return virtual_region_.addr(); }
   size_t max_len() const { return virtual_region_.length(); }
+
+  void clear() { physical_regions_.clear(); }
 };
 
 } // namespace glinthawk::models::common::amd64

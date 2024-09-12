@@ -38,7 +38,7 @@ template<typename T, typename DType>
 concept ContextConcept = LayerContextConcept<typename T::LayerContextType, DType>
                          && TokenContextConcept<typename T::TokenContextType, DType> && requires( T t ) {
                               { T() };
-                              { t.prepare( 0ull, 0ull ) } -> std::same_as<bool>;
+                              { t.prepare( 0ull, 0ull, false ) } -> std::same_as<bool>;
                               { t.layer( 0ull ) } -> std::same_as<typename T::LayerContextType>;
                               { t.empty() } -> std::same_as<bool>;
                               { T::max_size( 0ull ) } -> std::same_as<size_t>;
@@ -160,7 +160,13 @@ public:
   // This function is always called before processing a state, with the current layer number
   // and token position. For dynamic contexts that allocate memory differently, this function
   // should be overridden. Returns true on success, false otherwise.
-  bool prepare( [[maybe_unused]] const size_t layer_num, [[maybe_unused]] const size_t token_pos ) { return true; }
+  // `can_release` is true if the context can release memory allocated for the previous state.
+  bool prepare( [[maybe_unused]] const size_t layer_num,
+                [[maybe_unused]] const size_t token_pos,
+                [[maybe_unused]] const bool can_release )
+  {
+    return true;
+  }
 
   LayerContextType layer( const int layer_num ) const { return layer_buffer_[layer_num]; }
 
@@ -212,12 +218,17 @@ public:
 
   ~DynamicContext() {}
 
-  bool prepare( const size_t layer_num, const size_t token_pos )
+  bool prepare( const size_t layer_num, const size_t token_pos, const bool can_release )
   {
     if ( Context<Config, DType>::empty() ) {
       return true;
     }
     constexpr size_t BLOCK_SIZE = 2 * 1024 * 1024; // 2 MiB
+
+    if ( can_release ) {
+      storage_->clear();
+      layer_allocated_offsets_.fill( 0 );
+    }
 
     // we need to make sure that for this layer and this token, there is memory allocated
     const auto layer = this->layer( layer_num );
