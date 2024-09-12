@@ -643,7 +643,6 @@ bool BatchedWorker<ModelConfig, ComputeKernel>::handle_coordinator_message( core
 
           // TODO: either use uint32_t directly instead of ContextID, or require some add-ability concept.
           next_context_id_++;
-          added_prompt_count++;
         }
 
         this->tier_router_->push( std::move( state ) );
@@ -691,7 +690,6 @@ bool BatchedWorker<ModelConfig, ComputeKernel>::handle_coordinator_message( core
                             -1,
                             0 );
           next_context_id_++;
-          added_prompt_count++;
         }
 
         this->tier_router_->push( std::move( state ) );
@@ -759,10 +757,10 @@ void BatchedWorker<ModelConfig, ComputeKernel>::handle_batch_inference_state( Ba
   if ( state.next_layer() == 0 and state.next_stage() == models::InferenceStage::PreAttention and first_parent_ ) {
     /* first worker in the chain */
     for ( size_t i = 0; i < state.batch_size(); i++ ) {
-      const auto& prompt_id = state.prompt_id( i );
-      auto& prompt = prompt_store_.get( prompt_id );
-
       if ( state.active( i ) ) {
+        const auto& prompt_id = state.prompt_id( i );
+        auto& prompt = prompt_store_.get( prompt_id );
+
         // Have we finished processing the prompt?
         if ( state.token_pos( i ) == state.prompt_length( i ) ) {
           prompt.timing_info().set_completion_started(); // TTFT
