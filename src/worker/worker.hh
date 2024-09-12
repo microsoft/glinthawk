@@ -768,13 +768,15 @@ void BatchedWorker<ModelConfig, ComputeKernel>::handle_batch_inference_state( Ba
 
         if ( state.token_pos( i ) >= state.prompt_length( i ) ) {
           // prompt processing has already finished, and this is a generated token
-          prompt.timing_info().token_time.add_point();
+          prompt.timing_info().token_output_time.add_point();
 
           __stats__.increment<Counters::TokensGenerated>();
           prompt.completion().append( state.token( i ) );
 
         } else {
           __stats__.increment<Counters::TokensProcessed>();
+
+          prompt.timing_info().token_input_time.add_point();
           // we are still processing the prompt tokens; the next token comes directly from the prompt
           const auto next_token = prompt.prompt().at( state.token_pos( i ) );
           state.set_token( i, next_token );

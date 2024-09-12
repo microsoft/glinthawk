@@ -54,7 +54,7 @@ public:
   {
     using Timestamp = std::optional<Measurement::Clock::time_point>;
 
-    struct TimePerOutputToken
+    struct TimePerToken
     {
       uint64_t count { 0 };
       uint64_t min { std::numeric_limits<uint64_t>::max() };
@@ -69,9 +69,9 @@ public:
           return;
         }
 
-        const auto v
-          = std::chrono::duration_cast<std::chrono::microseconds>( Measurement::Clock::now() - *last_token_time_ )
-              .count();
+        const auto now = Measurement::Clock::now();
+
+        const auto v = std::chrono::duration_cast<std::chrono::microseconds>( now - *last_token_time_ ).count();
 
         if ( v < 0 ) {
           throw std::runtime_error( "my time machine worked" );
@@ -84,11 +84,13 @@ public:
         max = std::max( max, value );
         sum += value;
         sum_of_squares += value * value;
+
+        last_token_time_ = now;
       }
 
     private:
       Timestamp last_token_time_ {};
-    } token_time;
+    } token_input_time, token_output_time;
 
     Timestamp assigned {};            // When the prompt was assigned to a worker
     Timestamp prompt_started {};      // When the first token of the prompt started being processed

@@ -55,7 +55,8 @@ string Prompt::to_json() const
 std::string Prompt::csv_header()
 {
   return "id,temperature,max_completion_length,prompt_tokens,completion_tokens,assigned,prompt_started,completion_"
-         "started,completion_finished,tpot_count,tpot_min,tpot_max,tpot_sum,tpot_sum_of_squares";
+         "started,completion_finished,tpot_count,tpot_min,tpot_max,tpot_sum,tpot_sum_of_squares,tpit_count,tpit_min,"
+         "tpit_max,tpit_sum,tpit_sum_of_squares";
 }
 
 std::string Prompt::to_csv() const
@@ -71,9 +72,12 @@ std::string Prompt::to_csv() const
   oss << id_.base58digest() << "," << static_cast<int32_t>( temperature_ ) << "," << max_completion_length_ << ","
       << prompt_tokens_.count() << "," << completion_tokens_.count() << "," << get_time( timing_info_.assigned ) << ","
       << get_time( timing_info_.prompt_started ) << "," << get_time( timing_info_.completion_started ) << ","
-      << get_time( timing_info_.completion_finished ) << "," << timing_info_.token_time.count << ","
-      << timing_info_.token_time.min << "," << timing_info_.token_time.max << "," << timing_info_.token_time.sum << ","
-      << timing_info_.token_time.sum_of_squares;
+      << get_time( timing_info_.completion_finished ) << "," << timing_info_.token_output_time.count << ","
+      << timing_info_.token_output_time.min << "," << timing_info_.token_output_time.max << ","
+      << timing_info_.token_output_time.sum << "," << timing_info_.token_output_time.sum_of_squares << ","
+      << timing_info_.token_input_time.count << "," << timing_info_.token_input_time.min << ","
+      << timing_info_.token_input_time.max << "," << timing_info_.token_input_time.sum << ","
+      << timing_info_.token_input_time.sum_of_squares;
 
   return oss.str();
 }
