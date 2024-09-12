@@ -1,6 +1,7 @@
 import asyncio
 import datetime
 import enum
+import hashlib
 import json
 import logging
 import os
@@ -9,6 +10,8 @@ import time
 from signal import SIGINT, SIGTERM
 from typing import List
 
+import base58
+import numpy as np
 import rich
 from common.message import Message
 from google.protobuf.json_format import MessageToDict
@@ -83,6 +86,9 @@ class Coordinator:
 
         self.load_prompts(self.prompt_dir, self.output_dir)
 
+        self.dataset = kwargs.get("dataset")
+        self.load_dataset(self.dataset)
+
         self.state = Coordinator.State.Running
         self.start_time = datetime.datetime.now()
 
@@ -137,6 +143,37 @@ class Coordinator:
         self.logger.info(
             f"Loaded {loaded_count} prompt{'s' if loaded_count != 1 else ''} from {prompt_dir} ({size_bytes / 1024 / 1024:.2f} MiB)."
         )
+
+    def load_dataset(self, dataset_path: str) -> None:
+        if not dataset_path:
+            return
+
+        rng = np.random.RandomState(seed=1234)
+        all_dataset = np.load(dataset_path)
+
+        # num_prompts = 1.5 * sum(tier['ranks'] * tier['max_context_count'] for tier in self.model.tier_config)
+        # num_prompts = math.ceil(num_prompts / 1024) * 1024
+        self.logger.warning("I've hardcoded number of dataset prompts for debugging!")
+        num_prompts = 12800
+
+        idx = rng.choice(all_dataset.shape[0], size=num_prompts)
+        self.dataset = all_dataset[idx]
+
+        self.logger.info(
+            f"Going to send {num_prompts} prompts, with {self.dataset[:, 0].sum()} input tokens and "
+            f"{self.dataset[:, 1].sum()} output tokens for a total of {self.dataset.sum()} tokens!")
+
+        for i in range(self.dataset.shape[0]):
+            entry = protobuf.Prompt()
+            entry.id = base58.b58encode(hashlib.sha256(f"{i}".encode()).digest()).decode()
+            entry.temperature = 255
+            entry.max_tokens = self.dataset[i, 1]
+            entry.prompt[:] = [0] * self.dataset[i, 0]
+            entry.completion[:] = []
+            entry.prompt_text = ""
+            entry.user_data = ""
+
+            self.prompt_queue.append(entry)
 
     def make_prompt_from_json(self, jsondata: str) -> protobuf.Prompt:
         data = json.loads(jsondata)
@@ -259,7 +296,7 @@ class Coordinator:
                 worker.handshake_status = Worker.Handshake.RouteAssigned
 
                 if all(w_.handshake_status == Worker.Handshake.RouteAssigned for w_ in
-                       self.workers) and self.initial_dummy_count:
+                       self.workers) and self.initial_dummy_count > 0:
                     # Telling the first worker to generate dummy prompts
                     self.push_message(
                         self.first_worker,
@@ -270,6 +307,17 @@ class Coordinator:
                     )
 
                     self.generated_dummies += self.initial_dummy_count
+                elif all(w_.handshake_status == Worker.Handshake.RouteAssigned for w_ in
+                         self.workers) and len(self.prompt_queue) > 0:
+                    while len(self.prompt_queue) > 0:
+                        proto = protobuf.PushPrompts()
+
+                        while len(proto.prompts) < self.prompt_batch_size and len(self.prompt_queue) > 0:
+                            proto.prompts.append(self.prompt_queue.pop(0))
+                            self.assigned_prompts += 1
+
+                        self.logger.warning(f"Sending {len(proto.prompts)} prompts to the first worker.")
+                        self.push_message(self.first_worker, Message.OpCode.PushPrompts, proto)
 
             elif message.opcode == Message.OpCode.PushCompletions:
                 proto = protobuf.PushCompletions()

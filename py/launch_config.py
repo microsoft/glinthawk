@@ -229,17 +229,20 @@ async def main(**kwargs):
 
     tasks = []
 
-    num_dummies = 2 * sum(
-        config['tiers'][i]['ranks'] * config['tiers'][i]['max_context_count'] for i in range(len(config['tiers'])))
-    num_dummies = math.ceil(num_dummies / 1024) * 1024
-
     tasks.append([
         "python3",
         "run.py",
         "-C", f"{kwargs['config_path']}/coord.json",
-        "-N", f"{num_dummies}",
         "-O", kwargs['completion_log_path']
     ])
+
+    if kwargs['dataset']:
+        tasks[-1].extend(["--dataset", kwargs['dataset']])
+    else:
+        num_dummies = 2 * sum(tier['ranks'] * tier['max_context_count'] for tier in config['tiers'])
+        num_dummies = math.ceil(num_dummies / 1024) * 1024
+        tasks[-1].extend(["-N", f"{num_dummies}"])
+
 
     if kwargs['faux']:
         tasks[-1].append("--faux")
@@ -342,6 +345,8 @@ async def main(**kwargs):
 @click.option("--pull-image", is_flag=True, help="Pull the docker image.")
 @click.option("--reboot", is_flag=True, help="Reboot the machines.")
 @click.option("--faux", is_flag=True, help="Do a microbenchmark with one slice.")
+@click.option("--dataset", help="Path to a prompt input/output length dataset.",
+              type=click.Path(exists=True, file_okay=True, dir_okay=False))
 def start(**kwargs):
     """This program runs an inference session with a given config."""
     asyncio.run(main(**kwargs))
