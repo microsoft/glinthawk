@@ -204,10 +204,19 @@ public:
                                         storage_.has_value() ? reinterpret_cast<DType*>( storage_->ptr() ) : nullptr );
   }
 
+  DynamicContext()
+    : Context<Config, DType>()
+    , storage_( std::nullopt )
+  {
+  }
+
   ~DynamicContext() {}
 
   bool prepare( const size_t layer_num, const size_t token_pos )
   {
+    if ( Context<Config, DType>::empty() ) {
+      return true;
+    }
     constexpr size_t BLOCK_SIZE = 2 * 1024 * 1024; // 2 MiB
 
     // we need to make sure that for this layer and this token, there is memory allocated
