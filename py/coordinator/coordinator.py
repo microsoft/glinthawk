@@ -309,15 +309,13 @@ class Coordinator:
                     self.generated_dummies += self.initial_dummy_count
                 elif all(w_.handshake_status == Worker.Handshake.RouteAssigned for w_ in
                          self.workers) and len(self.prompt_queue) > 0:
+                    proto = protobuf.PushPrompts()
                     while len(self.prompt_queue) > 0:
-                        proto = protobuf.PushPrompts()
+                        proto.prompts.append(self.prompt_queue.pop(0))
+                        self.assigned_prompts += 1
 
-                        while len(proto.prompts) < self.prompt_batch_size and len(self.prompt_queue) > 0:
-                            proto.prompts.append(self.prompt_queue.pop(0))
-                            self.assigned_prompts += 1
-
-                        self.logger.warning(f"Sending {len(proto.prompts)} prompts to the first worker.")
-                        self.push_message(self.first_worker, Message.OpCode.PushPrompts, proto)
+                    self.logger.warning(f"Sending {len(proto.prompts)} prompts to the first worker.")
+                    self.push_message(self.first_worker, Message.OpCode.PushPrompts, proto)
 
             elif message.opcode == Message.OpCode.PushCompletions:
                 proto = protobuf.PushCompletions()
