@@ -62,6 +62,8 @@ private:
     std::unique_ptr<M> model;
     PreallocatingContextManager<M> context_manager;
     const NodeConcurrency concurrency;
+    const bool can_fuse_to_pre;
+    const bool can_fuse_to_cls;
 
     StatePriorityQueue processing {};
     std::mutex mutex {};
@@ -103,6 +105,10 @@ PipedComputeKernel<Model>::ModelData<M>::ModelData( std::unique_ptr<M>&& in_mode
   : model( std::move( in_model ) )
   , context_manager( model->settings() )
   , concurrency( in_concurrency )
+  , can_fuse_to_pre( concurrency.get( models::InferenceStage::PostAttention )
+                     == concurrency.get( models::InferenceStage::PreAttention ) )
+  , can_fuse_to_cls( concurrency.get( models::InferenceStage::PostAttention )
+                     == concurrency.get( models::InferenceStage::Classification ) )
 {
 }
 
@@ -194,8 +200,9 @@ void PipedComputeKernel<Model>::execution_thread_func(
       } break;
 
       case Stage::PostAttention:
-        timeit<IntDistributions::KernelPostAttentionForwardTime>(
-          __stats__, [&] { model_data.model->forward_post_attention( state ); } );
+        timeit<IntDistributions::KernelPostAttentionForwardTime>( __stats__, [&] {
+          model_data.model->forward_post_attention( state, model_data.can_fuse_to_pre, model_data.can_fuse_to_cls );
+        } );
         break;
 
       case Stage::Classification:

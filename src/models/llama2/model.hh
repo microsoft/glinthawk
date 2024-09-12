@@ -64,7 +64,7 @@ public:
   void forward_attention( StateType& state, const ContextVector& ctxs );
 
   template<StateConcept StateType>
-  void forward_post_attention( StateType& state );
+  void forward_post_attention( StateType& state, const bool fuse_to_pre, const bool fuse_to_cls );
 
   template<StateConcept StateType>
   void forward_classify( StateType& state );
@@ -720,7 +720,9 @@ void Llama2<Config, DType, LlamaOperations, Context>::forward_attention( StateTy
 
 template<typename Config, typename DType, typename LlamaOperations, typename Context>
 template<StateConcept StateType>
-void Llama2<Config, DType, LlamaOperations, Context>::forward_post_attention( StateType& states )
+void Llama2<Config, DType, LlamaOperations, Context>::forward_post_attention( StateType& states,
+                                                                              const bool fuse_to_pre,
+                                                                              const bool fuse_to_cls )
 {
   this->check_batch( states, {}, InferenceStage::PostAttention );
   this->scratchpad_.curr_concurrency_size = states.batch_size();
@@ -736,7 +738,48 @@ void Llama2<Config, DType, LlamaOperations, Context>::forward_post_attention( St
              CopyType::HostToDevice );
 
   post_attention_ops( states.next_layer() );
-  forward_postlude( states, states.next_layer(), /* classification done? */ false );
+
+  if ( fuse_to_cls and states.next_layer() == Config::n_layers - 1
+       and this->instance_config_.hosts( states.next_layer(), InferenceStage::Classification ) ) {
+    classify_ops();
+    forward_postlude( states, states.next_layer(), /* classification done? */ true );
+  } else if ( fuse_to_pre and states.next_layer() < Config::n_layers - 1
+              and this->instance_config_.hosts( states.next_layer() + 1, InferenceStage::PreAttention ) ) {
+    pre_attention_ops( states.next_layer() );
+
+    if ( not states.has_activations() ) {
+      states.allocate_activations();
+    }
+
+    if ( not states.has_queries() ) {
+      states.allocate_queries();
+    }
+
+    if ( not states.has_kvs() ) {
+      states.allocate_kvs();
+    }
+
+    ops_.copy( reinterpret_cast<DType*>( states.activations().data() ),
+               this->scratchpad_.x,
+               states.activations().len(),
+               CopyType::DeviceToHost );
+
+    ops_.copy( reinterpret_cast<DType*>( states.queries().data() ),
+               this->scratchpad_.q,
+               states.queries().len(),
+               CopyType::DeviceToHost );
+
+    // XXX(sadjad): Copying KV is not always necessary (i.e., if context[i]->empty()), but for convenience we always do
+    // it
+    ops_.copy( reinterpret_cast<DType*>( states.kvs().data() ),
+               this->scratchpad_.kv,
+               states.kvs().len(),
+               CopyType::DeviceToHost );
+
+    states.set_next_stage( InferenceStage::Attention );
+  } else {
+    forward_postlude( states, states.next_layer(), /* classification done? */ false );
+  }
 }
 
 template<typename Config, typename DType, typename LlamaOperations, typename Context>
