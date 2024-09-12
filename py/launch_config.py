@@ -116,7 +116,9 @@ def get_ssh_command(
     return ssh_command
 
 
-async def run_command(command) -> int:
+async def run_command(command, delay: float = 0) -> int:
+    if delay > 0:
+        await asyncio.sleep(delay)
     try:
         process = await asyncio.create_subprocess_exec(
             *command,
@@ -313,7 +315,9 @@ async def main(**kwargs):
             return
         tasks.append(command)
 
-    tasks = [run_command(t) for t in tasks]
+    delays = [3 for _ in tasks]
+    delays[0] = 0
+    tasks = [run_command(t, d) for t, d in zip(tasks, delays)]
 
     logging.info(f"Coordinator and {len(tasks) - 1} tier(s) started.")
     logging.info("Press Ctrl+C to stop all processes.")
