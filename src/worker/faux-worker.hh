@@ -1,7 +1,7 @@
 #pragma once
 
-#include "worker.hh"
 #include "monitoring/measurement.hh"
+#include "worker.hh"
 
 namespace glinthawk::core {
 
@@ -62,10 +62,7 @@ void FauxBatchedWorker<ModelConfig, ComputeKernel>::handle_tier_router_event()
       // Move token position and check for finish
       for ( size_t i = 0; i < state.batch_size(); i++ ) {
         state.set_token_pos( i, state.token_pos( i ) + 1 );
-        if ( state.token( i ) == ModelConfig::token_eos or state.token( i ) == ModelConfig::token_eot
-             or state.token_pos( i ) >= ModelConfig::seq_len
-             or ( state.max_completion_length( i ) > 0
-                  and state.token_pos( i ) >= state.max_completion_length( i ) + state.prompt_length( i ) ) ) {
+        if ( state.check_finished( i ) ) {
           // Discarding the prompt entry is left to the caller, we just set the finished flag here
           state.set_finished( i );
         }

@@ -12,13 +12,6 @@
 
 namespace glinthawk::models {
 
-// TODO(pouya): double check if tier_rank is implemented correctly. (this file is huge!).
-// TODO(pouya): double check if is_sharded implemented correctly.
-// TODO(pouya): double check if merge_states is implemented correctly.
-// TODO(pouya): double check if split_states is implemented correctly.
-// TODO(pouya): double check if context_id is implemented correctly.
-// TODO(pouya): design a lazy merge.
-// TODO(pouya): revamp soft_split to be optimal for TierRouter.
 // TODO(pouya): design a transactional merge/split state
 
 struct __attribute__( ( packed ) ) StateMetadata
@@ -45,8 +38,6 @@ struct __attribute__( ( packed ) ) PromptData
   bool active { false };
 
   PromptID prompt_id {};
-  // TODO(pouya): should context id be made non-copyable?
-  // TODO(pouya): should context id be made const?
   ContextID context_id {};
   uint32_t token {};
   uint32_t token_pos {};
@@ -101,6 +92,7 @@ concept StateConcept = requires( T state, const T cstate, const std::string cstr
   { state.prompt_length( 0 ) } -> std::same_as<uint32_t>;
   { state.max_completion_length( 0 ) } -> std::same_as<uint32_t>;
   { state.temperature( 0 ) } -> std::same_as<float>;
+  { state.check_finished( 0 ) } -> std::same_as<bool>;
   { state.finished( 0 ) } -> std::same_as<bool>;
   { state.kv_tier( 0 ) } -> std::same_as<int8_t>;
   { state.kv_rank( 0 ) } -> std::same_as<uint8_t>;
@@ -307,6 +299,8 @@ public:
   void deallocate_queries();
   void deallocate_kvs();
 
+  bool check_finished( const size_t i ) const;
+
   size_t free_slots() const;
 
   /// @brief Replace the inactive prompts in the current state with the active prompts from the other state.
@@ -482,6 +476,8 @@ public:
   void deallocate_queries() { state_.deallocate_queries(); }
   void deallocate_kvs() { state_.deallocate_kvs(); }
 
+  bool check_finished( const size_t i ) const;
+
   size_t free_slots() const { return state_.free_slots(); }
 
   bool replenish_from( BatchedInferenceStateSpan& other ) { throw std::runtime_error( "not available" ); }
@@ -621,6 +617,18 @@ void BatchedInferenceState<Config>::set_prompt( const size_t i,
   prompts_[i].kv_tier = kv_tier;
   prompts_[i].kv_rank = kv_rank;
 }
+
+template<typename Config>
+bool BatchedInferenceState<Config>::check_finished( const size_t i ) const
+{
+  const bool saw_end_tokens = prompts_[i].max_completion_length == 0
+                              and ( prompts_[i].token == Config::token_eos or prompts_[i].token == Config::token_eot );
+  const bool out_of_seq = prompts_[i].token_pos >= Config::seq_len;
+  const bool end_of_gen_len
+    = prompts_[i].max_completion_length > 0
+      and prompts_[i].token_pos >= prompts_[i].max_completion_length + prompts_[i].prompt_length;
+  return saw_end_tokens or out_of_seq or end_of_gen_len;
+};
 
 template<typename Config>
 void BatchedInferenceState<Config>::discard( const size_t i )
@@ -1065,22 +1073,14 @@ template<typename Config>
 std::string BatchedInferenceState<Config>::debug_string( const bool prompt_details ) const
 {
   std::ostringstream oss;
-  oss << "BatchedInferenceState("
-      << "local_id=" << metadata_.id << ", "
-      << "batch_size=" << metadata_.batch_size << ", "
-      << "dtype=" << metadata_.dtype << ", "
-      << "route_id=" << metadata_.route_id << ", "
-      << "model_id=" << metadata_.model_id << ", "
-      << "next_layer=" << metadata_.next_layer << ", "
-      << "next_stage=" << metadata_.next_stage << ", "
-      << "next_tier=" << static_cast<int>( metadata_.next_tier ) << ", "
-      << "next_rank=" << static_cast<int>( metadata_.next_rank ) << ", "
-      << "has_activations=" << metadata_.has_activations << ", "
-      << "activations.len=" << activations_.len() << ", "
-      << "has_queries=" << metadata_.has_queries << ", "
-      << "queries.len=" << queries_.len() << ", "
-      << "has_kvs=" << metadata_.has_kvs << ", "
-      << "kvs.len=" << kvs_.len() << ", "
+  oss << "BatchedInferenceState(" << "local_id=" << metadata_.id << ", " << "batch_size=" << metadata_.batch_size
+      << ", " << "dtype=" << metadata_.dtype << ", " << "route_id=" << metadata_.route_id << ", "
+      << "model_id=" << metadata_.model_id << ", " << "next_layer=" << metadata_.next_layer << ", "
+      << "next_stage=" << metadata_.next_stage << ", " << "next_tier=" << static_cast<int>( metadata_.next_tier )
+      << ", " << "next_rank=" << static_cast<int>( metadata_.next_rank ) << ", "
+      << "has_activations=" << metadata_.has_activations << ", " << "activations.len=" << activations_.len() << ", "
+      << "has_queries=" << metadata_.has_queries << ", " << "queries.len=" << queries_.len() << ", "
+      << "has_kvs=" << metadata_.has_kvs << ", " << "kvs.len=" << kvs_.len() << ", "
       << "is_sharded=" << metadata_.is_sharded << ", ";
 
   if ( prompt_details ) {
