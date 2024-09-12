@@ -687,7 +687,7 @@ bool BatchedWorker<ModelConfig, ComputeKernel>::handle_coordinator_message( core
                             0,
                             prompt.temperature(),
                             prompt.prompt().count(),
-                            0,
+                            prompt.max_completion_length(),
                             -1,
                             0 );
           next_context_id_++;
@@ -813,7 +813,7 @@ void BatchedWorker<ModelConfig, ComputeKernel>::handle_batch_inference_state( Ba
                           0,
                           next_prompt.temperature(),
                           next_prompt.prompt().count(),
-                          0,
+                          next_prompt.max_completion_length(),
                           state.kv_tier( i ),
                           state.kv_rank( i ) );
       }

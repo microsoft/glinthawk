@@ -19,7 +19,7 @@ Prompt Prompt::from_protobuf( const protobuf::Prompt& message )
 {
   return { util::digest::SHA256Hash::from_base58digest( message.id() ),
            static_cast<uint8_t>( message.temperature() ),
-           1024,
+           message.max_tokens(),
            vector<uint32_t> { message.prompt().begin(), message.prompt().end() } };
 }
 
