@@ -22,14 +22,14 @@ enum class StatType
 
 enum class Counters
 {
-//  PromptsStarted,
+  //  PromptsStarted,
   PromptsCompleted,
   TokensProcessed,
   TokensGenerated,
-//  StatesSent,
+  //  StatesSent,
   StatesReceived,
   StatesProcessed,
-//  StatesGenerated,
+  //  StatesGenerated,
 
   _Count,
 };
@@ -37,76 +37,76 @@ enum class Counters
 enum class IntDistributions
 {
   PromptLength,
-//  PromptLatency,
-//  InNodeLatency,
-//  InNetLatency,
+  //  PromptLatency,
+  //  InNodeLatency,
+  //  InNetLatency,
   KernelForwardTime,
   KernelPreAttentionForwardTime,
   KernelAttentionForwardTime,
   KernelPostAttentionForwardTime,
   KernelClassificationForwardTime,
 
-//  PreInference2WorkerTimeBatch,
-//  PreWorker2SerializeTimeBatch,
-//  PreSerialize2AttWorkerTimeBatch,
-//  AttWorker2KernelIncomingTimeBatch,
-//  AttKernelIncoming2ContextTimeBatch,
-//  AttKernelContext2BatchingTimeBatch,
-//
-//  AttInference2WorkerTimeBatch,
-//  AttWorker2SerializeTimeBatch,
-//  AttSerialize2PostWorkerTimeBatch,
-//  PostWorker2KernelIncomingTimeBatch,
-//  PostKernelIncoming2BatchingTimeBatch,
-//
-//  PostInference2WorkerTimeBatch,
-//  PostWorker2SerializeTimeBatch,
-//
-//  ClsInference2WorkerTimeBatch,
-//  ClsWorker2SerializeTimeBatch,
-//
-//  PreWorker2KernelIncomingTime,
-//  PreKernelIncoming2BatchingTime,
-//  PreInference2WorkerTime,
-//  PreWorker2SerializeTime,
-//
-//  PreSerialize2AttWorkerTime,
-//
-//  AttWorker2KernelIncomingTime,
-//  AttKernelIncoming2ContextTime,
-//  AttKernelContext2BatchingTime,
-//  AttInference2WorkerTime,
-//  AttWorker2SerializeTime,
-//
-//  AttSerialize2PostWorkerTime,
-//
-//  PostWorker2KernelIncomingTime,
-//  PostKernelIncoming2BatchingTime,
-//  PostInference2WorkerTime,
-//  PostWorker2SerializeTime,
-//
-//  ClsWorker2KernelIncomingTime,
-//  ClsKernelIncoming2BatchingTime,
-//  ClsInference2WorkerTime,
-//  ClsWorker2SerializeTime,
-//
-//  PreSerialize2AttWorkerVarTime,
-//  AttSerialize2PostWorkerVarTime,
-//  PostSerialize2ClsWorkerVarTime,
-//  ClsSerialize2PreWorkerVarTime,
-//
-//  IncomingQueue,
-//  WaitingQueue,
-//  OutgoingQueue,
-//
-//  ProcessingPreAttentionQueue,
-//  ProcessingAttentionQueue,
-//  ProcessingPostAttentionQueue,
-//  ProcessingClassificationQueue,
-//
-//  AllocatedContexts,
-//  FreeContexts,
-//  EmptyContexts,
+  //  PreInference2WorkerTimeBatch,
+  //  PreWorker2SerializeTimeBatch,
+  //  PreSerialize2AttWorkerTimeBatch,
+  //  AttWorker2KernelIncomingTimeBatch,
+  //  AttKernelIncoming2ContextTimeBatch,
+  //  AttKernelContext2BatchingTimeBatch,
+  //
+  //  AttInference2WorkerTimeBatch,
+  //  AttWorker2SerializeTimeBatch,
+  //  AttSerialize2PostWorkerTimeBatch,
+  //  PostWorker2KernelIncomingTimeBatch,
+  //  PostKernelIncoming2BatchingTimeBatch,
+  //
+  //  PostInference2WorkerTimeBatch,
+  //  PostWorker2SerializeTimeBatch,
+  //
+  //  ClsInference2WorkerTimeBatch,
+  //  ClsWorker2SerializeTimeBatch,
+  //
+  //  PreWorker2KernelIncomingTime,
+  //  PreKernelIncoming2BatchingTime,
+  //  PreInference2WorkerTime,
+  //  PreWorker2SerializeTime,
+  //
+  //  PreSerialize2AttWorkerTime,
+  //
+  //  AttWorker2KernelIncomingTime,
+  //  AttKernelIncoming2ContextTime,
+  //  AttKernelContext2BatchingTime,
+  //  AttInference2WorkerTime,
+  //  AttWorker2SerializeTime,
+  //
+  //  AttSerialize2PostWorkerTime,
+  //
+  //  PostWorker2KernelIncomingTime,
+  //  PostKernelIncoming2BatchingTime,
+  //  PostInference2WorkerTime,
+  //  PostWorker2SerializeTime,
+  //
+  //  ClsWorker2KernelIncomingTime,
+  //  ClsKernelIncoming2BatchingTime,
+  //  ClsInference2WorkerTime,
+  //  ClsWorker2SerializeTime,
+  //
+  //  PreSerialize2AttWorkerVarTime,
+  //  AttSerialize2PostWorkerVarTime,
+  //  PostSerialize2ClsWorkerVarTime,
+  //  ClsSerialize2PreWorkerVarTime,
+  //
+  //  IncomingQueue,
+  //  WaitingQueue,
+  //  OutgoingQueue,
+  //
+  //  ProcessingPreAttentionQueue,
+  //  ProcessingAttentionQueue,
+  //  ProcessingPostAttentionQueue,
+  //  ProcessingClassificationQueue,
+  //
+  //  AllocatedContexts,
+  //  FreeContexts,
+  //  EmptyContexts,
 
   _Count
 };
@@ -124,84 +124,87 @@ enum class Ratios
 namespace {
 
 constexpr std::array<std::string_view, static_cast<size_t>( Counters::_Count )> counter_keys {
-//  "prompts_started",
-  "prompts_completed", "tokens_processed", "tokens_generated",
-//  "states_sent",
-  "states_received",   "states_processed",
-//  "states_generated",
+  //  "prompts_started",
+  "prompts_completed",
+  "tokens_processed",
+  "tokens_generated",
+  //  "states_sent",
+  "states_received",
+  "states_processed",
+  //  "states_generated",
 };
 
 constexpr std::array<std::string_view, static_cast<size_t>( IntDistributions::_Count )> int_dist_keys {
   "prompt_length",
-//  "prompt_latency",
-//  "in_node_latency",
-//  "in_net_latency",
+  //  "prompt_latency",
+  //  "in_node_latency",
+  //  "in_net_latency",
   "kernel_forward_time",
   "kernel_pre_attention_forward_time",
   "kernel_attention_forward_time",
   "kernel_post_attention_forward_time",
   "kernel_classification_forward_time",
 
-//  "pre_inference_to_worker_time_batch",
-//  "pre_worker_to_serialize_time_batch",
-//  "pre_serialize_to_att_worker_time_batch",
-//  "att_worker_to_kernel_incoming_time_batch",
-//  "att_kernel_incoming_to_context_time_batch",
-//  "att_context_to_batching_time_batch",
-//
-//  "att_inference_to_worker_time_batch",
-//  "att_worker_to_serialize_time_batch",
-//  "att_serialize_to_post_worker_time_batch",
-//  "post_worker_to_kernel_incoming_time_batch",
-//  "post_kernel_incoming_to_batching_time_batch",
-//
-//  "post_inference_to_worker_time_batch",
-//  "post_worker_to_serialize_time_batch",
-//
-//  "classification_inference_to_worker_time_batch",
-//  "classification_worker_to_serialize_time_batch",
-//
-//  "pre_worker_to_kernel_incoming_time",
-//  "pre_kernel_incoming_to_batching_time",
-//  "pre_inference_to_worker_time",
-//  "pre_worker_to_serialize_time",
-//
-//  "pre_serialize_to_att_worker_time",
-//
-//  "att_worker_to_kernel_incoming_time",
-//  "att_kernel_incoming_to_context_time",
-//  "att_context_to_batching_time",
-//  "att_inference_to_worker_time",
-//  "att_worker_to_serialize_time",
-//
-//  "att_serialize_to_post_worker_time",
-//
-//  "post_worker_to_kernel_incoming_time",
-//  "post_kernel_incoming_to_batching_time",
-//  "post_inference_to_worker_time",
-//  "post_worker_to_serialize_time",
-//
-//  "classification_worker_to_kernel_incoming_time",
-//  "classification_kernel_incoming_to_batching_time",
-//  "classification_inference_to_worker_time",
-//  "classification_worker_to_serialize_time",
-//
-//  "pre_serialize_to_att_worker_var_time",
-//  "att_serialize_to_post_worker_var_time",
-//  "post_serialize_to_cls_worker_var_time",
-//  "cls_serialize_to_pre_worker_var_time",
-//
-//  "incoming_queue",
-//  "waiting_queue",
-//  "outgoing_queue",
-//  "processing_pre_attention_queue",
-//  "processing_attention_queue",
-//  "processing_post_attention_queue",
-//  "processing_classification_queue",
-//
-//  "allocated_contexts",
-//  "free_contexts",
-//  "empty_contexts",
+  //  "pre_inference_to_worker_time_batch",
+  //  "pre_worker_to_serialize_time_batch",
+  //  "pre_serialize_to_att_worker_time_batch",
+  //  "att_worker_to_kernel_incoming_time_batch",
+  //  "att_kernel_incoming_to_context_time_batch",
+  //  "att_context_to_batching_time_batch",
+  //
+  //  "att_inference_to_worker_time_batch",
+  //  "att_worker_to_serialize_time_batch",
+  //  "att_serialize_to_post_worker_time_batch",
+  //  "post_worker_to_kernel_incoming_time_batch",
+  //  "post_kernel_incoming_to_batching_time_batch",
+  //
+  //  "post_inference_to_worker_time_batch",
+  //  "post_worker_to_serialize_time_batch",
+  //
+  //  "classification_inference_to_worker_time_batch",
+  //  "classification_worker_to_serialize_time_batch",
+  //
+  //  "pre_worker_to_kernel_incoming_time",
+  //  "pre_kernel_incoming_to_batching_time",
+  //  "pre_inference_to_worker_time",
+  //  "pre_worker_to_serialize_time",
+  //
+  //  "pre_serialize_to_att_worker_time",
+  //
+  //  "att_worker_to_kernel_incoming_time",
+  //  "att_kernel_incoming_to_context_time",
+  //  "att_context_to_batching_time",
+  //  "att_inference_to_worker_time",
+  //  "att_worker_to_serialize_time",
+  //
+  //  "att_serialize_to_post_worker_time",
+  //
+  //  "post_worker_to_kernel_incoming_time",
+  //  "post_kernel_incoming_to_batching_time",
+  //  "post_inference_to_worker_time",
+  //  "post_worker_to_serialize_time",
+  //
+  //  "classification_worker_to_kernel_incoming_time",
+  //  "classification_kernel_incoming_to_batching_time",
+  //  "classification_inference_to_worker_time",
+  //  "classification_worker_to_serialize_time",
+  //
+  //  "pre_serialize_to_att_worker_var_time",
+  //  "att_serialize_to_post_worker_var_time",
+  //  "post_serialize_to_cls_worker_var_time",
+  //  "cls_serialize_to_pre_worker_var_time",
+  //
+  //  "incoming_queue",
+  //  "waiting_queue",
+  //  "outgoing_queue",
+  //  "processing_pre_attention_queue",
+  //  "processing_attention_queue",
+  //  "processing_post_attention_queue",
+  //  "processing_classification_queue",
+  //
+  //  "allocated_contexts",
+  //  "free_contexts",
+  //  "empty_contexts",
 };
 
 constexpr std::array<std::string_view, static_cast<size_t>( FloatDistributions::_Count )> float_dist_keys {};
@@ -432,7 +435,13 @@ public:
       result << "_num,";
     }
 
-    return result.str();
+    auto header_str = result.str();
+
+    if ( header_str.ends_with( ',' ) ) {
+      header_str.pop_back();
+    }
+
+    return header_str;
   }
 
   std::string to_csv() const
