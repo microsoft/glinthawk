@@ -122,11 +122,7 @@ void BatchedComputeKernel<Model>::execution_thread_func( std::stop_token stoken 
       processing_.pop();
     }
 
-    const auto start = std::chrono::steady_clock::now();
-    model_->forward( state, contexts );
-    const auto duration
-      = std::chrono::duration_cast<std::chrono::microseconds>( std::chrono::steady_clock::now() - start );
-    __stats__.add_point<IntDistributions::KernelForwardTime>( duration.count() );
+    timeit<IntDistributions::KernelForwardTime>( __stats__, [&] { model_->forward( state, contexts ); } );
 
     {
       std::lock_guard lock( outgoing_mutex_ );
