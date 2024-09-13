@@ -254,9 +254,6 @@ async def main(**kwargs):
         stats_log_file = f'stats_{unique_run_id}_{i}.csv'
         promptinfo_file = f'promptinfo_{unique_run_id}_{i}.csv'
 
-        worker_name = config['tiers'][i].get('worker', 'worker-cuda-fp16' if i == 0 else 'worker-amd64-fp32')
-        latency = config['tiers'][i].get('latency', 0) # added outbound latency
-
         docker_remote_common_args = [
             "--workers-file", f"{kwargs['config_path']}/remote.tier{i}.conf",
             "--mount-ro", f"{kwargs['dst_model_path']}/{model_name_to_dir[config['model_name']]}/", "/app/model",
@@ -266,11 +263,6 @@ async def main(**kwargs):
             "--env", f"_GLINTHAWK_PROMPT_INFO_FILE_", f"/app/logs/{promptinfo_file}",
         ]
 
-        if latency > 0:
-            docker_remote_common_args += [
-                "--env", "_GLINTHAWK_OUTBOUND_LATENCY_", str(latency),
-            ]
-
         if config['tiers'][i]['platform'] == 'cuda':
             command = [
                 "python3",
@@ -278,14 +270,14 @@ async def main(**kwargs):
                 "--docker-options", "--runtime=nvidia",
                 "--docker-options", "--gpus all",
             ] + docker_remote_common_args
-
             if kwargs['faux']:
-                worker_name = f'faux-{worker_name}'
+                command += ["--docker-options", "--entrypoint /app/faux-worker-cuda-fp16"]
+            else:
+                command += ["--docker-options", "--entrypoint /app/worker-cuda-fp16"]
 
             command += add_args(config, kwargs, add_workers=False)
             command += [
                 "glinthawk.azurecr.io/glinthawk-worker-cuda:latest",
-                worker_name,
                 "/app/model/",
                 f"{config['model_name']}",
                 f"{config['tiers'][i]['kernel']}",
@@ -301,14 +293,14 @@ async def main(**kwargs):
                 "run-docker-remotes.py",
                 "--docker-options", "--runtime=nvidia",
             ] + docker_remote_common_args
-
             if kwargs['faux']:
-                worker_name = f'faux-{worker_name}'
+                command += ["--docker-options", "--entrypoint /app/faux-worker-amd64-fp32"]
+            else:
+                command += ["--docker-options", "--entrypoint /app/worker-amd64-fp32"]
 
             command += add_args(config, kwargs, add_workers=False)
             command += [
                 "glinthawk.azurecr.io/glinthawk-worker-cuda:latest",
-                worker_name,
                 "/app/model/",
                 f"{config['model_name']}",
                 f"{config['tiers'][i]['kernel']}",
