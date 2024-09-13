@@ -14,11 +14,11 @@ LISTEN_PORT=$3
 COORD_IP=$4
 COORD_PORT=$5
 
-EXTRA_OUTBOUND_LATENCY=${EXTRA_OUTBOUND_LATENCY:-0}
+_GLINTHAWK_OUTBOUND_LATENCY_=${_GLINTHAWK_OUTBOUND_LATENCY_:-0}
 
-if [ "$EXTRA_OUTBOUND_LATENCY" -ne 0 ]; then
-  echo "Adding $EXTRA_OUTBOUND_LATENCY ms of latency to all outbound traffic..."
-  tc qdisc add dev eth0 root netem delay ${EXTRA_OUTBOUND_LATENCY}ms
+if [ "$_GLINTHAWK_OUTBOUND_LATENCY_" -ne 0 ]; then
+  echo "Adding $_GLINTHAWK_OUTBOUND_LATENCY_ ms of latency to all outbound traffic..."
+  tc qdisc add dev eth0 root netem delay ${_GLINTHAWK_OUTBOUND_LATENCY_}ms
 fi
 
 /app/$WORKER_NAME $MODEL_DIR $LISTEN_IP $LISTEN_PORT $COORD_IP $COORD_PORT
