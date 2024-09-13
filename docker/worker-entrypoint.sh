@@ -2,8 +2,8 @@
 
 ## This script is supposed to run inside the container
 
-if [ "$#" -
-  echo "Usage: $0 <worker_name> <model_path> <model_name> <kernel_name> (paged|static) <listen_ip> <listen_port> <coordinator_ip> <coordinator_port>
+if [ "$#" -ne 9 ]; then
+  echo "Usage: $0 <worker_name> <model_path> <model_name> <kernel_name> (paged|static) <listen_ip> <listen_port> <coordinator_ip> <coordinator_port>"
   exit 1
 fi
 
@@ -19,8 +19,10 @@ COORD_PORT=$9
 
 _GLINTHAWK_OUTBOUND_LATENCY_=${_GLINTHAWK_OUTBOUND_LATENCY_:-0}
 
-if [ "$_GLINTHAWK_OUTBOUND_LATENCY_" -ne 0 ]; then
-  echo "Adding $_GLINTHAWK_OUTBOUND_LATENCY_ ms of latency to all outbound traffic..."
+tc qdisc del dev eth0 root netem || true
+
+if [ "${_GLINTHAWK_OUTBOUND_LATENCY_}" -ne 0 ]; then
+  echo "Adding ${_GLINTHAWK_OUTBOUND_LATENCY_} ms of latency to all outbound traffic..."
   tc qdisc add dev eth0 root netem delay ${_GLINTHAWK_OUTBOUND_LATENCY_}ms
 fi
 
