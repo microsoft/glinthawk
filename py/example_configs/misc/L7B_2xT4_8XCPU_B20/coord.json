@@ -7,6 +7,7 @@
   "n_slices": 2,
   "tiers": [
     {
+      "worker": "worker-cuda-fp16",
       "kernel": "simple_piped",
       "platform": "cuda",
       "context": "paged",
@@ -15,9 +16,11 @@
       "concurrency_size_att": 4,
       "concurrency_size_post": 20,
       "concurrency_size_cls": 20,
-      "max_context_count": 18
+      "max_context_count": 18,
+      "latency": 0
     },
     {
+      "worker": "worker-amd64-fp32",
       "kernel": "simple_piped",
       "platform": "amd64",
       "context": "paged",
@@ -26,7 +29,8 @@
       "concurrency_size_att": 4,
       "concurrency_size_post": 0,
       "concurrency_size_cls": 0,
-      "max_context_count": 25
+      "max_context_count": 25,
+      "latency": 10
     }
   ],
   "separate_cls_tiers": []
