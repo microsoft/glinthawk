@@ -751,6 +751,8 @@ void Llama2<Config, DType, LlamaOperations, Context>::forward_post_attention( St
     forward_postlude( states, states.next_layer(), /* classification done? */ true );
   } else if ( fuse_to_pre and states.next_layer() < Config::n_layers - 1
               and this->instance_config_.hosts( states.next_layer() + 1, InferenceStage::PreAttention ) ) {
+    states.set_next_layer( states.next_layer() + 1 );
+
     pre_attention_ops( states.next_layer() );
 
     if ( not states.has_activations() ) {
