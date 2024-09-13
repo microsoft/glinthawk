@@ -73,6 +73,10 @@ class Model:
         # For each tier, what is the next (slice, rank) to place the worker at.
         self._next_worker_loc = [{"slice": 0, "rank": 0} for _ in range(self.n_tiers)]
 
+    @property
+    def in_flight_prompts(self):
+        return sum(tier['ranks'] * tier['max_context_count'] for tier in self.tier_config)
+
     def all_assigned(self) -> bool:
         for i_tier in range(self.n_tiers):
             if (not self.faux and self._next_worker_loc[i_tier]["slice"] < self.n_slices) or (

@@ -151,7 +151,7 @@ class Coordinator:
         rng = np.random.RandomState(seed=1234)
         all_dataset = np.load(dataset_path)
 
-        # num_prompts = 1.5 * sum(tier['ranks'] * tier['max_context_count'] for tier in self.model.tier_config)
+        # num_prompts = 1.5 * self.model.in_flight_prompts
         # num_prompts = math.ceil(num_prompts / 1024) * 1024
         # self.logger.warning("I've hardcoded number of dataset prompts for debugging!")
         # num_prompts = 4450
@@ -164,6 +164,10 @@ class Coordinator:
         self.logger.info(
             f"Going to send {self.dataset.shape[0]} prompts, with {self.dataset[:, 0].sum()} input tokens and "
             f"{self.dataset[:, 1].sum()} output tokens for a total of {self.dataset.sum()} tokens!")
+
+        self.logger.info(
+            f"On average, that is {self.dataset[:, 0].sum() / self.dataset.shape[0]:.1f} input tokens/prompt and "
+            f"{self.dataset[:, 1].sum() / self.dataset.shape[0]:.1f} output tokens/prompt!")
 
         for i in range(self.dataset.shape[0]):
             entry = protobuf.Prompt()
@@ -326,8 +330,18 @@ class Coordinator:
 
                 if self.initial_dummy_count:
                     self.completed_dummies += len(proto.completions)
+
+                    if self.completed_dummies % self.model.in_flight_prompts == 0:
+                        self.logger.info(
+                            f"Finished {self.completed_dummies // self.model.in_flight_prompts} "
+                            f"set(s) of in_flight prompts.")
                 else:
                     self.completed_prompts += len(proto.completions)
+
+                    if self.completed_prompts % self.model.in_flight_prompts == 0:
+                        self.logger.info(
+                            f"Finished {self.completed_prompts // self.model.in_flight_prompts} "
+                            f"set(s) of in_flight prompts.")
 
                 for completion in proto.completions:
                     self.completion_queue.put_nowait(completion)
@@ -455,6 +469,13 @@ class Coordinator:
                         ),
                     )
                     grid.add_row(
+                        "Tokens(D)",
+                        Text(
+                            f"in completed prompts: {self.input_token_dummies / (self.completed_dummies + 1e-5):.1f} inputs/prompt, "
+                            f"{self.output_token_dummies / (self.completed_dummies + 1e-5):.1f} outputs/prompt",
+                        ),
+                    )
+                    grid.add_row(
                         "Throughput(D)",
                         Text(
                             f"{self.output_token_dummies / elapsed_time.total_seconds():.0f} tk/s",
@@ -473,6 +494,13 @@ class Coordinator:
                         Text(
                             f"in completed prompts: {self.input_token_prompts} inputs, "
                             f"{self.output_token_prompts} outputs",
+                        ),
+                    )
+                    grid.add_row(
+                        "Tokens(R)",
+                        Text(
+                            f"in completed prompts: {self.input_token_prompts / (self.completed_prompts + 1e-5):.1f} inputs/prompt, "
+                            f"{self.output_token_prompts / (self.completed_prompts + 1e-5):.1f} outputs/prompt",
                         ),
                     )
                     grid.add_row(
