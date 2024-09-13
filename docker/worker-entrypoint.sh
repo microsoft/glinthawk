@@ -2,17 +2,20 @@
 
 ## This script is supposed to run inside the container
 
-if [ "$#" -ne 6 ]; then
-  echo "Usage: $0 <worker_name> <model_dir> <listen_port> <coord_ip> <coord_port>"
+if [ "$#" -
+  echo "Usage: $0 <worker_name> <model_path> <model_name> <kernel_name> (paged|static) <listen_ip> <listen_port> <coordinator_ip> <coordinator_port>
   exit 1
 fi
 
 WORKER_NAME=$1
 MODEL_DIR=$2
+MODEL_NAME=$3
+KERNEL_NAME=$4
+PAGING_STRATEGY=$5
 LISTEN_IP=$(hostname -I | awk '{print $1}')
-LISTEN_PORT=$3
-COORD_IP=$4
-COORD_PORT=$5
+LISTEN_PORT=$7
+COORD_IP=$8
+COORD_PORT=$9
 
 _GLINTHAWK_OUTBOUND_LATENCY_=${_GLINTHAWK_OUTBOUND_LATENCY_:-0}
 
@@ -21,4 +24,4 @@ if [ "$_GLINTHAWK_OUTBOUND_LATENCY_" -ne 0 ]; then
   tc qdisc add dev eth0 root netem delay ${_GLINTHAWK_OUTBOUND_LATENCY_}ms
 fi
 
-/app/$WORKER_NAME $MODEL_DIR $LISTEN_IP $LISTEN_PORT $COORD_IP $COORD_PORT
+/app/$WORKER_NAME $MODEL_DIR $MODEL_NAME $KERNEL_NAME $PAGING_STRATEGY $LISTEN_IP $LISTEN_PORT $COORD_IP $COORD_PORT
