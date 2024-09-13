@@ -24,10 +24,8 @@ FROM nvidia/cuda:12.3.0-runtime-ubuntu22.04
 RUN apt-get update -qq
 RUN apt-get install -y libprotobuf23 libssl3 libgoogle-glog0v5 libgomp1
 WORKDIR /app
-COPY ./docker/worker-entrypoint.sh /app/worker-entrypoint.sh
 COPY --from=0 /app/build/cuda/worker-fp16 /app/worker-cuda-fp16
 COPY --from=0 /app/build/amd64/worker-fp32 /app/worker-amd64-fp32
 COPY --from=0 /app/build/cuda/faux-worker-fp16 /app/faux-worker-cuda-fp16
 COPY --from=0 /app/build/amd64/faux-worker-fp32 /app/faux-worker-amd64-fp32
-
-ENTRYPOINT ["/app/worker-entrypoint.sh"]
+ENTRYPOINT ["/app/worker-cuda-fp16"]
