@@ -285,7 +285,7 @@ async def main(**kwargs):
                 "__addr__",
                 "__port__",
                 socket.gethostbyname(socket.gethostname()),
-                "3020",
+                config['listen_port'],
             ]
         elif config['tiers'][i]['platform'] == 'amd64':
             command = [
@@ -308,7 +308,7 @@ async def main(**kwargs):
                 "__addr__",
                 "__port__",
                 socket.gethostbyname(socket.gethostname()),
-                "3020",
+                config['listen_port'],
             ]
         else:
             print(f"Platform {config['tiers'][i]['platform']} not supported right now")
