@@ -435,13 +435,7 @@ public:
       result << "_num,";
     }
 
-    auto header_str = result.str();
-
-    if ( header_str.ends_with( ',' ) ) {
-      header_str.pop_back();
-    }
-
-    return header_str;
+    return result.str();
   }
 
   std::string to_csv() const
