@@ -1,0 +1,22 @@
+{
+  "config_name": "L70B_27xT4_B23",
+  "model_name": "llama2-70b-chat",
+  "listen_address": "0.0.0.0",
+  "listen_port": "3021",
+  "n_layers": 80,
+  "n_slices": 27,
+  "tiers": [
+    {
+      "kernel": "batched",
+      "platform": "cuda",
+      "context": "paged",
+      "ranks": 1,
+      "concurrency_size_pre": 23,
+      "concurrency_size_att": 23,
+      "concurrency_size_post": 23,
+      "concurrency_size_cls": 23,
+      "max_context_count": 736
+    }
+  ],
+  "separate_cls_tiers": []
+}
