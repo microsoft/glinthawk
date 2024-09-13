@@ -153,14 +153,16 @@ class Coordinator:
 
         # num_prompts = 1.5 * sum(tier['ranks'] * tier['max_context_count'] for tier in self.model.tier_config)
         # num_prompts = math.ceil(num_prompts / 1024) * 1024
-        self.logger.warning("I've hardcoded number of dataset prompts for debugging!")
-        num_prompts = 12800
+        # self.logger.warning("I've hardcoded number of dataset prompts for debugging!")
+        # num_prompts = 4450
 
-        idx = rng.choice(all_dataset.shape[0], size=num_prompts)
-        self.dataset = all_dataset[idx]
+        # idx = rng.choice(all_dataset.shape[0], size=num_prompts)
+        # self.dataset = all_dataset[idx]
+        self.dataset = all_dataset[all_dataset[:, 0] + all_dataset[:, 1] < 2048]
+        rng.shuffle(self.dataset)
 
         self.logger.info(
-            f"Going to send {num_prompts} prompts, with {self.dataset[:, 0].sum()} input tokens and "
+            f"Going to send {self.dataset.shape[0]} prompts, with {self.dataset[:, 0].sum()} input tokens and "
             f"{self.dataset[:, 1].sum()} output tokens for a total of {self.dataset.sum()} tokens!")
 
         for i in range(self.dataset.shape[0]):
