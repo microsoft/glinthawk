@@ -276,6 +276,7 @@ async def main(**kwargs):
                 command += ["--docker-options", "--entrypoint /app/worker-cuda-fp16"]
 
             if config['tiers'][i]['latency']:
+                logging.warning(f"Inducing latency of {config['tiers'][i]['latency']} ms for tier {i}")
                 command += ["--env", "_GLINTHAWK_INDUCED_DELAY_", str(config['tiers'][i]['latency'])]
 
             command += add_args(config, kwargs, add_workers=False)
@@ -302,6 +303,7 @@ async def main(**kwargs):
                 command += ["--docker-options", "--entrypoint /app/worker-amd64-fp32"]
 
             if config['tiers'][i]['latency']:
+                logging.warning(f"Inducing latency of {config['tiers'][i]['latency']} ms for tier {i}")
                 command += ["--env", "_GLINTHAWK_INDUCED_DELAY_", str(config['tiers'][i]['latency'])]
 
             command += add_args(config, kwargs, add_workers=False)
