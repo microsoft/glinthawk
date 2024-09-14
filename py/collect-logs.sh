@@ -9,6 +9,7 @@ config_dir=$1
 job_uuid=$2
 output_dir=$3
 ssh_key=${4:-~/.ssh/id_rsa}
+type=${5:-"normal"}
 
 mkdir -p $output_dir
 
@@ -20,7 +21,15 @@ do
 
   remotes=$(cat "$config_dir/remote.tier${tier}.conf" | cut -d' ' -f1)
 
-  echo $remotes | tr ' ' '\n' | xargs -t -P16 -I% scp -i ${ssh_key} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -r glinthawk@%:/tmp/stats_${job_uuid}_${tier}.csv $output_dir/stats_%_${tier}.csv
+  if [ ${type} == "faux" ]; then
+    echo $remotes | tr ' ' '\n' | xargs -t -P16 -I% sh -c "scp -i ${ssh_key} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -r glinthawk@%:/tmp/stats_${job_uuid}_${tier}.csv ${output_dir}/stats_%_${tier}.csv || exit 0"
 
-  echo $remotes | tr ' ' '\n' | xargs -t -P16 -I% scp -i ${ssh_key} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -r glinthawk@%:/tmp/promptinfo_${job_uuid}_${tier}.csv $output_dir/promptinfo_%_${tier}.csv
+    echo $remotes | tr ' ' '\n' | xargs -t -P16 -I% sh -c "scp -i ${ssh_key} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -r glinthawk@%:/tmp/promptinfo_${job_uuid}_${tier}.csv ${output_dir}/promptinfo_%_${tier}.csv || exit 0"
+  else
+
+    echo $remotes | tr ' ' '\n' | xargs -t -P16 -I% scp -i ${ssh_key} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -r glinthawk@%:/tmp/stats_${job_uuid}_${tier}.csv $output_dir/stats_%_${tier}.csv
+
+    echo $remotes | tr ' ' '\n' | xargs -t -P16 -I% scp -i ${ssh_key} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -r glinthawk@%:/tmp/promptinfo_${job_uuid}_${tier}.csv $output_dir/promptinfo_%_${tier}.csv
+  fi
+
 done
