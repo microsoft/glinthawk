@@ -47,11 +47,14 @@ protected:
   public:
     net::Address address;
     std::vector<models::BatchedInferenceState<ModelConfig>> outgoing_states {};
-    core::MessageHandler<net::TCPSession> message_handler;
+    std::unique_ptr<core::MessageHandler<net::TCPSession>> message_handler;
 
-    Peer( const net::Address& addr, net::TCPSocket&& socket )
+    Peer( const net::Address& addr, net::TCPSocket&& socket, const std::chrono::milliseconds& induced_delay )
       : address( addr )
-      , message_handler( std::move( socket ) )
+      , message_handler(
+          induced_delay.count()
+            ? std::make_unique<core::DelayedMessageHandler<net::TCPSession>>( std::move( socket ), induced_delay )
+            : std::make_unique<core::MessageHandler<net::TCPSession>>( std::move( socket ) ) )
     {
     }
   };
@@ -113,6 +116,12 @@ protected:
 
   const bool collect_prompt_info_ { getenv( "_GLINTHAWK_PROMPT_INFO_FILE_" ) != nullptr };
   std::ofstream fout_prompt_info_ {};
+
+  /* XXX(sadjad): temporary */
+  // all the outgoing states are delayed by this amount
+  std::chrono::milliseconds induced_delay_ { getenv( "_GLINTHAWK_INDUCED_DELAY_" )
+                                               ? std::stoul( getenv( "_GLINTHAWK_INDUCED_DELAY_" ) )
+                                               : 0ul };
 
   void setup_peer( std::map<net::Address, Peer>::iterator peer_it );
   void setup_tier_router_and_compute_kernel( const std::filesystem::path& model_root,
@@ -206,7 +215,7 @@ requires models::llama2::ModelConfig<ModelConfig>
 void BatchedWorker<ModelConfig, ComputeKernel>::setup_peer( std::map<net::Address, Peer>::iterator peer_it )
 {
   const std::string addr = peer_it->first.to_string();
-  peer_it->second.message_handler.install_rules(
+  peer_it->second.message_handler->install_rules(
     this->event_loop_,
     this->rule_categories_,
     std::bind( &BatchedWorker<ModelConfig, ComputeKernel>::handle_peer_message, this, std::placeholders::_1 ),
@@ -217,7 +226,7 @@ void BatchedWorker<ModelConfig, ComputeKernel>::setup_peer( std::map<net::Addres
     [this, peer_it] {
       for ( auto& state : peer_it->second.outgoing_states ) {
         auto state_ser = state.serialize();
-        peer_it->second.message_handler.push_message(
+        peer_it->second.message_handler->push_message(
           core::Message( core::Message::OpCode::BatchedInferenceState, std::move( state_ser ) ) );
       }
 
@@ -322,7 +331,7 @@ void BatchedWorker<ModelConfig, ComputeKernel>::handle_completions( const bool r
     const auto completed_count = prompt_store_.completed_count();
     const auto proto = prompt_store_.completed_to_protobuf();
     prompt_store_.cleanup_completed();
-    coordinator_.message_handler.push_message( { Message::OpCode::PushCompletions, proto.SerializeAsString() } );
+    coordinator_.message_handler->push_message( { Message::OpCode::PushCompletions, proto.SerializeAsString() } );
     LOG( INFO ) << "Pushed " << completed_count << " completions to coordinator.";
   }
 }
@@ -344,20 +353,22 @@ BatchedWorker<ModelConfig, ComputeKernel>::BatchedWorker( const net::Address& wo
     LOG( INFO ) << "Listening on " << this->listen_address_.to_string();
     return socket;
   }() )
-  , coordinator_( coordinator_address,
-                  [this]() -> net::TCPSocket {
-                    net::TCPSocket socket;
-                    socket.set_blocking( false );
-                    socket.connect( this->coordinator_address_ );
-                    LOG( INFO ) << "Connecting to coordinator at " << this->coordinator_address_.to_string();
-                    return socket;
-                  }() )
+  , coordinator_(
+      coordinator_address,
+      [this]() -> net::TCPSocket {
+        net::TCPSocket socket;
+        socket.set_blocking( false );
+        socket.connect( this->coordinator_address_ );
+        LOG( INFO ) << "Connecting to coordinator at " << this->coordinator_address_.to_string();
+        return socket;
+      }(),
+      induced_delay_ )
   , model_root_( model_root )
 {
   // handle fd failures gracefully
   event_loop_.set_fd_failure_callback( [] { LOG( ERROR ) << "FD failure callback called."; } );
 
-  coordinator_.message_handler.install_rules(
+  coordinator_.message_handler->install_rules(
     this->event_loop_,
     this->rule_categories_,
     std::bind( &BatchedWorker<ModelConfig, ComputeKernel>::handle_coordinator_message, this, std::placeholders::_1 ),
@@ -395,7 +406,7 @@ BatchedWorker<ModelConfig, ComputeKernel>::BatchedWorker( const net::Address& wo
   } else {
     throw std::logic_error( "No such kernel type" );
   }
-  coordinator_.message_handler.push_message( { Message::OpCode::Hey, hey_proto.SerializeAsString() } );
+  coordinator_.message_handler->push_message( { Message::OpCode::Hey, hey_proto.SerializeAsString() } );
 
   setup_stats_handler();
 }
@@ -409,8 +420,9 @@ void BatchedWorker<ModelConfig, ComputeKernel>::listen_callback()
   auto addr = socket.peer_address();
   LOG( INFO ) << "Accepted connection from " << addr.to_string();
 
-  auto [peer_it, peer_new] = peers_.emplace(
-    std::piecewise_construct, std::forward_as_tuple( addr ), std::forward_as_tuple( addr, std::move( socket ) ) );
+  auto [peer_it, peer_new] = peers_.emplace( std::piecewise_construct,
+                                             std::forward_as_tuple( addr ),
+                                             std::forward_as_tuple( addr, std::move( socket ), induced_delay_ ) );
 
   CHECK( peer_new ) << "A peer with this address already exists.";
   setup_peer( peer_it );
@@ -482,7 +494,7 @@ bool BatchedWorker<ModelConfig, ComputeKernel>::handle_coordinator_message( core
                                             static_cast<uint8_t>( proto.rank() ),
                                             proto.randomize() );
 
-      this->coordinator_.message_handler.push_message( { Message::OpCode::AckInitialize, "" } );
+      this->coordinator_.message_handler->push_message( { Message::OpCode::AckInitialize, "" } );
       LOG( INFO ) << "Worker initialized.";
       break;
     }
@@ -499,7 +511,7 @@ bool BatchedWorker<ModelConfig, ComputeKernel>::handle_coordinator_message( core
       handle_completions( false );
 
       // (3) send a Bye back to the coordinator
-      this->coordinator_.message_handler.push_message( { Message::OpCode::Bye, "" } );
+      this->coordinator_.message_handler->push_message( { Message::OpCode::Bye, "" } );
 
       // (4) wait for the coordinator to close the connection, otherwise exit in 10 seconds
       event_loop_.add_rule(
@@ -551,8 +563,8 @@ bool BatchedWorker<ModelConfig, ComputeKernel>::handle_coordinator_message( core
         }
 
         route_str << "<L" << route.layer_num() << ", T" << static_cast<size_t>( route.tier() ) << ", R"
-                  << static_cast<size_t>( route.rank() ) << ">[" << next_stage << "]" << " -> " << route.ip() << ":"
-                  << route.port() << "; ";
+                  << static_cast<size_t>( route.rank() ) << ">[" << next_stage << "]"
+                  << " -> " << route.ip() << ":" << route.port() << "; ";
 
         new_route.emplace(
           std::make_tuple(
@@ -564,7 +576,7 @@ bool BatchedWorker<ModelConfig, ComputeKernel>::handle_coordinator_message( core
 
       protobuf::AckRoute ack_proto;
       ack_proto.set_route_id( proto.route_id() );
-      coordinator_.message_handler.push_message( { Message::OpCode::AckRoute, ack_proto.SerializeAsString() } );
+      coordinator_.message_handler->push_message( { Message::OpCode::AckRoute, ack_proto.SerializeAsString() } );
 
       LOG( INFO ) << "Route set: " << route_str.str();
       break;
@@ -732,9 +744,10 @@ void BatchedWorker<ModelConfig, ComputeKernel>::handle_tier_router_event()
       socket.connect( next_worker );
       socket.set_blocking( false );
 
-      std::tie( peer_it, std::ignore ) = peers_.emplace( std::piecewise_construct,
-                                                         std::forward_as_tuple( next_worker ),
-                                                         std::forward_as_tuple( next_worker, std::move( socket ) ) );
+      std::tie( peer_it, std::ignore )
+        = peers_.emplace( std::piecewise_construct,
+                          std::forward_as_tuple( next_worker ),
+                          std::forward_as_tuple( next_worker, std::move( socket ), induced_delay_ ) );
 
       setup_peer( peer_it );
     }
