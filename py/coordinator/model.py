@@ -31,6 +31,10 @@ class Model:
             for i in range(self.n_tiers)
         ]
 
+        for tier in self.tier_concurrency_s:
+            if tier.max_context_count > 0:
+                assert tier.max_context_count % tier.concurrency_att_size == 0
+
         for i_tier in range(self.n_tiers):
             platform_str = self.tier_config[i_tier]['platform']
             self.tier_config[i_tier]['platform_str'] = platform_str
