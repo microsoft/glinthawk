@@ -229,7 +229,7 @@ async def main(**kwargs):
         command += add_args(config, kwargs)
         await run_command(command)
 
-    for i in range(config['tiers']):
+    for i in range(len(config['tiers'])):
         logging.info(f"Resetting network latency for tier {i}...")
         command = [
             "python3",
