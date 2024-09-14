@@ -64,7 +64,7 @@ public:
   void forward_attention( StateType& state, const ContextVector& ctxs );
 
   template<StateConcept StateType>
-  void forward_post_attention( StateType& state, const bool fuse_to_pre, const bool fuse_to_cls );
+  void forward_post_attention( StateType& state, const bool fuse_to_pre = false, const bool fuse_to_cls = false );
 
   template<StateConcept StateType>
   void forward_classify( StateType& state );
