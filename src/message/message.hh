@@ -1,5 +1,6 @@
 #pragma once
 
+#include <chrono>
 #include <optional>
 #include <queue>
 #include <string>
@@ -96,7 +97,7 @@ public:
 template<class SessionType>
 class MessageHandler : public glinthawk::MessageHandler<SessionType, Message, Message>
 {
-private:
+protected:
   std::queue<Message> outgoing_ {};
   MessageParser incoming_ {};
 
@@ -120,6 +121,56 @@ public:
   ~MessageHandler() {}
 
   void push_message( Message&& msg ) override;
+};
+
+template<class SessionType>
+class DelayedMessageHandler : public MessageHandler<SessionType>
+{
+private:
+  using Clock = std::chrono::steady_clock;
+
+  mutable std::queue<std::pair<Clock::time_point, Message>> delayed_messages_ {};
+  std::chrono::milliseconds delay_ {};
+
+protected:
+  bool outgoing_empty() const override
+  {
+    if ( not MessageHandler<SessionType>::outgoing_empty() ) {
+      /* already have stuff to sent in its queue */
+      // NOTE(sadjad): doing this is not necessary, but I want to avoid calling Clock::now() if we don't need to.
+      return false;
+    }
+
+    const auto now = Clock::now();
+
+    // are the any delayed messages we can send now?
+    while ( not delayed_messages_.empty() and delayed_messages_.front().first <= now ) {
+      MessageHandler<SessionType>::push_message( std::move( delayed_messages_.front().second ) );
+      delayed_messages_.pop();
+    }
+
+    return MessageHandler<SessionType>::outgoing_empty();
+  }
+
+public:
+  DelayedMessageHandler( SessionType&& session, const std::chrono::milliseconds delay )
+    : MessageHandler<SessionType>( std::move( session ) )
+  {
+    delay_ = delay;
+  }
+
+  void push_message( Message&& msg ) override { delayed_messages_.emplace( Clock::now() + delay_, std::move( msg ) ); }
+
+  std::chrono::milliseconds time_to_next_message() const
+  {
+    if ( delayed_messages_.empty() ) {
+      return delay_;
+    }
+
+    return std::max(
+      std::chrono::milliseconds { 0 },
+      std::chrono::duration_cast<std::chrono::milliseconds>( delayed_messages_.front().first - Clock::now() ) );
+  }
 };
 
 } // namespace glinthawk::core
