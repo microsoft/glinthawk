@@ -68,6 +68,12 @@ protected:
   bool running_ { true };
   EventLoop event_loop_ {};
 
+  /* XXX(sadjad): temporary */
+  // all the outgoing states are delayed by this amount
+  std::chrono::milliseconds induced_delay_ { getenv( "_GLINTHAWK_INDUCED_DELAY_" )
+                                               ? std::stoul( getenv( "_GLINTHAWK_INDUCED_DELAY_" ) )
+                                               : 0ul };
+
   net::Address listen_address_;
   net::Address coordinator_address_;
   net::TCPSocket listen_socket_;
@@ -116,12 +122,6 @@ protected:
 
   const bool collect_prompt_info_ { getenv( "_GLINTHAWK_PROMPT_INFO_FILE_" ) != nullptr };
   std::ofstream fout_prompt_info_ {};
-
-  /* XXX(sadjad): temporary */
-  // all the outgoing states are delayed by this amount
-  std::chrono::milliseconds induced_delay_ { getenv( "_GLINTHAWK_INDUCED_DELAY_" )
-                                               ? std::stoul( getenv( "_GLINTHAWK_INDUCED_DELAY_" ) )
-                                               : 0ul };
 
   void setup_peer( std::map<net::Address, Peer>::iterator peer_it );
   void setup_tier_router_and_compute_kernel( const std::filesystem::path& model_root,
@@ -189,7 +189,7 @@ void BatchedWorker<ModelConfig, ComputeKernel>::setup_stats_handler()
 
     fout_local_stats_ << "# "; // XXX some information about the run
     fout_local_stats_ << __stats__.csv_header() << '\n';
-    fout_local_stats_ << __stats__.to_csv() << '\n';
+    fout_local_stats_ << __stats__.to_csv() << std::endl;
   }
 
   if ( collect_prompt_info_ ) {
@@ -197,7 +197,7 @@ void BatchedWorker<ModelConfig, ComputeKernel>::setup_stats_handler()
     CHECK( fout_prompt_info_.is_open() ) << "Failed to open prompt info file.";
 
     fout_prompt_info_ << "# "; // XXX some information about the run
-    fout_prompt_info_ << glinthawk::prompt::Prompt::csv_header() << '\n';
+    fout_prompt_info_ << glinthawk::prompt::Prompt::csv_header() << std::endl;
   }
 
   event_loop_.add_rule(
@@ -799,7 +799,7 @@ void BatchedWorker<ModelConfig, ComputeKernel>::handle_batch_inference_state( Ba
           prompt.timing_info().set_completion_finished();
 
           if ( collect_prompt_info_ ) {
-            fout_prompt_info_ << prompt.to_csv() << '\n';
+            fout_prompt_info_ << prompt.to_csv() << std::endl;
           }
 
           prompt_store_.complete( prompt_id );
@@ -870,7 +870,7 @@ void BatchedWorker<ModelConfig, ComputeKernel>::handle_stats()
   }
 
   if ( collect_local_stats_ ) {
-    fout_local_stats_ << __stats__.to_csv() << '\n';
+    fout_local_stats_ << __stats__.to_csv() << std::endl;
   }
 
   // TODO(sadjad): allow pluggable stats handlers

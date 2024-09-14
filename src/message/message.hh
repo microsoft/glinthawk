@@ -141,10 +141,8 @@ protected:
       return false;
     }
 
-    const auto now = Clock::now();
-
     // are the any delayed messages we can send now?
-    while ( not delayed_messages_.empty() and delayed_messages_.front().first <= now ) {
+    while ( not delayed_messages_.empty() and delayed_messages_.front().first <= Clock::now() ) {
       MessageHandler<SessionType>::push_message( std::move( delayed_messages_.front().second ) );
       delayed_messages_.pop();
     }
