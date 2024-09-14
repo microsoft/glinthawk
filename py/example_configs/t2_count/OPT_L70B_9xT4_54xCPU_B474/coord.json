@@ -1,0 +1,33 @@
+{
+  "config_name": "L70B_9xT4_54xCPU_B474",
+  "model_name": "llama2-70b-chat",
+  "listen_address": "0.0.0.0",
+  "listen_port": "3046",
+  "n_layers": 80,
+  "n_slices": 9,
+  "tiers": [
+    {
+      "kernel": "simple_piped",
+      "platform": "cuda",
+      "context": "static",
+      "ranks": 1,
+      "concurrency_size_pre": 474,
+      "concurrency_size_att": 0,
+      "concurrency_size_post": 474,
+      "concurrency_size_cls": 474,
+      "max_context_count": 0
+    },
+    {
+      "kernel": "simple_piped",
+      "platform": "amd64",
+      "context": "paged",
+      "ranks": 6,
+      "concurrency_size_pre": 0,
+      "concurrency_size_att": 79,
+      "concurrency_size_post": 0,
+      "concurrency_size_cls": 0,
+      "max_context_count": 2133
+    }
+  ],
+  "separate_cls_tiers": []
+}
