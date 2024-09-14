@@ -23,7 +23,7 @@ void TelegrafLogger::load()
   unsent_outgoing_measurement_ = outgoing_.front();
 }
 
-bool TelegrafLogger::outgoing_empty() const { return unsent_outgoing_measurement_.empty() and outgoing_.empty(); }
+bool TelegrafLogger::outgoing_empty() { return unsent_outgoing_measurement_.empty() and outgoing_.empty(); }
 
 void TelegrafLogger::write( RingBuffer& out )
 {

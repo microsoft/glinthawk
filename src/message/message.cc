@@ -122,7 +122,7 @@ void MessageHandler<SessionType>::push_message( Message&& message )
 }
 
 template<class SessionType>
-bool MessageHandler<SessionType>::outgoing_empty() const
+bool MessageHandler<SessionType>::outgoing_empty()
 {
   return current_outgoing_unsent_header_.empty() and current_outgoing_unsent_payload_.empty() and outgoing_.empty();
 }

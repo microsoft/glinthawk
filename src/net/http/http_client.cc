@@ -30,7 +30,7 @@ void HTTPClient<SessionType>::push_message( HTTPRequest&& req )
 }
 
 template<class SessionType>
-bool HTTPClient<SessionType>::outgoing_empty() const
+bool HTTPClient<SessionType>::outgoing_empty()
 {
   return current_request_unsent_headers_.empty() and current_request_unsent_body_.empty() and requests_.empty();
 }

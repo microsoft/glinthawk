@@ -107,7 +107,7 @@ protected:
 
   void load();
 
-  bool outgoing_empty() const override;
+  bool outgoing_empty() override;
   bool incoming_empty() const override { return incoming_.empty(); }
   Message& incoming_front() override { return incoming_.front(); }
   void incoming_pop() override { incoming_.pop(); }
@@ -133,7 +133,7 @@ private:
   std::chrono::milliseconds delay_ {};
 
 protected:
-  bool outgoing_empty() const override
+  bool outgoing_empty() override
   {
     if ( not MessageHandler<SessionType>::outgoing_empty() ) {
       /* already have stuff to sent in its queue */
@@ -153,6 +153,8 @@ protected:
   }
 
 public:
+  using MessageHandler<SessionType>::MessageHandler;
+
   DelayedMessageHandler( SessionType&& session, const std::chrono::milliseconds delay )
     : MessageHandler<SessionType>( std::move( session ) )
   {
