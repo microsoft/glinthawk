@@ -229,6 +229,28 @@ async def main(**kwargs):
         command += add_args(config, kwargs)
         await run_command(command)
 
+    for i in range(config['tiers']):
+        logging.info(f"Resetting network latency for tier {i}...")
+        command = [
+            "python3",
+            "run-command-remotes.py",
+            "--workers-file", f"{kwargs['config_path']}/remote.tier{i}.conf",
+            "--command", f'sudo tc qdisc del dev eth0 root netem',
+        ]
+        command += add_args(config, kwargs, add_workers=False)
+        await run_command(command)
+
+        if config['tiers'][i].get('latency'):
+            logging.info(f"Setting network latency for tier {i} to {config['tiers'][i]['latency']}ms...")
+            command = [
+                "python3",
+                "run-command-remotes.py",
+                "--workers-file", f"{kwargs['config_path']}/remote.tier{i}.conf",
+                "--command", f'sudo tc qdisc add dev eth0 root netem delay {config["tiers"][i]["latency"]}ms',
+            ]
+            command += add_args(config, kwargs, add_workers=False)
+            await run_command(command)
+
     tasks = []
 
     tasks.append([
@@ -326,6 +348,15 @@ async def main(**kwargs):
         await asyncio.gather(*tasks)
     except asyncio.CancelledError:
         logging.warning("Cancelled all processes.")
+    finally:
+        logging.info('Resetting network latency...')
+        command = [
+            "python3",
+            "run-command-remotes.py",
+            "--command", f'sudo tc qdisc del dev eth0 root netem',
+        ]
+        command += add_args(config, kwargs)
+        await run_command(command)
 
     logging.warning(f"RUN_ID: {unique_run_id}")
 
