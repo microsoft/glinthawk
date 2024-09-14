@@ -34,7 +34,7 @@ def load_profiles(log_dir: str) -> pd.DataFrame:
                                           "latency_us"])
 
 
-def interpolate_profile(df: pd.DataFrame) -> Dict[str, np.ndarray]:
+def interpolate_profile(df: pd.DataFrame, seq_len_rescale: float) -> Dict[str, np.ndarray]:
     res = {}
     for stage, df_grp in df.groupby("stage"):
         x = df_grp['batch_size'].to_numpy()
@@ -44,6 +44,7 @@ def interpolate_profile(df: pd.DataFrame) -> Dict[str, np.ndarray]:
         x_full = np.arange(x.min(), x.max() + 1)
         y_full = linear_interp(x_full)
         res[stage] = np.r_[0, y_full]
+    res['att'] /= seq_len_rescale
     return res
 
 
@@ -61,11 +62,12 @@ def get_throughput(pipe_step: float, pipe_times: List[float], serial: List[bool]
     return in_flight / (round_2_loc - round_2_start), round_2_loc - round_2_start
 
 
-def opt_single_tier(tier_1_logs: str, opt_config: str, model_name: str, opt_output: str, paged_kv_factor: float):
+def opt_single_tier(tier_1_logs: str, opt_config: str, model_name: str, opt_output: str, paged_kv_factor: float,
+                    seq_len_rescale: float):
     with open(opt_config, "r") as f:
         config = json.load(f)
     df_t1 = load_profiles(tier_1_logs)
-    t1_profiles = interpolate_profile(df_t1)
+    t1_profiles = interpolate_profile(df_t1, seq_len_rescale)
     model = get_model(model_name, 2)
 
     df_data = []
@@ -179,13 +181,13 @@ def opt_single_tier(tier_1_logs: str, opt_config: str, model_name: str, opt_outp
 
 
 def opt_two_tier(tier_1_logs: str, tier_2_logs: str, opt_config: str, model_name: str, opt_output: str,
-                 paged_kv_factor: float):
+                 paged_kv_factor: float, seq_len_rescale: float):
     with open(opt_config, "r") as f:
         config = json.load(f)
     df_t1 = load_profiles(tier_1_logs)
-    t1_profiles = interpolate_profile(df_t1)
+    t1_profiles = interpolate_profile(df_t1, seq_len_rescale)
     df_t2 = load_profiles(tier_2_logs)
-    t2_profiles = interpolate_profile(df_t2)
+    t2_profiles = interpolate_profile(df_t2, seq_len_rescale)
     model_t1 = get_model(model_name, 2)
     model_t2 = get_model(model_name, 4)
 
@@ -324,15 +326,17 @@ def opt_two_tier(tier_1_logs: str, tier_2_logs: str, opt_config: str, model_name
 @click.option("--tier-logs", required=True, multiple=True, type=click.Path(exists=True, file_okay=False, dir_okay=True))
 @click.option("--opt-config", required=True, type=click.Path(exists=True, file_okay=True, dir_okay=False))
 @click.option("--model-name", required=True, type=str)
-@click.option("--paged-kv-reuse-factor", required=False, default=2.5, type=float)
+@click.option("--paged-kv-reuse-factor", required=False, default=3, type=float)
+@click.option("--seq-len-rescale", required=False, default=3, type=float)
 @click.option("--opt-output", required=True, type=click.Path(exists=False))
 def main(**kwargs):
     if len(kwargs.get("tier_logs")) == 1:
         opt_single_tier(kwargs.get("tier_logs")[0], kwargs.get("opt_config"), kwargs.get("model_name"),
-                        kwargs.get("opt_output"), kwargs.get("paged_kv_reuse_factor"))
+                        kwargs.get("opt_output"), kwargs.get("paged_kv_reuse_factor"), kwargs.get("seq_len_rescale"))
     elif len(kwargs.get("tier_logs")) == 2:
         opt_two_tier(kwargs.get("tier_logs")[0], kwargs.get("tier_logs")[1], kwargs.get("opt_config"),
-                     kwargs.get("model_name"), kwargs.get("opt_output"), kwargs.get("paged_kv_reuse_factor"))
+                     kwargs.get("model_name"), kwargs.get("opt_output"), kwargs.get("paged_kv_reuse_factor"),
+                     kwargs.get("seq_len_rescale"))
     else:
         raise ValueError(f'Current cannot support {len(kwargs.get("tier_logs"))} tiers.')
 
