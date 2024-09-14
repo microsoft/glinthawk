@@ -13,6 +13,6 @@
     "cap_Gbps": 8,
     "mem_GiB": 110
     },
-  "inter_tier_rtt_ms": 25,
+  "inter_tier_rtt_ms": 20,
   "inter_tier_cap_Gbps": 8
 }
