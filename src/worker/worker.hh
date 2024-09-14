@@ -883,7 +883,8 @@ requires models::llama2::ModelConfig<ModelConfig>
          && compute::KernelConcept<ComputeKernel, models::BatchedInferenceState<ModelConfig>>
 void BatchedWorker<ModelConfig, ComputeKernel>::run()
 {
-  while ( event_loop_.wait_next_event( 1'000 ) != EventLoop::Result::Exit ) {
+  while ( event_loop_.wait_next_event( induced_delay_.count() ? std::max( 1l, induced_delay_.count() / 4 ) : 1'000 )
+          != EventLoop::Result::Exit ) {
     if ( not running_ ) {
       return;
     }
