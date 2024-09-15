@@ -25,7 +25,7 @@ private:
 
   void load();
 
-  bool outgoing_empty() const override;
+  bool outgoing_empty() override;
   bool incoming_empty() const override { return responses_.empty(); }
   HTTPResponse& incoming_front() override { return responses_.front(); }
   void incoming_pop() override { responses_.pop(); }

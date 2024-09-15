@@ -229,28 +229,6 @@ async def main(**kwargs):
         command += add_args(config, kwargs)
         await run_command(command)
 
-    for i in range(len(config['tiers'])):
-        logging.info(f"Resetting network latency for tier {i}...")
-        command = [
-            "python3",
-            "run-command-remotes.py",
-            "--workers-file", f"{kwargs['config_path']}/remote.tier{i}.conf",
-            "--command", f'sudo tc qdisc del dev eth0 root netem',
-        ]
-        command += add_args(config, kwargs, add_workers=False)
-        await run_command(command)
-
-        if config['tiers'][i].get('latency'):
-            logging.info(f"Setting network latency for tier {i} to {config['tiers'][i]['latency']}ms...")
-            command = [
-                "python3",
-                "run-command-remotes.py",
-                "--workers-file", f"{kwargs['config_path']}/remote.tier{i}.conf",
-                "--command", f'sudo tc qdisc add dev eth0 root netem delay {config["tiers"][i]["latency"]}ms',
-            ]
-            command += add_args(config, kwargs, add_workers=False)
-            await run_command(command)
-
     tasks = []
 
     tasks.append([
@@ -297,6 +275,10 @@ async def main(**kwargs):
             else:
                 command += ["--docker-options", "--entrypoint /app/worker-cuda-fp16"]
 
+            if config['tiers'][i]['latency']:
+                logging.warning(f"Inducing latency of {config['tiers'][i]['latency']} ms for tier {i}")
+                command += ["--env", "_GLINTHAWK_INDUCED_DELAY_", str(config['tiers'][i]['latency'])]
+
             command += add_args(config, kwargs, add_workers=False)
             command += [
                 "glinthawk.azurecr.io/glinthawk-worker-cuda:latest",
@@ -319,6 +301,10 @@ async def main(**kwargs):
                 command += ["--docker-options", "--entrypoint /app/faux-worker-amd64-fp32"]
             else:
                 command += ["--docker-options", "--entrypoint /app/worker-amd64-fp32"]
+
+            if config['tiers'][i]['latency']:
+                logging.warning(f"Inducing latency of {config['tiers'][i]['latency']} ms for tier {i}")
+                command += ["--env", "_GLINTHAWK_INDUCED_DELAY_", str(config['tiers'][i]['latency'])]
 
             command += add_args(config, kwargs, add_workers=False)
             command += [
@@ -348,15 +334,6 @@ async def main(**kwargs):
         await asyncio.gather(*tasks)
     except asyncio.CancelledError:
         logging.warning("Cancelled all processes.")
-    finally:
-        logging.info('Resetting network latency...')
-        command = [
-            "python3",
-            "run-command-remotes.py",
-            "--command", f'sudo tc qdisc del dev eth0 root netem',
-        ]
-        command += add_args(config, kwargs)
-        await run_command(command)
 
     logging.warning(f"RUN_ID: {unique_run_id}")
 

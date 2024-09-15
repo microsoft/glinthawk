@@ -83,10 +83,10 @@ void FauxBatchedWorker<ModelConfig, ComputeKernel>::handle_tier_router_event()
         socket.connect( next_worker );
         socket.set_blocking( false );
 
-        std::tie( peer_it, std::ignore )
-          = _base_::peers_.emplace( std::piecewise_construct,
-                                    std::forward_as_tuple( next_worker ),
-                                    std::forward_as_tuple( next_worker, std::move( socket ) ) );
+        std::tie( peer_it, std::ignore ) = _base_::peers_.emplace(
+          std::piecewise_construct,
+          std::forward_as_tuple( next_worker ),
+          std::forward_as_tuple( next_worker, std::move( socket ), std::chrono::milliseconds { 0 } ) );
 
         _base_::setup_peer( peer_it );
       }

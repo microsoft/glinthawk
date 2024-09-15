@@ -25,7 +25,7 @@ protected:
   SessionType session_;
   std::vector<EventLoop::RuleHandle> installed_rules_ {};
 
-  virtual bool outgoing_empty() const = 0;
+  virtual bool outgoing_empty() = 0;
   virtual bool incoming_empty() const = 0;
   virtual IncomingMessage& incoming_front() = 0;
   virtual void incoming_pop() = 0;

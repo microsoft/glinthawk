@@ -27,7 +27,7 @@ private:
 
   void load();
 
-  bool outgoing_empty() const override;
+  bool outgoing_empty() override;
   bool incoming_empty() const override { return true; }
   glinthawk::util::Void& incoming_front() override { return incoming_; }
   void incoming_pop() override { return; }
