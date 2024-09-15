@@ -1,4 +1,4 @@
-list ( APPEND GLINTHAWK_TARGETS worker faux-worker infer ramble profile-stage )
+list ( APPEND GLINTHAWK_TARGETS worker faux-worker infer ramble profile-stage profile-gemm )
 list ( APPEND GLINTHAWK_DTYPES FLOAT16 FLOAT32 BFLOAT16 )
 
 foreach ( TARGET ${GLINTHAWK_TARGETS} )
