@@ -118,6 +118,13 @@ public:
   template<uint64_t s, uint64_t r>
   void matmul( DType* xo, const DType* x, const DType* w, const uint64_t b ) const;
 
+  void untemplated_matmul( DType* xo,
+                           const DType* x,
+                           const DType* w,
+                           const uint64_t s,
+                           const uint64_t r,
+                           const uint64_t b ) const;
+
   void soft_sample( DType* v, const std::vector<float>& tempratures, const size_t vocab_size ) const;
 
   DeviceUniquePtr device_allocate( const uint64_t size_bytes ) const;
@@ -652,6 +659,46 @@ void Operations<DType>::silu( DType* hb, DType* hb2, const uint64_t batch_size )
 template<typename DType>
 template<uint64_t s, uint64_t r>
 void Operations<DType>::matmul( DType* xout, const DType* x, const DType* W, const uint64_t b ) const
+{
+  // x(b,s) @ W(s,r) -> xout(b,r)
+  // OR
+  // W(r,s) @ x(s,b) -> xout(r,b)
+  // A(m,k) @ B(k,n) ->    C(m,n)
+  const uint64_t m = r;
+  const uint64_t n = b;
+  const uint64_t k = s;
+  const uint64_t lda = k;
+  const uint64_t ldb = k;
+  const uint64_t ldc = m;
+
+  CHECK_CUBLAS( cublasGemmEx( cublas_handle_default,
+                              CUBLAS_OP_T,
+                              CUBLAS_OP_N,
+                              m,
+                              n,
+                              k,
+                              &alpha,
+                              W,
+                              get_cuda_data_type<DType>(),
+                              lda,
+                              x,
+                              get_cuda_data_type<DType>(),
+                              ldb,
+                              &beta,
+                              xout,
+                              get_cuda_data_type<DType>(),
+                              ldc,
+                              GH_CUDA_COMPUTE_TYPE,
+                              CUBLAS_GEMM_DEFAULT ) );
+}
+
+template<typename DType>
+void Operations<DType>::untemplated_matmul( DType* xout,
+                                            const DType* x,
+                                            const DType* W,
+                                            const uint64_t s,
+                                            const uint64_t r,
+                                            const uint64_t b ) const
 {
   // x(b,s) @ W(s,r) -> xout(b,r)
   // OR

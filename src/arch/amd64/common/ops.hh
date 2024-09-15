@@ -40,6 +40,13 @@ public:
   template<uint64_t s, uint64_t r>
   void matmul( DType* xo, const DType* x, const DType* w, const uint64_t b ) const;
 
+  void untemplated_matmul( DType* xo,
+                           const DType* x,
+                           const DType* w,
+                           const uint64_t s,
+                           const uint64_t r,
+                           const uint64_t b ) const;
+
   void soft_sample( DType* v, const std::vector<float>& temperatures, const size_t vocab_size ) const;
 
   DeviceUniquePtr device_allocate( const uint64_t size_bytes ) const;
@@ -219,6 +226,48 @@ void Operations<DType>::matmul( DType* xout, const DType* x, const DType* w, con
   constexpr uint64_t ldc = m;
 
   fast_matmul_row_major<DType, m, k, lda, ldb, ldc>( n, w, x, xout );
+}
+
+template<typename DType>
+void Operations<DType>::untemplated_matmul( DType* xout,
+                                            const DType* x,
+                                            const DType* w,
+                                            const uint64_t s,
+                                            const uint64_t r,
+                                            const uint64_t b ) const
+{
+  // x(b,s) @ W(s,r) -> xout(b,r)
+  // OR
+  // W(r,s) @ x(s,b) -> xout(r,b)
+  // A(m,k) @ B(k,n) ->    C(m,n)
+
+  const uint64_t m = r;
+  const uint64_t k = s;
+  const uint64_t n = b;
+  const uint64_t lda = k;
+  const uint64_t ldb = k;
+  const uint64_t ldc = m;
+
+  const DType* A = w;
+  const DType* B = x;
+  DType* C = xout;
+
+  uint64_t row;
+  uint64_t col;
+#pragma omp parallel for private( row, col ) shared( A, B, C ) collapse( 2 )
+  for ( row = 0; row < m; row++ ) {
+    for ( col = 0; col < n; col++ ) {
+      glinthawk::float32_t sum = 0.0;
+
+      for ( uint64_t p = 0; p < k; ++p ) {
+        const glinthawk::float32_t a_value = A[row * lda + p];
+        const glinthawk::float32_t b_value = B[col * ldb + p];
+        sum += a_value * b_value;
+      }
+
+      C[col * ldc + row] = DType( sum );
+    }
+  }
 }
 
 template<typename DType>

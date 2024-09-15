@@ -31,6 +31,7 @@ concept OperationsConcept = requires( const T t,
   { t.template argmax<UI64>( ptr_uint32, ptr2, ptr1, size ) } -> std::same_as<void>;
   { t.template silu<UI64>( ptr1, ptr1, size ) } -> std::same_as<void>;
   { t.template matmul<UI64, UI64>( ptr1, ptr2, ptr2, size ) } -> std::same_as<void>;
+  { t.untemplated_matmul( ptr1, ptr2, ptr2, size, size, size ) } -> std::same_as<void>;
   { t.template soft_sample( ptr1, vec_f, size ) } -> std::same_as<void>;
   { t.copy( ptr1, ptr2, size, cpt, flag ) } -> std::same_as<void>;
   { t.print( ptr2, size, base ) } -> std::same_as<void>;
