@@ -27,7 +27,7 @@
       "concurrency_size_att": 26,
       "concurrency_size_post": 0,
       "concurrency_size_cls": 0,
-      "max_context_count": 2288,
+      "max_context_count": 2340,
       "latency": 100
     }
   ],
