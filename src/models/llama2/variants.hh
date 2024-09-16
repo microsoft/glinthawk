@@ -110,6 +110,36 @@ struct Llama2_70B_Chat : public Llama2
   constexpr static uint64_t attention_rounds = 1;
 };
 
+struct Llama2_70B_Chat_4K : public Llama2_70B_Chat
+{
+  constexpr static uint64_t seq_len = 4096;
+};
+
+struct Llama2_70B_Chat_8K : public Llama2_70B_Chat
+{
+  constexpr static uint64_t seq_len = 8192;
+};
+
+struct Llama2_70B_Chat_16K : public Llama2_70B_Chat
+{
+  constexpr static uint64_t seq_len = 16384;
+};
+
+struct Llama2_70B_Chat_32K : public Llama2_70B_Chat
+{
+  constexpr static uint64_t seq_len = 32768;
+};
+
+struct Llama2_70B_Chat_64K : public Llama2_70B_Chat
+{
+  constexpr static uint64_t seq_len = 65536;
+};
+
+struct Llama2_70B_Chat_128K : public Llama2_70B_Chat
+{
+  constexpr static uint64_t seq_len = 131072;
+};
+
 struct Llama2_13B_Chat : public Llama2
 {
   constexpr static uint64_t dim = 5120;
@@ -159,6 +189,12 @@ static_assert( ModelConfig<Llama3_405B> );
 static_assert( ModelConfig<Llama3_70B> );
 static_assert( ModelConfig<Llama3_8B> );
 static_assert( ModelConfig<Llama2_70B_Chat> );
+static_assert( ModelConfig<Llama2_70B_Chat_4K> );
+static_assert( ModelConfig<Llama2_70B_Chat_8K> );
+static_assert( ModelConfig<Llama2_70B_Chat_16K> );
+static_assert( ModelConfig<Llama2_70B_Chat_32K> );
+static_assert( ModelConfig<Llama2_70B_Chat_64K> );
+static_assert( ModelConfig<Llama2_70B_Chat_128K> );
 static_assert( ModelConfig<Llama2_13B_Chat> );
 static_assert( ModelConfig<Llama2_7B_Chat> );
 static_assert( ModelConfig<Stories_110M> );

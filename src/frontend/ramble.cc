@@ -216,7 +216,7 @@ int main( int argc, char* argv[] )
     else CREATE_AND_RUN( "llama2-7b-chat", Llama2_7B_Chat )
     else CREATE_AND_RUN( "llama2-13b-chat", Llama2_13B_Chat )
     else CREATE_AND_RUN( "llama2-70b-chat", Llama2_70B_Chat )
-    else CREATE_AND_RUN( "llama3-8b-instruct", Llama3_8B_Instruct )
+    else CREATE_AND_RUN( "llama3-8b", Llama3_8B )
     else LOG( FATAL ) << "Unknown model name: " << model_name << ", or context name: " << context_name;
     // clang-format on
 
