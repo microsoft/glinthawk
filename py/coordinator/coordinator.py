@@ -160,6 +160,9 @@ class Coordinator:
         # self.dataset = all_dataset[idx]
         self.dataset = all_dataset[all_dataset[:, 0] + all_dataset[:, 1] < 2048]
         rng.shuffle(self.dataset)
+        self.dataset = np.r_[self.dataset, self.dataset]
+        assert self.dataset.ndim == 2
+        assert self.dataset.shape[1] == 2
 
         self.logger.info(
             f"Going to send {self.dataset.shape[0]} prompts, with {self.dataset[:, 0].sum()} input tokens and "
