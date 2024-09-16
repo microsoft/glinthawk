@@ -1,21 +1,22 @@
 {
-  "config_name": "L70B_9xT4_27xCPU_B255",
+  "config_name": "L70B_20xT4_60xCPU_B243",
   "model_name": "llama2-70b-chat",
   "listen_address": "0.0.0.0",
-  "listen_port": "3020",
+  "listen_port": "3059",
   "n_layers": 80,
-  "n_slices": 9,
+  "n_slices": 20,
   "tiers": [
     {
       "kernel": "simple_piped",
       "platform": "cuda",
       "context": "static",
       "ranks": 1,
-      "concurrency_size_pre": 255,
+      "concurrency_size_pre": 243,
       "concurrency_size_att": 0,
-      "concurrency_size_post": 255,
-      "concurrency_size_cls": 255,
-      "max_context_count": 0
+      "concurrency_size_post": 243,
+      "concurrency_size_cls": 243,
+      "max_context_count": 0,
+      "latency": 0
     },
     {
       "kernel": "simple_piped",
@@ -23,10 +24,11 @@
       "context": "paged",
       "ranks": 3,
       "concurrency_size_pre": 0,
-      "concurrency_size_att": 85,
+      "concurrency_size_att": 81,
       "concurrency_size_post": 0,
       "concurrency_size_cls": 0,
-      "max_context_count": 2295
+      "max_context_count": 5184,
+      "latency": 0
     }
   ],
   "separate_cls_tiers": []
