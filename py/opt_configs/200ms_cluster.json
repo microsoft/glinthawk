@@ -7,7 +7,7 @@
       "mem_GiB": 16
   },
   "tier_2":  {
-    "num": 40,
+    "num": 80,
     "cost": 200,
     "rtt_ms": 2,
     "cap_Gbps": 8,
