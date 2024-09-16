@@ -50,6 +50,36 @@ struct Llama3
   constexpr static uint32_t token_eot = 128'009;
 };
 
+struct Llama3_405B_Instruct : public Llama3
+{
+  constexpr static uint64_t dim = 16384;
+  constexpr static uint64_t kv_dim = 1024;
+  constexpr static uint64_t hidden_dim = 53248;
+  constexpr static uint64_t n_layers = 126;
+  constexpr static uint64_t head_size = 128;
+  constexpr static uint64_t n_heads = 128;
+  constexpr static uint64_t n_kv_heads = 8;
+  constexpr static uint64_t gqa_size = 16;
+  constexpr static uint64_t seq_len = 2048;
+  constexpr static bool wcls_present = true;
+  constexpr static uint64_t attention_rounds = 1;
+};
+
+struct Llama3_70B_Instruct : public Llama3
+{
+  constexpr static uint64_t dim = 8192;
+  constexpr static uint64_t kv_dim = 1024;
+  constexpr static uint64_t hidden_dim = 28672;
+  constexpr static uint64_t n_layers = 80;
+  constexpr static uint64_t head_size = 128;
+  constexpr static uint64_t n_heads = 64;
+  constexpr static uint64_t n_kv_heads = 8;
+  constexpr static uint64_t gqa_size = 8;
+  constexpr static uint64_t seq_len = 2048;
+  constexpr static bool wcls_present = true;
+  constexpr static uint64_t attention_rounds = 1;
+};
+
 struct Llama3_8B_Instruct : public Llama3
 {
   constexpr static uint64_t dim = 4096;
@@ -125,6 +155,8 @@ struct Stories_110M : public Llama2
   constexpr static uint64_t attention_rounds = 4;
 };
 
+static_assert( ModelConfig<Llama3_405B_Instruct> );
+static_assert( ModelConfig<Llama3_70B_Instruct> );
 static_assert( ModelConfig<Llama3_8B_Instruct> );
 static_assert( ModelConfig<Llama2_70B_Chat> );
 static_assert( ModelConfig<Llama2_13B_Chat> );

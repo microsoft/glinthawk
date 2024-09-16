@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+import os.path
+import struct
+
 
 class Model:
     vocab_size: int
@@ -61,6 +64,59 @@ class Model:
 
     def bis_transit_ms(self, batch_size: int, after_stage: str, link_rtt_ms: float, link_cap_bps: int):
         return link_rtt_ms + self.bis_size(batch_size, after_stage) * 8 / link_cap_bps * 1000
+
+    def write_config(self, config_path: str):
+        assert os.path.exists(os.path.dirname(config_path))
+        assert not os.path.exists(config_path)
+
+        header = struct.pack(
+            "iiiiiii",
+            self.dim,
+            self.hidden_dim,
+            self.n_layers,
+            self.n_heads,
+            self.n_kv_heads,
+            -self.vocab_size,
+            self.seq_len,
+        )
+        # NOTE ABOVE: -ve vocab_size is indicating that the classifier weights are present
+        # in the checkpoint and should be loaded.
+        with open(config_path, "wb") as fout:
+            fout.write(header)
+
+
+class LLama3_405B(Model):
+    vocab_size: int = 128256
+    dim: int = 16384
+    kv_dim: int = 1024
+    hidden_dim: int = 53248
+    n_layers: int = 126
+    head_size: int = 128
+    n_heads: int = 128
+    n_kv_heads: int = 8
+    gqa_size: int = 16
+    seq_len: int = 2048
+    wcls_present: bool = True
+
+    def __init__(self, dwidth: int):
+        super(LLama3_405B, self).__init__(dwidth)
+
+
+class LLama3_70B(Model):
+    vocab_size: int = 128256
+    dim: int = 8192
+    kv_dim: int = 1024
+    hidden_dim: int = 28672
+    n_layers: int = 80
+    head_size: int = 128
+    n_heads: int = 64
+    n_kv_heads: int = 8
+    gqa_size: int = 8
+    seq_len: int = 2048
+    wcls_present: bool = True
+
+    def __init__(self, dwidth: int):
+        super(LLama3_70B, self).__init__(dwidth)
 
 
 class LLama3_8B(Model):
