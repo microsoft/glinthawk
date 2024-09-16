@@ -820,10 +820,16 @@ namespace amd64 {
 DECLARE_MODEL( amd64, Context, Llama2_7B_Chat, Llama2_7B_Chat_Static );
 DECLARE_MODEL( amd64, Context, Llama2_13B_Chat, Llama2_13B_Chat_Static );
 DECLARE_MODEL( amd64, Context, Llama2_70B_Chat, Llama2_70B_Chat_Static );
+DECLARE_MODEL( amd64, Context, Llama3_8B, Llama3_8B_Static );
+DECLARE_MODEL( amd64, Context, Llama3_70B, Llama3_70B_Static );
+DECLARE_MODEL( amd64, Context, Llama3_405B, Llama3_405B_Static );
 DECLARE_MODEL( amd64, Context, Stories_110M, Stories_110M_Static );
 DECLARE_MODEL( amd64, DynamicContext, Llama2_7B_Chat, Llama2_7B_Chat_Paged );
 DECLARE_MODEL( amd64, DynamicContext, Llama2_13B_Chat, Llama2_13B_Chat_Paged );
 DECLARE_MODEL( amd64, DynamicContext, Llama2_70B_Chat, Llama2_70B_Chat_Paged );
+DECLARE_MODEL( amd64, DynamicContext, Llama3_8B, Llama3_8B_Paged );
+DECLARE_MODEL( amd64, DynamicContext, Llama3_70B, Llama3_70B_Paged );
+DECLARE_MODEL( amd64, DynamicContext, Llama3_405B, Llama3_405B_Paged );
 DECLARE_MODEL( amd64, DynamicContext, Stories_110M, Stories_110M_Paged );
 }
 #endif
@@ -833,10 +839,16 @@ namespace cuda {
 DECLARE_MODEL( cuda, Context, Llama2_7B_Chat, Llama2_7B_Chat_Static );
 DECLARE_MODEL( cuda, Context, Llama2_13B_Chat, Llama2_13B_Chat_Static );
 DECLARE_MODEL( cuda, Context, Llama2_70B_Chat, Llama2_70B_Chat_Static );
+DECLARE_MODEL( cuda, Context, Llama3_8B, Llama3_8B_Static );
+DECLARE_MODEL( cuda, Context, Llama3_70B, Llama3_70B_Static );
+DECLARE_MODEL( cuda, Context, Llama3_405B, Llama3_405B_Static );
 DECLARE_MODEL( cuda, Context, Stories_110M, Stories_110M_Static );
 DECLARE_MODEL( cuda, DynamicContext, Llama2_7B_Chat, Llama2_7B_Chat_Paged );
 DECLARE_MODEL( cuda, DynamicContext, Llama2_13B_Chat, Llama2_13B_Chat_Paged );
 DECLARE_MODEL( cuda, DynamicContext, Llama2_70B_Chat, Llama2_70B_Chat_Paged );
+DECLARE_MODEL( cuda, DynamicContext, Llama3_8B, Llama3_8B_Paged );
+DECLARE_MODEL( cuda, DynamicContext, Llama3_70B, Llama3_0B_Paged );
+DECLARE_MODEL( cuda, DynamicContext, Llama3_405B, Llama3_405B_Paged );
 DECLARE_MODEL( cuda, DynamicContext, Stories_110M, Stories_110M_Paged );
 }
 #endif

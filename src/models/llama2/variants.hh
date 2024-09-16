@@ -50,7 +50,7 @@ struct Llama3
   constexpr static uint32_t token_eot = 128'009;
 };
 
-struct Llama3_405B_Instruct : public Llama3
+struct Llama3_405B : public Llama3
 {
   constexpr static uint64_t dim = 16384;
   constexpr static uint64_t kv_dim = 1024;
@@ -65,7 +65,7 @@ struct Llama3_405B_Instruct : public Llama3
   constexpr static uint64_t attention_rounds = 1;
 };
 
-struct Llama3_70B_Instruct : public Llama3
+struct Llama3_70B : public Llama3
 {
   constexpr static uint64_t dim = 8192;
   constexpr static uint64_t kv_dim = 1024;
@@ -80,7 +80,7 @@ struct Llama3_70B_Instruct : public Llama3
   constexpr static uint64_t attention_rounds = 1;
 };
 
-struct Llama3_8B_Instruct : public Llama3
+struct Llama3_8B : public Llama3
 {
   constexpr static uint64_t dim = 4096;
   constexpr static uint64_t kv_dim = 1024;
@@ -155,9 +155,9 @@ struct Stories_110M : public Llama2
   constexpr static uint64_t attention_rounds = 4;
 };
 
-static_assert( ModelConfig<Llama3_405B_Instruct> );
-static_assert( ModelConfig<Llama3_70B_Instruct> );
-static_assert( ModelConfig<Llama3_8B_Instruct> );
+static_assert( ModelConfig<Llama3_405B> );
+static_assert( ModelConfig<Llama3_70B> );
+static_assert( ModelConfig<Llama3_8B> );
 static_assert( ModelConfig<Llama2_70B_Chat> );
 static_assert( ModelConfig<Llama2_13B_Chat> );
 static_assert( ModelConfig<Llama2_7B_Chat> );
