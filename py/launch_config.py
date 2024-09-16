@@ -323,7 +323,7 @@ async def main(**kwargs):
             return
         tasks.append(command)
 
-    delays = [3 for _ in tasks]
+    delays = [8 for _ in tasks]
     delays[0] = 0
     tasks = [run_command(t, d) for t, d in zip(tasks, delays)]
 
