@@ -19,13 +19,15 @@ from variants import get_model
 logging.basicConfig(level=logging.INFO)
 
 
-def load_profiles(log_dir: str) -> pd.DataFrame:
+def load_profiles(log_dir: str, model_name_match: str) -> pd.DataFrame:
     entries = []
     for filename in os.listdir(log_dir):
         file_path = os.path.join(log_dir, filename)
         assert os.path.isfile(file_path)
         model_name, stage, ctx, token_pos, duration, batch_size = filename[:-4].replace("all_no_cls",
                                                                                         "all-no-cls").split('_')
+        if model_name_match != model_name:
+            continue
         df = pd.read_csv(file_path, skiprows=1)
         entries.append([
             model_name, stage, ctx, int(token_pos), float(duration), int(batch_size),
@@ -67,7 +69,7 @@ def opt_single_tier(tier_1_logs: str, opt_config: str, model_name: str, opt_outp
                     seq_len_rescale: float):
     with open(opt_config, "r") as f:
         config = json.load(f)
-    df_t1 = load_profiles(tier_1_logs)
+    df_t1 = load_profiles(tier_1_logs, model_name)
     t1_profiles = interpolate_profile(df_t1, seq_len_rescale)
     model = get_model(model_name, 2)
 
@@ -180,16 +182,16 @@ def opt_two_tier(tier_1_logs: str, tier_2_logs: str, opt_config: str, model_name
                  paged_kv_factor: float, seq_len_rescale: float):
     with open(opt_config, "r") as f:
         config = json.load(f)
-    df_t1 = load_profiles(tier_1_logs)
+    df_t1 = load_profiles(tier_1_logs, model_name)
     t1_profiles = interpolate_profile(df_t1, seq_len_rescale)
-    df_t2 = load_profiles(tier_2_logs)
+    df_t2 = load_profiles(tier_2_logs, model_name)
     t2_profiles = interpolate_profile(df_t2, seq_len_rescale)
     model_t1 = get_model(model_name, 2)
     model_t2 = get_model(model_name, 4)
 
     df_data = []
 
-    for k in trange(9, config["tier_1"]["num"] + 1):
+    for k in trange(1, config["tier_1"]["num"] + 1):
         for d in trange(1, config["tier_2"]["num"] + 1, leave=False):
             # Get number of layers hosted per each node, the first and last layer are important because:
             #   1. The first layer hosts the embedding table
@@ -231,7 +233,7 @@ def opt_two_tier(tier_1_logs: str, tier_2_logs: str, opt_config: str, model_name
             max_t2_b = min((t1_profiles["pre"].shape[0] - 1) // d, t2_profiles["att"].shape[0] - 1)
 
             # Loop for all possible batch sizes for tier 2
-            for t2_b in trange(45, max_t2_b + 1, leave=False):
+            for t2_b in trange(1, max_t2_b + 1, leave=False):
                 # Calculate how many in_flight batches we have
                 in_flight = kv_slots_t2 // t2_b
 

@@ -8,3 +8,6 @@ cmake-build-debug
 .jupyter_ystore.db
 __pycache__/
 /.venv
+*.so
+py/simulation/pipe_sim.cpp
+py/simulation/build/
