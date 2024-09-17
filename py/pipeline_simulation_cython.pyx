@@ -1,11 +1,85 @@
-#!/usr/bin/env python3
+import numpy as np
+
+cimport
+numpy as np
 
 import bisect
-from heapq import heappop
 from typing import Dict
 from typing import List, Tuple
 
 import numpy as np
+
+
+def two_tier_pipeline(t1_layers: List[int], delay_dict: Dict[str, float], in_flight: int) -> List[float]:
+    return cy_two_tier_pipeline(t1_layers, in_flight, delay_dict['mid_layer_t1'], delay_dict['t1_to_t2_comm'],
+                                delay_dict['t1_to_t2_rtt'], delay_dict['t2_comp'], delay_dict['t2_to_t1_comm'],
+                                delay_dict['last_layer_t1'])
+
+
+def single_tier_pipeline(t1_layers: List[int], delay_dict: Dict[str, float], in_flight: int) -> List[float]:
+    return cy_single_tier_pipeline(t1_layers, in_flight, delay_dict['mid_layer_comp'], delay_dict['mid_layer_comm'],
+                                   delay_dict['rtt'], delay_dict['last_layer_comp'])
+
+cdef single_tier_pipeline(int[:] t1_layers, int in_flight, ):
+    workers: List[Pipe] = []
+
+    # A mapping from the item step to where it should go. This mapping helps the DES manager find out where it needs to
+    # send an item to in the next step.
+    to_id_map: Dict[int, int] = {}
+    layers_so_far = 0
+
+    delay_arr: List[float] = []
+
+    for i in range(sum(t1_layers) - 1):
+        delay_arr.append(delay_dict["mid_layer_comp"])
+        delay_arr.append(delay_dict["mid_layer_comm"])
+        delay_arr.append(delay_dict["rtt"] / 2)
+    delay_arr.append(delay_dict["last_layer_comp"])
+    delay_arr.append(delay_dict["last_layer_comm"])
+    delay_arr.append(delay_dict["rtt"] / 2)
+
+    delay_arr: np.ndarray = np.array(delay_arr)
+
+    for k, n in enumerate(t1_layers):
+        workers.append(Pipe(delay_arr))
+        workers.append(Pipe(delay_arr))
+        workers.append(DelayPipe(delay_arr))
+
+        for i in range(layers_so_far, layers_so_far + n):
+            to_id_map[i * 3 + 0] = k * 3 + 0
+            to_id_map[i * 3 + 1] = k * 3 + 1
+            to_id_map[i * 3 + 2] = k * 3 + 2
+        layers_so_far += n
+
+    assert len(to_id_map) == delay_arr.shape[0]
+
+    next_events = np.array([w.min_event() for w in workers])
+
+    for i in range(in_flight):
+        workers[0].push(0, 0, i)
+    next_events[0] = workers[0].min_event()
+
+    # We want to find throughput. So we only care about how long it takes for one particular batch to make a full pass.
+    # That time is the "Time Per Token" value, and during that time, "in_flight" batches completed.
+    batch_0_complete = []
+    while len(batch_0_complete) < 5:
+        wid = np.argmin(next_events)
+        step, end_time, batch_id = workers[wid].pop(next_events[wid].item())
+        next_events[wid] = workers[wid].min_event()
+
+        if step == len(to_id_map):
+            step = 0
+
+        next_wid = to_id_map[step]
+        workers[next_wid].push(step, end_time, batch_id)
+        next_events[next_wid] = workers[next_wid].min_event()
+
+        if batch_id == 0 and step == 0:
+            batch_0_complete.append(end_time)
+            assert end_time >= (delay_dict["mid_layer_comp"] + delay_dict["mid_layer_comm"] + delay_dict[
+                "rtt"] / 2) * layers_so_far * 0.99
+
+    return batch_0_complete
 
 
 # A serial "pipe" box, part of a pipeline. Serial means it can only carry out one "item" at a time. The box has a
@@ -61,7 +135,7 @@ class DelayPipe(Pipe):
         super(DelayPipe, self).__init__(delay)
 
     def pop(self, current_time: float) -> Tuple[int, float, int]:
-        step, entry_time, batch_id = heappop(self.queue)
+        step, entry_time, batch_id = self.queue_pop(current_time)
         step = -step
         return step + 1, entry_time + self.delay[step].item(), batch_id
 
@@ -71,18 +145,18 @@ def single_tier_pipeline(t1_layers: List[int], delay_dict: Dict[str, float], in_
 
     # A mapping from the item step to where it should go. This mapping helps the DES manager find out where it needs to
     # send an item to in the next step.
-    to_id_map = []
+    to_id_map: Dict[int, int] = {}
     layers_so_far = 0
 
     delay_arr: List[float] = []
 
-    for i in range(len(t1_layers)):
-        for _ in range(t1_layers[i]):
-            delay_arr.append(delay_dict["mid_layer_comp"])
+    for i in range(sum(t1_layers) - 1):
+        delay_arr.append(delay_dict["mid_layer_comp"])
         delay_arr.append(delay_dict["mid_layer_comm"])
         delay_arr.append(delay_dict["rtt"] / 2)
-    delay_arr[-3] = delay_dict["last_layer_comp"]
-    delay_arr[-2] = delay_dict["last_layer_comm"]
+    delay_arr.append(delay_dict["last_layer_comp"])
+    delay_arr.append(delay_dict["last_layer_comm"])
+    delay_arr.append(delay_dict["rtt"] / 2)
 
     delay_arr: np.ndarray = np.array(delay_arr)
 
@@ -92,11 +166,12 @@ def single_tier_pipeline(t1_layers: List[int], delay_dict: Dict[str, float], in_
         workers.append(DelayPipe(delay_arr))
 
         for i in range(layers_so_far, layers_so_far + n):
-            to_id_map += [k * 3 + 0]
-        to_id_map += [k * 3 + 1, k * 3 + 2]
+            to_id_map[i * 3 + 0] = k * 3 + 0
+            to_id_map[i * 3 + 1] = k * 3 + 1
+            to_id_map[i * 3 + 2] = k * 3 + 2
         layers_so_far += n
 
-    assert len(to_id_map) == len(delay_arr)
+    assert len(to_id_map) == delay_arr.shape[0]
 
     next_events = np.array([w.min_event() for w in workers])
 
@@ -121,9 +196,8 @@ def single_tier_pipeline(t1_layers: List[int], delay_dict: Dict[str, float], in_
 
         if batch_id == 0 and step == 0:
             batch_0_complete.append(end_time)
-            assert end_time >= (delay_dict["mid_layer_comp"] * layers_so_far + delay_dict["mid_layer_comm"] * (
-                        len(t1_layers) - 1) + delay_dict[
-                                    "rtt"] / 2 * len(t1_layers)) * 0.99
+            assert end_time >= (delay_dict["mid_layer_comp"] + delay_dict["mid_layer_comm"] + delay_dict[
+                "rtt"] / 2) * layers_so_far * 0.99
 
     return batch_0_complete
 

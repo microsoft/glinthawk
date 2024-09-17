@@ -10,6 +10,7 @@ import click
 import numpy as np
 import pandas as pd
 from scipy import interpolate
+from simulation.pipe_sim import single_tier_pipeline_py, two_tier_pipeline_py
 from tqdm.auto import trange
 
 from pipeline_simulation import single_tier_pipeline, two_tier_pipeline
@@ -122,34 +123,29 @@ def opt_single_tier(tier_1_logs: str, opt_config: str, model_name: str, opt_outp
             mid_step_comm = model.bis_size(t1_b, "post") * 8 / cap_bps * 1000
             assert model.bis_size(t1_b, "cls") == 0
 
-            # # The pipeline step is the maximum of:
-            # #   1. The compute time for nodes but the last one
-            # #   2. The compute time for the last nodes
-            # #   3. The commute time for BIS
-            # pipeline_step = max(
-            #     mid_step_comp * layers_per_node,
-            #     last_step_comp + mid_step_comp * (last_node_layers - 1),
-            #     mid_step_comm
+            # token_times = single_tier_pipeline(
+            #     [layers_per_node] * (k - 1) + [last_node_layers],
+            #     {
+            #         "mid_layer_comp": mid_step_comp,
+            #         "mid_layer_comm": mid_step_comm,
+            #         "rtt": rtt_ms,
+            #         "last_layer_comp": last_step_comp,
+            #         "last_layer_comm": 0
+            #     },
+            #     in_flight
             # )
-            #
-            # # Here we flesh out the full pipeline timings, including compute, commute and RTT
-            # #   Why separate RTT and commute (transit time due to link BW)?
-            # #   Because when a link is busy sending a packet due to limited bandwidth, it can't accept any other
-            # #   packets. When a link is busy sending a packet due to RTT latency, it can actually send other packets in
-            # #   parallel. So time losses due to RTT are just "delay boxes" in the pipeline, whereas time losses due to
-            # #   link BW should be treated like a serial part of the pipeline, similar to compute kernels.
-            # pipes = [mid_step_comp * layers_per_node, mid_step_comm, rtt_ms / 2] * (k - 1)
-            # pipes += [mid_step_comp * (last_node_layers - 1) + last_step_comp, rtt_ms / 2]
-            # serials = [True, True, False] * (k - 1) + [True, False]
-            #
-            # thr, tpt = get_throughput(pipeline_step, pipes, serials, in_flight)
-            # thr = thr * t1_b * 1000
-
-            token_times = single_tier_pipeline(
+            token_times = single_tier_pipeline_py(
                 [layers_per_node] * (k - 1) + [last_node_layers],
-                {"mid_layer_comp": mid_step_comp, "mid_layer_comm": mid_step_comm, "rtt": rtt_ms},
-                in_flight
+                in_flight,
+                5,
+                mid_step_comp,
+                last_step_comp,
+                mid_step_comm,
+                rtt_ms / 2,
             )
+
+            # assert np.allclose(token_times, c_token_times), (token_times, c_token_times)
+
             tpt = token_times[-1] - token_times[-2]
             thr = in_flight * t1_b / tpt * 1000
 
@@ -193,7 +189,7 @@ def opt_two_tier(tier_1_logs: str, tier_2_logs: str, opt_config: str, model_name
 
     df_data = []
 
-    for k in trange(1, config["tier_1"]["num"] + 1):
+    for k in trange(9, config["tier_1"]["num"] + 1):
         for d in trange(1, config["tier_2"]["num"] + 1, leave=False):
             # Get number of layers hosted per each node, the first and last layer are important because:
             #   1. The first layer hosts the embedding table
@@ -235,7 +231,7 @@ def opt_two_tier(tier_1_logs: str, tier_2_logs: str, opt_config: str, model_name
             max_t2_b = min((t1_profiles["pre"].shape[0] - 1) // d, t2_profiles["att"].shape[0] - 1)
 
             # Loop for all possible batch sizes for tier 2
-            for t2_b in trange(1, max_t2_b + 1, leave=False):
+            for t2_b in trange(45, max_t2_b + 1, leave=False):
                 # Calculate how many in_flight batches we have
                 in_flight = kv_slots_t2 // t2_b
 
@@ -277,12 +273,34 @@ def opt_two_tier(tier_1_logs: str, tier_2_logs: str, opt_config: str, model_name
                 if in_flight > max_in_flight_needed * 2:
                     continue
 
-                token_times = two_tier_pipeline(
+                # token_times = two_tier_pipeline(
+                #     [layers_per_node] * (k - 1) + [last_node_layers],
+                #     {
+                #         "mid_layer_t1": mid_step_t1_comp,
+                #         "t1_to_t2_comm": mid_step_t2_comm,
+                #         "t1_to_t2_rtt": rtt_12_ms,
+                #         "t2_comp": t2_comp,
+                #         "t2_to_t1_comm": mid_step_t2_comm_back,
+                #         "last_layer_t1": last_step_t1_comp,
+                #     },
+                #     in_flight
+                # )
+
+                token_times = two_tier_pipeline_py(
                     [layers_per_node] * (k - 1) + [last_node_layers],
-                    {"mid_layer_t1": mid_step_t1_comp, "t1_to_t2_comm": mid_step_t2_comm, "t1_to_t2_rtt": rtt_12_ms,
-                     "t2_comp": t2_comp, "t2_to_t1_comm": mid_step_t2_comm_back},
-                    in_flight
-                )
+                    in_flight,
+                    2,
+                    mid_step_t1_comp,
+                    last_step_t1_comp,
+                    t2_comp,
+                    mid_step_t2_comm,
+                    rtt_12_ms / 2,
+                    mid_step_t2_comm_back,
+                    rtt_12_ms / 2
+                    )
+
+                # assert np.allclose(token_times, c_token_times), (token_times, c_token_times)
+
                 tpt = token_times[-1] - token_times[-2]
                 thr = in_flight * t1_b / tpt * 1000
 
