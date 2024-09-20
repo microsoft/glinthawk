@@ -1,0 +1,18 @@
+{
+  "tier_1": {
+      "num": 4,
+      "cost": 8798,
+      "rtt_ms": 0,
+      "cap_Gbps": 300,
+      "mem_GiB": 40
+  },
+  "tier_2":  {
+    "num": 3,
+    "cost": 4820,
+    "rtt_ms": 0,
+    "cap_Gbps": 300,
+    "mem_GiB": 48
+    },
+  "inter_tier_rtt_ms": 2,
+  "inter_tier_cap_Gbps": 200
+}

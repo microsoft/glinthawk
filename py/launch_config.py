@@ -27,7 +27,17 @@ logging.basicConfig(
 
 model_name_to_dir = {
     "llama2-7b-chat": "llama-2-7b-chat-glint",
+    "llama2-13b-chat": "llama-2-13b-chat-glint",
     "llama2-70b-chat": "llama-2-70b-chat-glint",
+    "llama2-70b-chat-4k": "llama-2-70b-chat-glint-4K",
+    "llama2-70b-chat-8k": "llama-2-70b-chat-glint-8K",
+    "llama2-70b-chat-16k": "llama-2-70b-chat-glint-16K",
+    "llama2-70b-chat-32K": "llama-2-70b-chat-glint-32K",
+    "llama2-70b-chat-64K": "llama-2-70b-chat-glint-64K",
+    "llama2-70b-chat-128K": "llama-2-70b-chat-glint-128K",
+    "llama3-8b": "llama-3-8b-chat-glint",
+    "llama3-70b": "llama-3-70b-chat-glint",
+    "llama3-405b": "llama-3-405b-chat-glint",
 }
 
 

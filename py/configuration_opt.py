@@ -71,7 +71,8 @@ def opt_single_tier(tier_1_logs: str, opt_config: str, model_name: str, opt_outp
         config = json.load(f)
     df_t1 = load_profiles(tier_1_logs, model_name)
     t1_profiles = interpolate_profile(df_t1, seq_len_rescale)
-    model = get_model(model_name, 2)
+    assert tier_1_logs.strip('/')[-4:] in ['fp16', 'fp32', 'bf16']
+    model = get_model(model_name, int(tier_1_logs.strip('/')[-2:])//8)
 
     df_data = []
 
@@ -186,8 +187,10 @@ def opt_two_tier(tier_1_logs: str, tier_2_logs: str, opt_config: str, model_name
     t1_profiles = interpolate_profile(df_t1, seq_len_rescale)
     df_t2 = load_profiles(tier_2_logs, model_name)
     t2_profiles = interpolate_profile(df_t2, seq_len_rescale)
-    model_t1 = get_model(model_name, 2)
-    model_t2 = get_model(model_name, 4)
+    assert tier_1_logs.strip('/')[-4:] in ['fp16', 'fp32', 'bf16']
+    model_t1 = get_model(model_name, int(tier_1_logs.strip('/')[-2:])//8)
+    assert tier_2_logs.strip('/')[-4:] in ['fp16', 'fp32', 'bf16']
+    model_t2 = get_model(model_name, int(tier_2_logs.strip('/')[-2:])//8)
 
     df_data = []
 
@@ -317,6 +320,9 @@ def opt_two_tier(tier_1_logs: str, tier_2_logs: str, opt_config: str, model_name
                              rtt_11_ms / 2 * k)
                 cost = k * config['tier_1']['cost'] + d * k * config['tier_2']['cost']
 
+                t1_to_t2_bw = model_t1.bis_size(t2_b * d, "pre") * layers_per_node * in_flight / tpt * 1000 * 8
+                t2_to_t1_bw = model_t1.bis_size(t2_b * d, "att") * layers_per_node * in_flight / tpt * 1000 * 8
+
                 df_data.append([
                     k,
                     d,
@@ -327,6 +333,8 @@ def opt_two_tier(tier_1_logs: str, tier_2_logs: str, opt_config: str, model_name
                     t2_b,
                     in_flight,
                     thr,
+                    t1_to_t2_bw,
+                    t2_to_t1_bw,
                     tpt,
                     comp_time,
                     comm_time,
@@ -336,8 +344,9 @@ def opt_two_tier(tier_1_logs: str, tier_2_logs: str, opt_config: str, model_name
 
         df = pd.DataFrame(df_data,
                           columns=['t1_nodes', 't2_per_t1_nodes', 't1_slots', 't2_slots', 't1_batch_size',
-                                   't1_att_batch_size', 't2_batch_size', 'in_flight', 'throughput', 'time_per_token',
-                                   'compute_time', 'communication_time', 'queue_time', 'cost'])
+                                   't1_att_batch_size', 't2_batch_size', 'in_flight', 'throughput', 't1_to_t2_bw',
+                                   't2_to_t1_bw', 'time_per_token', 'compute_time', 'communication_time', 'queue_time',
+                                   'cost'])
         os.makedirs(os.path.dirname(opt_output), exist_ok=True)
         df.to_csv(opt_output)
 

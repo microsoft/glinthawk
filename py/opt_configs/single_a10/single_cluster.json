@@ -1,0 +1,9 @@
+{
+  "tier_1": {
+      "num": 6,
+      "cost": 2800,
+      "rtt_ms": 1,
+      "cap_Gbps": 40,
+      "mem_GiB": 24
+  }
+}

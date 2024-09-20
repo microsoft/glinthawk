@@ -1,0 +1,28 @@
+{
+  "config_name": "L70B_16xT4_B2",
+  "model_name": "llama2-70b-chat-16k",
+  "listen_address": "0.0.0.0",
+  "listen_port": "3080",
+  "n_layers": 80,
+  "n_slices": 16,
+  "tiers": [
+    {
+      "kernel": "batched",
+      "platform": "cuda",
+      "context": "static",
+      "ranks": 1,
+      "concurrency_size_pre": 1,
+      "concurrency_size_att": 1,
+      "concurrency_size_post": 1,
+      "concurrency_size_cls": 1,
+      "max_context_count": 16,
+      "concurrency_size_pre_non_faux": 2,
+      "concurrency_size_att_non_faux": 2,
+      "concurrency_size_post_non_faux": 2,
+      "concurrency_size_cls_non_faux": 2,
+      "max_context_coun_non_faux": 10,
+      "latency": 0
+    }
+  ],
+  "separate_cls_tiers": []
+}

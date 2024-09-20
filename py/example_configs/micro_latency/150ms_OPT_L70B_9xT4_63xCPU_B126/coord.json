@@ -2,7 +2,7 @@
   "config_name": "L70B_9xT4_63xCPU_B126",
   "model_name": "llama2-70b-chat",
   "listen_address": "0.0.0.0",
-  "listen_port": "3052",
+  "listen_port": "3084",
   "n_layers": 80,
   "n_slices": 9,
   "tiers": [

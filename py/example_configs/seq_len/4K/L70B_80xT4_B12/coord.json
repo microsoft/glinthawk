@@ -1,8 +1,8 @@
 {
   "config_name": "L70B_80xT4_B12",
-  "model_name": "llama2-70b-chat",
+  "model_name": "llama2-70b-chat-4k",
   "listen_address": "0.0.0.0",
-  "listen_port": "3020",
+  "listen_port": "3075",
   "n_layers": 80,
   "n_slices": 80,
   "tiers": [

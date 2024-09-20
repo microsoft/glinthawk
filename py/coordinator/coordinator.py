@@ -158,7 +158,8 @@ class Coordinator:
 
         # idx = rng.choice(all_dataset.shape[0], size=num_prompts)
         # self.dataset = all_dataset[idx]
-        self.dataset = all_dataset[all_dataset[:, 0] + all_dataset[:, 1] < 2048]
+        self.dataset = all_dataset[all_dataset[:, 0] + all_dataset[:, 1] <= 2048]
+        # self.dataset = all_dataset
         rng.shuffle(self.dataset)
         self.dataset = np.r_[self.dataset, self.dataset]
         assert self.dataset.ndim == 2
@@ -278,7 +279,7 @@ class Coordinator:
                         slice_index=worker.slice_index,
                         tier=worker.tier,
                         rank=worker.rank,
-                        randomize=False,
+                        randomize=self.model.faux,
                     ),
                 )
 
